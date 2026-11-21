@@ -8,3 +8,5 @@ publish.workspace = true
 [dependencies]
 jd-core.workspace = true
 rayon.workspace = true
+# Text layers: shaping and glyph rasterising with system fonts (same version iced uses).
+cosmic-text = "0.15"

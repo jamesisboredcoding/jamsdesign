@@ -9,6 +9,7 @@ pub mod filter;
 pub mod gradient;
 pub mod heal;
 pub mod style;
+pub mod text;
 pub mod image_ops;
 mod history;
 pub mod paint;
@@ -36,6 +37,8 @@ pub struct Layer {
     pub pixels: TileGrid,
     /// Layer effects (drop shadow, stroke, ...), drawn on top of `pixels` when rendering.
     pub style: style::LayerStyle,
+    /// Set on text layers (the Type tool); `pixels` hold the rendered text.
+    pub text: Option<text::TextLayer>,
 }
 
 impl Layer {
@@ -110,6 +113,7 @@ impl Document {
             blend: BlendMode::Normal,
             pixels: TileGrid::empty(self.width, self.height),
             style: style::LayerStyle::default(),
+            text: None,
         };
         let index = self
             .active

@@ -225,6 +225,27 @@ pub enum PopupKind {
     Workspace,
 }
 
+/// Type tool settings (the options bar); applied to new text and to the text being edited.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeOptions {
+    pub family: String,
+    pub size: f32,
+    pub bold: bool,
+    pub italic: bool,
+    pub align: jd_raster::text::Align,
+}
+
+/// Text being typed on the canvas. The document is edited directly while typing; committing
+/// records `before` as one undo step, cancelling restores it.
+pub struct Typing {
+    pub doc: u64,
+    pub layer: LayerId,
+    pub before: Document,
+    /// A new text layer (removed again if it ends up empty).
+    pub created: bool,
+    pub layout: jd_raster::text::Layout,
+}
+
 /// View > Snap and Snap To.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Snap {
@@ -380,6 +401,10 @@ pub struct Photo {
     pub panels: Panels,
     pub workspace: Workspace,
     pub snap: Snap,
+    pub type_opts: TypeOptions,
+    pub typing: Option<Typing>,
+    /// Installed font families (loaded the first time the Type tool is chosen).
+    pub fonts: Vec<String>,
     /// Command search (search icon / Ctrl+F): the query, while open.
     pub palette: Option<String>,
     /// Pointer over the dock, to place the layer right-click menu.
@@ -488,6 +513,14 @@ pub enum Message {
     ShapeDraw { ellipse: bool, rect: [f32; 4] },
     CropBox(Option<[f32; 4]>),
     CommitCrop,
+
+    // Type tool
+    TypeClick(Point),
+    TypeFamily(String),
+    TypeSize(f32),
+    TypeBold,
+    TypeItalic,
+    TypeAlign(jd_raster::text::Align),
 
     // Snapping
     ToggleSnap,
@@ -715,6 +748,9 @@ impl Photo {
             panels: Panels { color: true, properties: true, layers: true },
             workspace: Workspace::Essentials,
             snap: Snap { on: true, bounds: true, layers: true },
+            type_opts: TypeOptions { family: String::new(), size: 48.0, bold: false, italic: false, align: jd_raster::text::Align::Left },
+            typing: None,
+            fonts: Vec::new(),
             palette: None,
             dock_pointer: Point::ORIGIN,
             clone_source: None,
@@ -843,6 +879,24 @@ impl Photo {
     fn handle(&mut self, message: Message) -> Task<Message> {
         // An open Move/Free Transform is committed before anything else edits the document
         // (Photoshop asks; applying is the common answer). Undo cancels it instead.
+        // Text being typed is committed by anything that would end a transform too; Undo
+        // cancels it.
+        if self.typing.is_some() {
+            match message {
+                Message::Undo | Message::Redo | Message::JumpHistory(_) => {
+                    self.cancel_typing();
+                    return Task::none();
+                }
+                Message::TypeClick(_)
+                | Message::TypeFamily(_)
+                | Message::TypeSize(_)
+                | Message::TypeBold
+                | Message::TypeItalic
+                | Message::TypeAlign(_) => {}
+                ref m if !Self::keeps_transform(m) => self.commit_typing(),
+                _ => {}
+            }
+        }
         if self.transform.is_some() {
             match message {
                 Message::Undo | Message::Redo | Message::JumpHistory(_) => self.transform = None,
@@ -1613,6 +1667,9 @@ impl Photo {
                 if t != Tool::Crop {
                     self.crop_box = None;
                 }
+                if t == Tool::Type {
+                    self.load_fonts();
+                }
                 self.tool = t;
                 self.slot_tools[t.slot()] = t;
                 self.popup = None;
@@ -1640,6 +1697,30 @@ impl Photo {
                 return self.update(*m);
             }
             Message::DockPointer(p) => self.dock_pointer = p,
+            Message::TypeClick(at) => self.type_click(at),
+            Message::TypeFamily(f) => {
+                self.type_opts.family = f.clone();
+                self.retype("Font", move |t| t.family = f);
+            }
+            Message::TypeSize(v) => {
+                let v = v.clamp(1.0, 1000.0);
+                self.type_opts.size = v;
+                self.retype("Font Size", move |t| t.size = v);
+            }
+            Message::TypeBold => {
+                let v = !self.type_opts.bold;
+                self.type_opts.bold = v;
+                self.retype("Bold", move |t| t.bold = v);
+            }
+            Message::TypeItalic => {
+                let v = !self.type_opts.italic;
+                self.type_opts.italic = v;
+                self.retype("Italic", move |t| t.italic = v);
+            }
+            Message::TypeAlign(a) => {
+                self.type_opts.align = a;
+                self.retype("Alignment", move |t| t.align = a);
+            }
             Message::ClearLayerStyle => self.edit_layer("Clear Layer Style", None, |l| {
                 let had = !l.style.is_empty();
                 l.style = Default::default();
@@ -2252,6 +2333,11 @@ impl Photo {
                 | Message::PopupSub(_)
                 | Message::DockPointer(_)
                 | Message::ToggleSnap
+                | Message::TypeFamily(_)
+                | Message::TypeSize(_)
+                | Message::TypeBold
+                | Message::TypeItalic
+                | Message::TypeAlign(_)
                 | Message::DialogBlend(_)
                 | Message::DialogStyle(_)
                 | Message::DialogFxTab(..)
@@ -2318,6 +2404,153 @@ impl Photo {
         }
     }
 
+    /// Loads the installed font list once (the first time the Type tool is used) and picks a
+    /// common default family.
+    fn load_fonts(&mut self) {
+        if !self.fonts.is_empty() {
+            return;
+        }
+        self.fonts = jd_raster::text::families();
+        if self.type_opts.family.is_empty() {
+            let preferred = ["Noto Sans", "Inter", "DejaVu Sans", "Liberation Sans", "Cantarell"];
+            self.type_opts.family = preferred
+                .iter()
+                .find(|p| self.fonts.iter().any(|f| f == *p))
+                .map(|p| p.to_string())
+                .or_else(|| self.fonts.first().cloned())
+                .unwrap_or_default();
+        }
+    }
+
+    /// Type tool click: edit the text layer under the pointer, or start a new one there.
+    fn type_click(&mut self, at: Point) {
+        self.load_fonts();
+        // Clicking inside the text being typed keeps typing.
+        if let Some(t) = &self.typing {
+            let [x0, y0, x1, y1] = t.layout.bounds;
+            if at.x >= x0 - 4.0 && at.x <= x1 + 4.0 && at.y >= y0 - 4.0 && at.y <= y1 + 4.0 {
+                return;
+            }
+            self.commit_typing();
+        }
+        let Some(d) = self.doc() else { return };
+        let doc_id = d.id;
+        // An existing text layer under the pointer (top first)?
+        let hit = d.doc.layers().iter().rev().find_map(|l| {
+            let t = l.text.as_ref().filter(|t| l.visible && !l.locked && t.is_current(&l.pixels))?;
+            let [x0, y0, x1, y1] = t.layout().bounds;
+            (at.x >= x0 - 4.0 && at.x <= x1 + 4.0 && at.y >= y0 - 4.0 && at.y <= y1 + 4.0).then_some((l.id, t.clone()))
+        });
+        let before = d.doc.clone();
+        let Some(i) = self.doc_index(doc_id) else { return };
+        let (layer, created, layout) = match hit {
+            Some((id, t)) => {
+                self.docs[i].doc.set_active(id);
+                // Pick up that text's settings in the options bar, like Photoshop.
+                self.type_opts = TypeOptions { family: t.family.clone(), size: t.size, bold: t.bold, italic: t.italic, align: t.align };
+                (id, false, t.layout())
+            }
+            None => {
+                let o = self.type_opts.clone();
+                let rgb = self.fg.to_rgba().to_srgb8();
+                // The click marks the baseline of the first line, as in Photoshop.
+                let mut t = jd_raster::text::TextLayer::new(at.x, at.y - o.size * 0.9, o.family, o.size, [rgb[0], rgb[1], rgb[2]]);
+                (t.bold, t.italic, t.align) = (o.bold, o.italic, o.align);
+                let doc = &mut self.docs[i].doc;
+                let id = doc.add_layer("Text");
+                let layout = t.layout();
+                if let Some(l) = doc.layer_mut(id) {
+                    t.render_into(&mut l.pixels);
+                    l.text = Some(t);
+                }
+                (id, true, layout)
+            }
+        };
+        self.typing = Some(Typing { doc: doc_id, layer, before, created, layout });
+    }
+
+    /// Changes the text being typed (or, with the Type tool, the selected text layer as an
+    /// undoable edit) and re-renders it.
+    fn retype(&mut self, label: &str, change: impl FnOnce(&mut jd_raster::text::TextLayer)) {
+        if let Some(t) = &self.typing {
+            let (doc, layer) = (t.doc, t.layer);
+            let Some(i) = self.doc_index(doc) else { return };
+            let Some(l) = self.docs[i].doc.layer_mut(layer) else { return };
+            let Some(mut text) = l.text.take() else { return };
+            change(&mut text);
+            text.render_into(&mut l.pixels);
+            let layout = text.layout();
+            if self.typing.as_ref().is_some_and(|t| t.created) {
+                // New text layers are named after what they say.
+                let first = text.text.lines().next().unwrap_or("").trim();
+                l.name = if first.is_empty() { "Text".into() } else { first.chars().take(40).collect() };
+            }
+            l.text = Some(text);
+            if let Some(t) = self.typing.as_mut() {
+                t.layout = layout;
+            }
+            return;
+        }
+        if self.effective_tool() != Tool::Type {
+            return;
+        }
+        self.edit_layer(label, None, |l| match l.text.as_mut() {
+            Some(text) if text.is_current(&l.pixels) => {
+                change(text);
+                text.render_into(&mut l.pixels);
+                true
+            }
+            _ => false,
+        });
+    }
+
+    /// Ends typing: one undo step, or nothing if the text didn't change (an empty new text
+    /// layer is removed).
+    fn commit_typing(&mut self) {
+        let Some(t) = self.typing.take() else { return };
+        let Some(i) = self.doc_index(t.doc) else { return };
+        let d = &mut self.docs[i];
+        let now = d.doc.layer(t.layer).and_then(|l| l.text.as_ref()).map(|x| x.text.clone()).unwrap_or_default();
+        let was = t.before.layer(t.layer).and_then(|l| l.text.as_ref()).map(|x| x.text.clone());
+        if t.created && now.is_empty() {
+            d.doc = t.before;
+            return;
+        }
+        if was.as_deref() == Some(now.as_str()) {
+            return;
+        }
+        d.history.record(if t.created { "Type Tool" } else { "Edit Type" }, &t.before, None);
+    }
+
+    fn cancel_typing(&mut self) {
+        if let Some(t) = self.typing.take()
+            && let Some(i) = self.doc_index(t.doc)
+        {
+            self.docs[i].doc = t.before;
+        }
+    }
+
+    /// Keys while typing: they edit the text instead of running shortcuts.
+    fn type_key(&mut self, event: &keyboard::Event) -> Task<Message> {
+        let keyboard::Event::KeyPressed { key, modifiers, text, .. } = event else { return Task::none() };
+        match key.as_ref() {
+            // Photoshop: Esc cancels, Ctrl+Enter (or keypad Enter) commits.
+            Key::Named(Named::Escape) => self.cancel_typing(),
+            Key::Named(Named::Enter) if modifiers.command() => self.commit_typing(),
+            Key::Named(Named::Enter) => self.retype("", |t| t.text.push('\n')),
+            Key::Named(Named::Backspace) => self.retype("", |t| {
+                t.text.pop();
+            }),
+            _ if modifiers.command() => {}
+            _ => {
+                if let Some(s) = text.as_ref().map(|s| s.to_string()).filter(|s| s.chars().all(|c| !c.is_control())) {
+                    self.retype("", move |t| t.text.push_str(&s));
+                }
+            }
+        }
+        Task::none()
+    }
+
     /// What moved or transformed content can snap to: the canvas edges and centre, and the
     /// edges and centres of the other visible layers.
     fn snap_lines(&self, doc: &Document, moving: LayerId) -> transform::SnapLines {
@@ -2351,7 +2584,20 @@ impl Photo {
         let Some(i) = self.doc_index(session.doc) else { return };
         let d = &mut self.docs[i];
         d.history.record(label, &d.doc, None);
+        let text_was_current = d.doc.layer(session.layer).is_some_and(|l| l.text.as_ref().is_some_and(|t| t.is_current(&l.pixels)));
         session.commit(&mut d.doc);
+        // A whole-pixel move of a whole text layer keeps it editable text (anything else turns
+        // it into pixels, like rasterizing).
+        if text_was_current
+            && session.base.is_none()
+            && let Some((dx, dy)) = session.affine().integer_translation()
+            && let Some(l) = d.doc.layer_mut(session.layer)
+            && let Some(t) = l.text.as_mut()
+        {
+            t.x += dx as f32;
+            t.y += dy as f32;
+            t.signature = jd_raster::text::signature(&l.pixels);
+        }
     }
 
     fn brush_params(&self, erase: bool, effect: Effect) -> BrushParams {
@@ -2575,6 +2821,9 @@ impl Photo {
         if let keyboard::Event::ModifiersChanged(m) = event {
             self.modifiers = m;
             return Task::none();
+        }
+        if self.typing.is_some() {
+            return self.type_key(&event);
         }
         let (key, modifiers, pressed) = match event {
             keyboard::Event::KeyPressed { key, modifiers, .. } => (key, modifiers, true),
@@ -3512,6 +3761,84 @@ mod tests {
         let _ = app.update(Message::ClearLayerStyle);
         assert!(app.document().unwrap().active().unwrap().style.is_empty());
         assert_eq!(jd_raster::composite::pixel_srgb8(app.document().unwrap(), 18, 30), [255, 255, 255, 255]);
+    }
+
+    fn type_text(app: &mut Photo, s: &str) {
+        for c in s.chars() {
+            let (key, named) = match c {
+                '\n' => (Key::Named(Named::Enter), true),
+                _ => (Key::Character(c.to_string().into()), false),
+            };
+            let _ = app.update(Message::Key(keyboard::Event::KeyPressed {
+                key: key.clone(),
+                modified_key: key,
+                physical_key: keyboard::key::Physical::Unidentified(keyboard::key::NativeCode::Unidentified),
+                location: keyboard::Location::Standard,
+                modifiers: keyboard::Modifiers::empty(),
+                text: (!named).then(|| c.to_string().into()),
+                repeat: false,
+            }));
+        }
+    }
+
+    #[test]
+    fn type_tool_creates_edits_and_commits_text() {
+        let (mut app, _) = Photo::new();
+        white(&mut app, 300, 120);
+        let _ = app.update(Message::SelectTool(Tool::Type));
+        let depth = app.doc().unwrap().history.depth();
+        let layers = app.document().unwrap().layers().len();
+        let _ = app.update(Message::TypeClick(Point::new(20.0, 60.0)));
+        type_text(&mut app, "Hi ");
+        type_text(&mut app, "there");
+        let doc = app.document().unwrap();
+        assert_eq!(doc.layers().len(), layers + 1);
+        let l = doc.active().unwrap();
+        assert_eq!(l.name, "Hi there", "named after its text");
+        assert_eq!(l.text.as_ref().unwrap().text, "Hi there");
+        assert!(jd_raster::transform::content_bounds(&l.pixels).is_some(), "rendered while typing");
+        // Space typed a space (it didn't start panning), and shortcuts like B didn't switch tools.
+        assert_eq!(app.tool, Tool::Type);
+        // Switching tools commits: one undo step.
+        let _ = app.update(Message::SelectTool(Tool::Move));
+        assert!(app.typing.is_none());
+        assert_eq!(app.doc().unwrap().history.depth(), depth + 1);
+
+        // Click the text again to edit it; Esc cancels the edit.
+        let _ = app.update(Message::SelectTool(Tool::Type));
+        let _ = app.update(Message::TypeClick(Point::new(25.0, 50.0)));
+        assert!(app.typing.as_ref().is_some_and(|t| !t.created), "edits the existing layer");
+        type_text(&mut app, "!!!");
+        let _ = app.update(Message::Key(keyboard::Event::KeyPressed {
+            key: Key::Named(Named::Escape),
+            modified_key: Key::Named(Named::Escape),
+            physical_key: keyboard::key::Physical::Unidentified(keyboard::key::NativeCode::Unidentified),
+            location: keyboard::Location::Standard,
+            modifiers: keyboard::Modifiers::empty(),
+            text: None,
+            repeat: false,
+        }));
+        assert_eq!(app.document().unwrap().active().unwrap().text.as_ref().unwrap().text, "Hi there");
+
+        // Bold applies to the selected text layer as an undoable edit.
+        let _ = app.update(Message::TypeBold);
+        assert!(app.document().unwrap().active().unwrap().text.as_ref().unwrap().bold);
+
+        // Moving it keeps it editable text.
+        assert!(app.begin_transform(transform::Kind::Move));
+        let _ = app.update(Message::TransformGrab(transform::Handle::Inside, Point::new(30.0, 50.0)));
+        let _ = app.update(Message::TransformDrag { at: Point::new(40.0, 55.0), shift: false, alt: false });
+        let _ = app.update(Message::TransformRelease);
+        let _ = app.update(Message::CommitTransform);
+        let l = app.document().unwrap().active().unwrap();
+        let t = l.text.as_ref().unwrap();
+        assert!(t.is_current(&l.pixels));
+
+        // An empty new text layer disappears again.
+        let n = app.document().unwrap().layers().len();
+        let _ = app.update(Message::TypeClick(Point::new(250.0, 110.0)));
+        let _ = app.update(Message::SelectTool(Tool::Brush));
+        assert_eq!(app.document().unwrap().layers().len(), n);
     }
 
     #[test]

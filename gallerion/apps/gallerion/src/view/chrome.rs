@@ -276,6 +276,43 @@ pub fn options_bar(app: &Photo) -> Element<'_, Message> {
                 Message::PressureOpacity(!b.pressure_opacity),
                 "Pen pressure controls opacity",
             ));
+    } else if tool == Tool::Type {
+        use jd_raster::text::Align;
+        let o = &app.type_opts;
+        let fonts: Element<'_, Message> = if app.fonts.is_empty() {
+            label("Fonts load when you first click with the Type tool").into()
+        } else {
+            pick_list(app.fonts.as_slice(), Some(o.family.clone()), Message::TypeFamily)
+                .text_size(TEXT_SIZE_SMALL)
+                .padding(Padding::from([3, 6]))
+                .width(190)
+                .style(style::pick_list)
+                .into()
+        };
+        bar = bar
+            .push(fonts)
+            .push(toggle("B", o.bold, Message::TypeBold, "Bold"))
+            .push(toggle("I", o.italic, Message::TypeItalic, "Italic"))
+            .push(vline(20.0, BORDER_SUBTLE))
+            .push(labeled(
+                "Size:",
+                row![
+                    field_box(value(format!("{:.0} px", o.size))).width(58),
+                    slider(6.0..=400.0, o.size, Message::TypeSize).width(100).style(style::slider),
+                ]
+                .spacing(6)
+                .align_y(Vertical::Center),
+            ))
+            .push(vline(20.0, BORDER_SUBTLE))
+            .push(toggle("Left", o.align == Align::Left, Message::TypeAlign(Align::Left), "Left align text"))
+            .push(toggle("Center", o.align == Align::Center, Message::TypeAlign(Align::Center), "Center text"))
+            .push(toggle("Right", o.align == Align::Right, Message::TypeAlign(Align::Right), "Right align text"))
+            .push(vline(20.0, BORDER_SUBTLE))
+            .push(label(if app.typing.is_some() {
+                "Typing · Ctrl+Enter or another tool to commit · Esc to cancel"
+            } else {
+                "Click to add text (foreground colour) or click a text layer to edit it"
+            }));
     } else if tool == Tool::Gradient {
         use jd_raster::gradient::Shape;
         bar = bar

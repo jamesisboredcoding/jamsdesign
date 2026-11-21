@@ -86,7 +86,10 @@ left-click in, right-click out.
 - [x] 5e: layer styles (Layer > Layer Style, right-click a layer, or fx): Drop Shadow, Outer
       Glow, Stroke (outside/inside/center) and Color Overlay, non-destructive and saved in
       .jdp; Clear and Rasterize Layer Style; merges bake effects in
-- [ ] 6: text, PSD import, Flatpak
+- [x] 6a: Type tool (T): click to add text, click a text layer to edit it, system fonts,
+      size, bold/italic, left/center/right; typing is one undo step (Esc cancels, Ctrl+Enter
+      or another tool commits); text layers stay editable when moved and are saved in .jdp
+- [ ] 6: PSD import, Flatpak, Pen tool
 
 ## App icon
 
@@ -130,7 +133,10 @@ Try it: `cargo run -p jd-io --example demo_doc -- demo.jdp base.jpg top.jpg`
 - Layer styles: effects are rendered on the CPU and cached, so painting on a large styled
   layer is slower; effects hide while the layer is being moved or transformed and come back
   on commit. Shadow and glow use normal blending (Photoshop defaults to Multiply/Screen).
-  Not yet: Bevel, Inner Shadow/Glow, Satin, Gradient/Pattern Overlay. Pasting into a document of a different size lands at the top-left
+  Not yet: Bevel, Inner Shadow/Glow, Satin, Gradient/Pattern Overlay.
+- Type: point text only (no text boxes or wrapping), the caret is always at the end (no
+  arrow keys or selecting part of the text), one style per layer. Painting on, filtering or
+  free-transforming a text layer turns it into plain pixels without asking. Pasting into a document of a different size lands at the top-left
   (Photoshop centres it). Move and Ctrl+T refuse on a locked layer (unlock it first).
 - The clipboard is internal to Gallerion (iced only exposes text clipboard access).
 - Marching ants don't animate. Transforms use bilinear resampling (Photoshop uses bicubic by

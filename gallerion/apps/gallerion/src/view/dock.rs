@@ -198,7 +198,12 @@ fn layers_panel(app: &Photo) -> Element<'_, Message> {
             // the select/drag itself, or only the thumbnail would.
             _ => mouse_area({
                 // "fx" marks layers with effects, like Photoshop.
-                let mut r = row![text(&layer.name).size(TEXT_SIZE).width(Fill)].align_y(Vertical::Center);
+                let mut r = row![].spacing(6).align_y(Vertical::Center);
+                // "T" marks editable text layers.
+                if layer.text.as_ref().is_some_and(|t| t.is_current(&layer.pixels)) {
+                    r = r.push(text("T").size(TEXT_SIZE).font(jd_ui::widget::bold()).color(ACCENT_PRIMARY));
+                }
+                r = r.push(text(&layer.name).size(TEXT_SIZE).width(Fill));
                 if !layer.style.is_empty() {
                     r = r.push(text("fx").size(TEXT_SIZE_SMALL).font(jd_ui::widget::bold()).color(TEXT_SECONDARY));
                 }

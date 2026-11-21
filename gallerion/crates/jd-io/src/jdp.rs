@@ -27,6 +27,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use jd_raster::style::{LayerStyle, StrokePosition};
+use jd_raster::text::{Align, TextLayer};
 use jd_raster::{BlendMode, BlendSpace, Document, TILE_SIZE, Tile, TileGrid, composite};
 use serde::{Deserialize, Serialize};
 use zip::write::SimpleFileOptions;
@@ -77,6 +78,25 @@ struct LayerEntry {
     /// Layer effects; absent in files without any (and in older files).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     style: Option<StyleEntry>,
+    /// Editable text (Type tool); the layer's tiles hold the rendered text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    text: Option<TextEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct TextEntry {
+    text: String,
+    family: String,
+    size: f32,
+    color: [u8; 3],
+    #[serde(default)]
+    bold: bool,
+    #[serde(default)]
+    italic: bool,
+    #[serde(default)]
+    align: String,
+    x: f32,
+    y: f32,
 }
 
 /// Layer effects as stored: each effect keeps its settings even when switched off.
@@ -220,6 +240,18 @@ pub fn write<W: Write + Seek>(doc: &Document, out: W) -> Result<W, SaveError> {
             blend: layer.blend.key().into(),
             tiles,
             style: StyleEntry::from_style(&layer.style),
+            // Only text that still matches the pixels (not painted over) stays editable.
+            text: layer.text.as_ref().filter(|t| t.is_current(&layer.pixels)).map(|t| TextEntry {
+                text: t.text.clone(),
+                family: t.family.clone(),
+                size: t.size,
+                color: t.color,
+                bold: t.bold,
+                italic: t.italic,
+                align: t.align.key().into(),
+                x: t.x,
+                y: t.y,
+            }),
         });
     }
 
@@ -303,6 +335,13 @@ pub fn read<R: Read + Seek>(name: impl Into<String>, input: R) -> Result<Documen
         if let Some(style) = &entry.style {
             layer.style = style.to_style();
         }
+        if let Some(t) = &entry.text {
+            let mut text = TextLayer::new(t.x, t.y, t.family.clone(), t.size.clamp(1.0, 2000.0), t.color);
+            (text.text, text.bold, text.italic, text.align) = (t.text.clone(), t.bold, t.italic, Align::from_key(&t.align));
+            // The stored tiles are the rendered text, so it's current as loaded.
+            text.signature = jd_raster::text::signature(&layer.pixels);
+            layer.text = Some(text);
+        }
         ids.push(id);
     }
     if ids.is_empty() {
@@ -351,6 +390,24 @@ mod tests {
         let bg = doc.layers()[0].id;
         doc.set_active(bg);
         doc
+    }
+
+    #[test]
+    fn roundtrip_keeps_text_editable() {
+        let mut doc = Document::blank("t", 200, 80);
+        let id = doc.add_layer("Hello");
+        let mut t = TextLayer::new(10.0, 10.0, String::new(), 30.0, [9, 9, 9]);
+        t.text = "Hello".into();
+        t.italic = true;
+        let l = doc.layer_mut(id).unwrap();
+        t.render_into(&mut l.pixels);
+        l.text = Some(t);
+        let bytes = write(&doc, std::io::Cursor::new(Vec::new())).unwrap().into_inner();
+        let back = read("t", std::io::Cursor::new(bytes)).unwrap();
+        let l = back.layers().last().unwrap();
+        let t = l.text.as_ref().expect("text kept");
+        assert_eq!((t.text.as_str(), t.italic, t.size), ("Hello", true, 30.0));
+        assert!(t.is_current(&l.pixels));
     }
 
     #[test]

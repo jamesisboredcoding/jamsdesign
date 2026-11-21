@@ -115,6 +115,7 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
             || app.dialog.is_some()
             || app.palette.is_some(),
         crop_box: app.crop_box,
+        typing: app.typing.as_ref().map(|t| t.layout),
         // Where the clone source is: the set point, or (once aligned) cursor + offset.
         clone_source: app.effective_tool().clones().then(|| match (app.clone_offset, app.cursor) {
             (Some((dx, dy)), Some(c)) => Some(Point::new(c.x + dx as f32, c.y + dy as f32)),
@@ -283,6 +284,8 @@ struct Overlay<'a> {
     covered: bool,
     crop_box: Option<[f32; 4]>,
     clone_source: Option<Point>,
+    /// Text being typed: its box and caret.
+    typing: Option<jd_raster::text::Layout>,
 }
 
 /// A marquee or lasso being dragged.
@@ -506,6 +509,7 @@ impl canvas::Program<Message> for Overlay<'_> {
                         Some(canvas::Action::request_redraw().and_capture())
                     }
                     Tool::Wand => publish(Message::Wand { at: doc, combine: self.combine(m) }),
+                    Tool::Type => publish(Message::TypeClick(doc)),
                     Tool::Gradient | Tool::Shape | Tool::EllipseShape | Tool::Crop => {
                         state.box_drag = Some((doc, doc));
                         Some(canvas::Action::request_redraw().and_capture())
@@ -724,6 +728,20 @@ impl canvas::Program<Message> for Overlay<'_> {
             }
         } else if let Some(b) = self.crop_box {
             crop_shade(&mut frame, bounds, self, b);
+        }
+
+        // Text being typed: a thin box around it and the caret.
+        if let Some(t) = self.typing {
+            let [x0, y0, x1, y1] = t.bounds;
+            let (p, q) = (self.to_screen(Point::new(x0, y0)), self.to_screen(Point::new(x1, y1)));
+            frame.stroke(
+                &Path::rectangle(p - Vector::new(3.0, 3.0), iced::Size::new(q.x - p.x + 6.0, q.y - p.y + 6.0)),
+                Stroke::default().with_width(1.0).with_color(Color::from_rgba(0.5, 0.5, 0.5, 0.8)),
+            );
+            let (cx, cy, ch) = t.caret;
+            let (a, b) = (self.to_screen(Point::new(cx, cy)), self.to_screen(Point::new(cx, cy + ch)));
+            frame.stroke(&Path::line(a, b), Stroke::default().with_width(3.0).with_color(Color::WHITE));
+            frame.stroke(&Path::line(a, b), Stroke::default().with_width(1.0).with_color(Color::BLACK));
         }
 
         // Clone source marker (a small crosshair).
