@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>jamsdesign</title>
+  <meta name="description" content="jamsdesign is a Linux-first creative suite written in Rust: Gallerion for photos, Cinematica for video.">
+  <meta property="og:title" content="jamsdesign">
+  <meta property="og:description" content="A Linux-first creative suite: Gallerion for photos, Cinematica for video.">
+  <meta property="og:image" content="img/jamsdesign.svg">
+  <meta name="theme-color" content="#E01B5A">
+  <link rel="icon" href="img/jamsdesign.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top">
+      <img src="img/jamsdesign.svg" alt="" width="32" height="32">
+      <span><b>jams</b>design</span>
+    </a>
+    <nav class="nav-links">
+      <a href="#gallerion">Gallerion</a>
+      <a href="#cinematica">Cinematica</a>
+      <a href="#install">Install</a>
+      <a href="https://github.com/jamesisboredcoding/jamsdesign">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+  <section class="hero">
+    <div class="wrap hero-inner">
+      <div class="hero-copy">
+        <p class="eyebrow">Creative suite for Linux</p>
+        <h1>Make things.<br><span class="jam">Keep it jammy.</span></h1>
+        <p class="lead">
+          jamsdesign is a family of native, GPU-accelerated creative apps written in Rust.
+          Edit photos, cut video, and use the shortcuts your hands already know.
+        </p>
+        <div class="cta">
+          <a class="btn btn-primary" href="#apps">Meet the apps</a>
+          <a class="btn btn-ghost" href="https://github.com/jamesisboredcoding/jamsdesign">View on GitHub</a>
+        </div>
+      </div>
+      <div class="hero-art" aria-hidden="true">
+        <div class="jar-glow"></div>
+        <img class="jar" src="img/jamsdesign.svg" alt="" width="280" height="280">
+        <img class="orbit orbit-a" src="img/gallerion.svg" alt="" width="96" height="96">
+        <img class="orbit orbit-b" src="img/cinematica.svg" alt="" width="96" height="96">
+      </div>
+    </div>
+  </section>
+
+  <section id="apps" class="apps">
+    <div class="wrap">
+      <h2 class="section-title">The apps</h2>
+      <p class="section-sub">Each one is its own app, built on the same fast core.</p>
+
+      <article id="gallerion" class="app app-gallerion">
+        <div class="app-head">
+          <img src="img/gallerion.svg" alt="Gallerion icon" width="112" height="112">
+          <div>
+            <h3>Gallerion</h3>
+            <p class="app-kind">Photo editor</p>
+          </div>
+          <span class="pill pill-soon">Coming soon to Flathub</span>
+        </div>
+        <p class="app-blurb">
+          Layer-based photo editing that feels instantly familiar. Paint with your pen tablet,
+          blend layers on the GPU and tweak with live previews.
+        </p>
+        <ul class="features">
+          <li><b>24 blend modes</b> rendered on the GPU, in perceptual or linear light.</li>
+          <li><b>Pressure-sensitive brushes</b> with size and opacity from your pen.</li>
+          <li><b>Selections and Free Transform:</b> marquee, lasso, magic wand, add, subtract, intersect.</li>
+          <li><b>Adjustments and filters</b> like Levels, Curves, Hue/Saturation and blurs, with live preview.</li>
+          <li><b>Full undo history</b> and the fast, compact <code>.jdp</code> document format.</li>
+          <li><b>Photoshop-compatible shortcuts</b> so there is nothing to relearn.</li>
+        </ul>
+      </article>
+
+      <article id="cinematica" class="app app-cinematica">
+        <div class="app-head">
+          <img src="img/cinematica.svg" alt="Cinematica icon" width="112" height="112">
+          <div>
+            <h3>Cinematica</h3>
+            <p class="app-kind">Video editor</p>
+          </div>
+          <span class="pill pill-dev">In development</span>
+        </div>
+        <p class="app-blurb">
+          A timeline editor in the spirit of the classics, built on the same renderer and UI
+          toolkit as Gallerion.
+        </p>
+        <ul class="features">
+          <li><b>Multi-track timeline</b> for video and audio clips.</li>
+          <li><b>Pro edits:</b> insert, overwrite, lift, extract, razor, ripple and slip.</li>
+          <li><b>Frame-accurate playback</b> and scrubbing, powered by FFmpeg.</li>
+          <li><b>Snapshot undo</b> for every edit.</li>
+        </ul>
+      </article>
+
+      <article class="app app-more">
+        <div class="more-jar" aria-hidden="true">+</div>
+        <div>
+          <h3>More on the shelf</h3>
+          <p class="app-blurb">New apps will join the suite over time, each with its own layer in the jar.</p>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <section class="why">
+    <div class="wrap why-grid">
+      <div class="why-card">
+        <h4>Native and fast</h4>
+        <p>Pure Rust with a wgpu renderer. Pixel work is tiled, copy-on-write and parallel.</p>
+      </div>
+      <div class="why-card">
+        <h4>Made for Linux</h4>
+        <p>Wayland pen tablets with pressure and tilt, including on KDE. Icons that fit your desktop.</p>
+      </div>
+      <div class="why-card">
+        <h4>No relearning</h4>
+        <p>Tools, menus and shortcuts follow the layout you already use every day.</p>
+      </div>
+      <div class="why-card">
+        <h4>One foundation</h4>
+        <p>Every app shares the same colour, document, GPU and UI crates, so they feel like a family.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="install" class="install">
+    <div class="wrap">
+      <h2 class="section-title">Install</h2>
+      <p class="section-sub">Flatpak packages are on the way. Until then, build from source.</p>
+      <div class="install-grid">
+        <div class="install-card">
+          <h4>Flathub</h4>
+          <p>One-click installs for every distro, coming soon.</p>
+          <span class="btn btn-disabled" aria-disabled="true">Coming soon</span>
+        </div>
+        <div class="install-card">
+          <h4>From source</h4>
+          <p>Needs stable Rust and a Vulkan-capable GPU. Cinematica also needs FFmpeg.</p>
+<pre><code>git clone https://github.com/jamesisboredcoding/jamsdesign
+cd jamsdesign/gallerion
+cargo run --release -p gallerion</code></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap footer-inner">
+    <span class="brand small"><img src="img/jamsdesign.svg" alt="" width="24" height="24"><span><b>jams</b>design</span></span>
+    <span class="muted">A Linux-first creative suite. <a href="https://github.com/jamesisboredcoding/jamsdesign">Source on GitHub</a></span>
+  </div>
+</footer>
+
+</body>
+</html>
