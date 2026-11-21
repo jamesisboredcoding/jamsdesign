@@ -3,6 +3,7 @@ pub mod canvas;
 mod chrome;
 mod color;
 mod dialog;
+mod layer_style;
 mod dock;
 mod menus;
 

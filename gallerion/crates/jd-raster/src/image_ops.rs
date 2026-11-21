@@ -115,6 +115,7 @@ impl Document {
         let (lower_id, upper_id) = (lower.id, upper.id);
         if let Some(l) = self.layer_mut(lower_id) {
             l.pixels = merged;
+            l.style = Default::default();
         }
         self.remove_layer(upper_id);
         self.set_active(lower_id);
@@ -135,6 +136,7 @@ impl Document {
         }
         if let Some(l) = self.layer_mut(keep) {
             l.pixels = merged;
+            l.style = Default::default();
             l.opacity = 1.0;
             l.blend = BlendMode::Normal;
         }
@@ -160,10 +162,13 @@ impl Document {
 /// Composites `layers` (bottom to top, honouring visibility, opacity and blend modes) into
 /// one grid. With `matte`, the result is flattened over that colour (opaque).
 pub fn merge(layers: &[&Layer], space: BlendSpace, w: u32, h: u32, matte: Option<[u8; 3]>) -> TileGrid {
+    // Effects are baked in, like Photoshop's merge.
+    let grids: Vec<TileGrid> = layers.iter().map(|l| l.rendered().into_owned()).collect();
     let bounds = layers
         .iter()
-        .filter(|l| l.visible)
-        .filter_map(|l| content_bounds(&l.pixels))
+        .zip(&grids)
+        .filter(|(l, _)| l.visible)
+        .filter_map(|(_, g)| content_bounds(g))
         .reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]);
     let [x0, y0, x1, y1] = if matte.is_some() { [0, 0, w, h] } else { bounds.unwrap_or([0, 0, 0, 0]) };
     let mut out = TileGrid::empty(w, h);
@@ -184,7 +189,7 @@ pub fn merge(layers: &[&Layer], space: BlendSpace, w: u32, h: u32, matte: Option
                     if !layer.visible || layer.opacity <= 0.0 {
                         continue;
                     }
-                    let px = layer.pixels.pixel(x, y);
+                    let px = grids[li].pixel(x, y);
                     if px[3] == 0 {
                         continue;
                     }

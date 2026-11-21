@@ -155,6 +155,14 @@ pub enum DialogKind {
     BlendingOptions,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StyleOriginal {
+    pub id: LayerId,
+    pub blend: BlendMode,
+    pub opacity: f32,
+    pub style: jd_raster::style::LayerStyle,
+}
+
 pub struct Dialog {
     pub kind: DialogKind,
     /// Width (or the single value).
@@ -166,8 +174,10 @@ pub struct Dialog {
     pub aspect: f32,
     /// Canvas Size anchor: column and row, 0..=2.
     pub anchor: (u8, u8),
-    /// Blending Options: the layer and its mode and opacity before the dialog opened.
-    pub original: Option<(LayerId, BlendMode, f32)>,
+    /// Layer Style: the layer and its settings before the dialog opened (for Cancel/undo).
+    pub original: Option<StyleOriginal>,
+    /// Layer Style: which entry of the left-hand list is shown.
+    pub fx_tab: u8,
 }
 
 impl Dialog {
@@ -531,6 +541,12 @@ pub enum Message {
     DialogCancel,
     /// Blending Options preview: new mode.
     DialogBlend(BlendMode),
+    /// Layer Style preview: the new effects.
+    DialogStyle(jd_raster::style::LayerStyle),
+    /// Layer Style: show a list entry, optionally switching its effect on.
+    DialogFxTab(u8, Option<jd_raster::style::LayerStyle>),
+    ClearLayerStyle,
+    RasterizeLayerStyle,
     /// Blending Options preview: new opacity (and the current mode).
     DialogOpacity(f32, BlendMode),
 
@@ -1254,7 +1270,9 @@ impl Photo {
                     DialogKind::Feather => ("5".into(), String::new()),
                     _ => ("3".into(), String::new()),
                 };
-                let original = (kind == DialogKind::BlendingOptions).then(|| doc.active().map(|l| (l.id, l.blend, l.opacity))).flatten();
+                let original = (kind == DialogKind::BlendingOptions)
+                    .then(|| doc.active().map(|l| StyleOriginal { id: l.id, blend: l.blend, opacity: l.opacity, style: l.style }))
+                    .flatten();
                 if kind == DialogKind::BlendingOptions && original.is_none() {
                     return Task::none();
                 }
@@ -1262,7 +1280,7 @@ impl Photo {
                 if kind == DialogKind::BlendingOptions && !self.check_layer_editable() {
                     return Task::none();
                 }
-                self.dialog = Some(Dialog { kind, a, b, constrain: true, aspect, anchor: (1, 1), original });
+                self.dialog = Some(Dialog { kind, a, b, constrain: true, aspect, anchor: (1, 1), original, fx_tab: 0 });
             }
             Message::DialogA(ref v) | Message::DialogB(ref v) => {
                 let first = matches!(message, Message::DialogA(_));
@@ -1294,19 +1312,34 @@ impl Photo {
             }
             Message::DialogCancel => {
                 // Blending Options previewed on the layer itself: put it back.
-                if let Some(Dialog { original: Some((id, blend, opacity)), .. }) = self.dialog.take()
+                if let Some(Dialog { original: Some(o), .. }) = self.dialog.take()
                     && let Some(d) = self.doc_mut()
-                    && let Some(l) = d.doc.layer_mut(id)
+                    && let Some(l) = d.doc.layer_mut(o.id)
                 {
-                    l.blend = blend;
-                    l.opacity = opacity;
+                    (l.blend, l.opacity, l.style) = (o.blend, o.opacity, o.style);
+                }
+            }
+            Message::DialogFxTab(tab, style) => {
+                if let Some(d) = self.dialog.as_mut() {
+                    d.fx_tab = tab;
+                }
+                if let Some(s) = style {
+                    return self.update(Message::DialogStyle(s));
+                }
+            }
+            Message::DialogStyle(style) => {
+                if let Some(Dialog { original: Some(o), .. }) = self.dialog
+                    && let Some(d) = self.doc_mut()
+                    && let Some(l) = d.doc.layer_mut(o.id)
+                {
+                    l.style = style;
                 }
             }
             Message::DialogBlend(mode) | Message::DialogOpacity(_, mode) => {
                 let opacity = if let Message::DialogOpacity(o, _) = message { Some(o) } else { None };
-                if let Some(Dialog { original: Some((id, ..)), .. }) = self.dialog
+                if let Some(Dialog { original: Some(o), .. }) = self.dialog
                     && let Some(d) = self.doc_mut()
-                    && let Some(l) = d.doc.layer_mut(id)
+                    && let Some(l) = d.doc.layer_mut(o.id)
                 {
                     l.blend = mode;
                     if let Some(o) = opacity {
@@ -1607,6 +1640,19 @@ impl Photo {
                 return self.update(*m);
             }
             Message::DockPointer(p) => self.dock_pointer = p,
+            Message::ClearLayerStyle => self.edit_layer("Clear Layer Style", None, |l| {
+                let had = !l.style.is_empty();
+                l.style = Default::default();
+                had
+            }),
+            Message::RasterizeLayerStyle => self.edit_layer("Rasterize Layer Style", None, |l| {
+                if l.style.is_empty() {
+                    return false;
+                }
+                l.pixels = l.rendered().into_owned();
+                l.style = Default::default();
+                true
+            }),
             Message::ToggleSnap => self.snap.on = !self.snap.on,
             Message::SnapTo(t) => {
                 let s = &mut self.snap;
@@ -2079,6 +2125,7 @@ impl Photo {
                     l.opacity = layer.opacity;
                     l.blend = layer.blend;
                     l.visible = layer.visible;
+                    l.style = layer.style;
                 })
                 .is_some()
         });
@@ -2088,18 +2135,17 @@ impl Photo {
 
     fn dialog_ok(&mut self) -> Task<Message> {
         let Some(d) = self.dialog.take() else { return Task::none() };
-        if let Some((id, blend, opacity)) = d.original {
+        if let Some(o) = d.original {
             // The layer already shows the new settings; record the old ones as one undo step.
             if let Some(open) = self.doc_mut()
-                && let Some(now) = open.doc.layer(id).map(|l| (l.blend, l.opacity))
-                && now != (blend, opacity)
+                && let Some(now) = open.doc.layer(o.id).map(|l| (l.blend, l.opacity, l.style))
+                && now != (o.blend, o.opacity, o.style)
             {
                 let mut before = open.doc.clone();
-                if let Some(l) = before.layer_mut(id) {
-                    l.blend = blend;
-                    l.opacity = opacity;
+                if let Some(l) = before.layer_mut(o.id) {
+                    (l.blend, l.opacity, l.style) = (o.blend, o.opacity, o.style);
                 }
-                open.history.record("Blending Options", &before, None);
+                open.history.record("Layer Style", &before, None);
             }
             return Task::none();
         }
@@ -2207,6 +2253,8 @@ impl Photo {
                 | Message::DockPointer(_)
                 | Message::ToggleSnap
                 | Message::DialogBlend(_)
+                | Message::DialogStyle(_)
+                | Message::DialogFxTab(..)
                 | Message::DialogOpacity(..)
                 | Message::SnapTo(_)
                 | Message::CropBox(_)
@@ -3431,6 +3479,39 @@ mod tests {
         assert_eq!(app.doc().unwrap().history.depth(), depth + 1, "one undo step");
         let _ = app.update(Message::Undo);
         assert_eq!(layer(&app).0, BlendMode::Normal);
+    }
+
+    #[test]
+    fn layer_style_previews_saves_one_step_and_clears() {
+        let (mut app, _) = Photo::new();
+        white(&mut app, 60, 60);
+        let _ = app.update(Message::AddLayer);
+        let id = app.document().unwrap().active_id().unwrap();
+        for y in 20..40 {
+            for x in 20..40 {
+                app.docs[0].doc.layer_mut(id).unwrap().pixels.set_pixel(x, y, [0, 0, 255, 255]);
+            }
+        }
+        let depth = app.doc().unwrap().history.depth();
+        let _ = app.update(Message::ShowDialog(DialogKind::BlendingOptions));
+        // Clicking "Stroke" in the list shows it and switches it on.
+        let mut on = app.document().unwrap().active().unwrap().style;
+        on.stroke.on = true;
+        let _ = app.update(Message::DialogFxTab(1, Some(on)));
+        assert_eq!(app.dialog.as_ref().unwrap().fx_tab, 1);
+        assert!(app.document().unwrap().active().unwrap().style.stroke.on, "previewed");
+        // The composite (what the canvas and export show) has the stroke around the square.
+        assert_eq!(jd_raster::composite::pixel_srgb8(app.document().unwrap(), 18, 30), [0, 0, 0, 255]);
+        let _ = app.update(Message::DialogOk);
+        assert_eq!(app.doc().unwrap().history.depth(), depth + 1);
+
+        let _ = app.update(Message::RasterizeLayerStyle);
+        let l = app.document().unwrap().active().unwrap();
+        assert!(l.style.is_empty() && l.pixels.pixel(18, 30) == [0, 0, 0, 255], "baked into the pixels");
+        let _ = app.update(Message::Undo);
+        let _ = app.update(Message::ClearLayerStyle);
+        assert!(app.document().unwrap().active().unwrap().style.is_empty());
+        assert_eq!(jd_raster::composite::pixel_srgb8(app.document().unwrap(), 18, 30), [255, 255, 255, 255]);
     }
 
     #[test]

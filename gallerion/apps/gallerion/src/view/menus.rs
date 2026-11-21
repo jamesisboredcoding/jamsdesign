@@ -251,6 +251,15 @@ fn menu_bar(app: &Photo, i: usize) -> Vec<MenuEntry<'_, Message>> {
             ),
             item(if s.editable || !doc { "Lock Layer" } else { "Unlock Layer" }, "", doc, Message::ToggleLock),
             Separator,
+            Submenu(
+                "Layer Style",
+                vec![
+                    item("Blending Options...", "", s.editable, Message::ShowDialog(DialogKind::BlendingOptions)),
+                    item("Clear Layer Style", "", s.editable, Message::ClearLayerStyle),
+                    item("Rasterize Layer Style", "", s.editable, Message::RasterizeLayerStyle),
+                ],
+            ),
+            Separator,
             item("Merge Down", "Ctrl+E", s.can_merge_down, Message::MergeDown),
             item("Merge Visible", "Shift+Ctrl+E", doc, Message::MergeVisible),
             item("Flatten Image", "", doc, Message::Flatten),
@@ -320,6 +329,7 @@ fn layer_menu(app: &Photo) -> Vec<MenuEntry<'_, Message>> {
     let s = state(app);
     let layer = app.document().and_then(|d| d.active());
     let (visible, locked) = layer.map_or((true, false), |l| (l.visible, l.locked));
+    let has_style = layer.is_some_and(|l| !l.style.is_empty());
     let id = layer.map(|l| l.id);
     // Other open documents, for Duplicate Into.
     let others: Vec<MenuEntry<'_, Message>> = app
@@ -331,6 +341,8 @@ fn layer_menu(app: &Photo) -> Vec<MenuEntry<'_, Message>> {
         .collect();
     let mut entries = vec![
         item("Blending Options...", "", s.doc && !locked, Message::ShowDialog(DialogKind::BlendingOptions)),
+        item("Clear Layer Style", "", has_style && !locked, Message::ClearLayerStyle),
+        item("Rasterize Layer Style", "", has_style && !locked, Message::RasterizeLayerStyle),
         Separator,
         item("Select Pixels", "", s.doc, Message::SelectPixels),
         Separator,

@@ -8,6 +8,7 @@ pub mod composite;
 pub mod filter;
 pub mod gradient;
 pub mod heal;
+pub mod style;
 pub mod image_ops;
 mod history;
 pub mod paint;
@@ -33,6 +34,20 @@ pub struct Layer {
     pub opacity: f32,
     pub blend: BlendMode,
     pub pixels: TileGrid,
+    /// Layer effects (drop shadow, stroke, ...), drawn on top of `pixels` when rendering.
+    pub style: style::LayerStyle,
+}
+
+impl Layer {
+    /// What the layer looks like: its pixels plus its effects (cached; the pixels themselves
+    /// when it has none). Everything that draws or flattens layers uses this.
+    pub fn rendered(&self) -> std::borrow::Cow<'_, TileGrid> {
+        if self.style.is_empty() {
+            std::borrow::Cow::Borrowed(&self.pixels)
+        } else {
+            std::borrow::Cow::Owned(style::render_cached(&self.pixels, &self.style))
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -94,6 +109,7 @@ impl Document {
             opacity: 1.0,
             blend: BlendMode::Normal,
             pixels: TileGrid::empty(self.width, self.height),
+            style: style::LayerStyle::default(),
         };
         let index = self
             .active

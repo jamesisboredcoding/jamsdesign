@@ -3,6 +3,7 @@
 
 use std::sync::LazyLock;
 
+use crate::TileGrid;
 use crate::blend::{self, BlendMode};
 use crate::{Document, Layer};
 
@@ -73,11 +74,11 @@ pub fn dissolve_seed(layer_index: usize) -> u32 {
     layer_index as u32 + 1
 }
 
-fn layer_source(layer: &Layer, index: usize, x: u32, y: u32, space: BlendSpace) -> Option<[f32; 4]> {
+fn layer_source(layer: &Layer, pixels: &TileGrid, index: usize, x: u32, y: u32, space: BlendSpace) -> Option<[f32; 4]> {
     if !layer.visible || layer.opacity <= 0.0 {
         return None;
     }
-    let px = layer.pixels.pixel(x, y);
+    let px = pixels.pixel(x, y);
     if px[3] == 0 {
         return None;
     }
@@ -99,10 +100,19 @@ fn layer_source(layer: &Layer, index: usize, x: u32, y: u32, space: BlendSpace) 
 
 /// The composited colour of one pixel: premultiplied, working space.
 pub fn pixel(doc: &Document, x: u32, y: u32) -> [f32; 4] {
+    pixel_in(doc, &rendered(doc), x, y)
+}
+
+/// Every layer's look (pixels plus effects), computed once for many pixel lookups.
+fn rendered(doc: &Document) -> Vec<TileGrid> {
+    doc.layers().iter().map(|l| l.rendered().into_owned()).collect()
+}
+
+fn pixel_in(doc: &Document, grids: &[TileGrid], x: u32, y: u32) -> [f32; 4] {
     let space = doc.blend_space;
     let mut acc = [0.0f32; 4];
     for (i, layer) in doc.layers().iter().enumerate() {
-        if let Some(src) = layer_source(layer, i, x, y, space) {
+        if let Some(src) = layer_source(layer, &grids[i], i, x, y, space) {
             acc = blend::composite(layer.blend, acc, src);
         }
     }
@@ -119,10 +129,11 @@ pub fn pixel_srgb8(doc: &Document, x: u32, y: u32) -> [u8; 4] {
 pub fn flatten(doc: &Document) -> Vec<u8> {
     use rayon::prelude::*;
     let w = doc.width as usize;
+    let grids = rendered(doc);
     let mut out = vec![0u8; w * doc.height as usize * 4];
     out.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
         for (x, px) in row.chunks_exact_mut(4).enumerate() {
-            px.copy_from_slice(&pixel_srgb8(doc, x as u32, y as u32));
+            px.copy_from_slice(&to_srgb8(pixel_in(doc, &grids, x as u32, y as u32), doc.blend_space));
         }
     });
     out
@@ -134,6 +145,7 @@ pub fn thumbnail(doc: &Document, max: u32, layer: Option<&Layer>) -> (u32, u32, 
     let scale = (max as f32 / doc.width as f32).min(max as f32 / doc.height as f32).min(1.0);
     let tw = ((doc.width as f32 * scale).round() as u32).max(1);
     let th = ((doc.height as f32 * scale).round() as u32).max(1);
+    let grids = if layer.is_none() { rendered(doc) } else { Vec::new() };
     let mut out = Vec::with_capacity((tw * th * 4) as usize);
     for ty in 0..th {
         for tx in 0..tw {
@@ -142,7 +154,7 @@ pub fn thumbnail(doc: &Document, max: u32, layer: Option<&Layer>) -> (u32, u32, 
             let (x, y) = (x.min(doc.width - 1), y.min(doc.height - 1));
             out.extend_from_slice(&match layer {
                 Some(l) => l.pixels.pixel(x, y),
-                None => pixel_srgb8(doc, x, y),
+                None => to_srgb8(pixel_in(doc, &grids, x, y), doc.blend_space),
             });
         }
     }

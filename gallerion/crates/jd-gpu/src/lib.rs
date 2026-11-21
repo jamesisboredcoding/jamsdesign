@@ -79,7 +79,8 @@ impl Scene {
                     blend: l.blend,
                     dissolve_seed: composite::dissolve_seed(i),
                     transform: IDENTITY,
-                    tiles: l.pixels.iter_all().map(|(x, y, t)| ([x, y], t.clone())).collect(),
+                    // Pixels plus layer effects (cached, so the tiles stay the same between frames).
+                    tiles: l.rendered().iter_all().map(|(x, y, t)| ([x, y], t.clone())).collect(),
                 })
                 .collect(),
             retain: Vec::new(),

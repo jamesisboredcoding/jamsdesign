@@ -23,6 +23,11 @@ impl TileId {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         Self(NEXT.fetch_add(1, Ordering::Relaxed))
     }
+
+    /// The id as a number (for cache keys).
+    pub fn raw(self) -> u64 {
+        self.0
+    }
 }
 
 pub struct Tile {

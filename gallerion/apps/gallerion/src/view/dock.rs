@@ -196,7 +196,14 @@ fn layers_panel(app: &Photo) -> Element<'_, Message> {
                 .into(),
             // The name handles its own clicks (double-click renames), so it must also start
             // the select/drag itself, or only the thumbnail would.
-            _ => mouse_area(text(&layer.name).size(TEXT_SIZE).width(Fill))
+            _ => mouse_area({
+                // "fx" marks layers with effects, like Photoshop.
+                let mut r = row![text(&layer.name).size(TEXT_SIZE).width(Fill)].align_y(Vertical::Center);
+                if !layer.style.is_empty() {
+                    r = r.push(text("fx").size(TEXT_SIZE_SMALL).font(jd_ui::widget::bold()).color(TEXT_SECONDARY));
+                }
+                r
+            })
                 .on_press(Message::LayerPress(layer.id))
                 .on_double_click(Message::StartRename(layer.id))
                 .into(),

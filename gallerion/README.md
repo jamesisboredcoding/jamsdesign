@@ -83,6 +83,9 @@ left-click in, right-click out.
       Content-Aware), Healing Brush with seamless (Poisson) blending, View > Snap / Snap To
       (layers, document bounds) with smart guides for Move and Free Transform, Layer >
       Blending Options (mode, opacity, live preview), layer drag with exact drop slots
+- [x] 5e: layer styles (Layer > Layer Style, right-click a layer, or fx): Drop Shadow, Outer
+      Glow, Stroke (outside/inside/center) and Color Overlay, non-destructive and saved in
+      .jdp; Clear and Rasterize Layer Style; merges bake effects in
 - [ ] 6: text, PSD import, Flatpak
 
 ## App icon
@@ -123,7 +126,11 @@ Try it: `cargo run -p jd-io --example demo_doc -- demo.jdp base.jpg top.jpg`
   Image Size, merges and flatten only see the canvas and drop it. Shapes are
   raster (not editable vector layers). Spot Healing runs when the stroke ends and blocks
   the UI briefly on big strokes (about 0.5 s for a 240 px blob). Snapping has no grid or
-  guides yet; Blending Options has no layer effects (shadow, stroke, glow) yet. Pasting into a document of a different size lands at the top-left
+  guides yet.
+- Layer styles: effects are rendered on the CPU and cached, so painting on a large styled
+  layer is slower; effects hide while the layer is being moved or transformed and come back
+  on commit. Shadow and glow use normal blending (Photoshop defaults to Multiply/Screen).
+  Not yet: Bevel, Inner Shadow/Glow, Satin, Gradient/Pattern Overlay. Pasting into a document of a different size lands at the top-left
   (Photoshop centres it). Move and Ctrl+T refuse on a locked layer (unlock it first).
 - The clipboard is internal to Gallerion (iced only exposes text clipboard access).
 - Marching ants don't animate. Transforms use bilinear resampling (Photoshop uses bicubic by
