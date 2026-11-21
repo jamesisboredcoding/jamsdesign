@@ -7,3 +7,4 @@ publish.workspace = true
 
 [dependencies]
 ffmpeg-next.workspace = true
+cpal = "0.18"

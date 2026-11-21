@@ -12,6 +12,8 @@ pub const MAX_ZOOM: f32 = 2000.0;
 impl Editor {
     /// Runs an edit as one undo step. Errors restore the sequence and show the reason.
     pub fn edit(&mut self, label: &str, f: impl FnOnce(&mut Sequence) -> Result<(), String>) -> bool {
+        // Editing stops playback, like Premiere.
+        self.stop_playback();
         let before = self.sequence.clone();
         match f(&mut self.sequence) {
             Ok(()) => {
@@ -42,7 +44,58 @@ impl Editor {
         self.playhead = t;
         self.focus = Focus::Timeline;
         self.keep_in_view(t);
-        self.sync_program();
+        if self.program.is_playing() {
+            // Clicking the ruler while playing carries on playing from there.
+            let speed = self.program.speed;
+            self.play_sequence(speed);
+        } else {
+            self.sync_program();
+        }
+    }
+
+    /// Plays the sequence from the playhead (from the start if it's at the end).
+    pub fn play_sequence(&mut self, speed: f64) {
+        let end = self.sequence.duration();
+        if end == 0 {
+            return;
+        }
+        self.focus = Focus::Timeline;
+        let from = if speed > 0.0 && self.playhead >= end { 0 } else { self.playhead };
+        let media = self.media.iter().map(|m| (m.id, m.path.clone())).collect();
+        // Tests must stay quiet: they play silently at 2x.
+        let speed = if cfg!(test) && speed == 1.0 { 2.0 } else { speed };
+        self.program.play(jd_playback::Request {
+            sequence: self.sequence.clone(),
+            media,
+            from,
+            speed,
+            max_size: (1920, 1080),
+        });
+    }
+
+    pub fn stop_playback(&mut self) {
+        if self.program.is_playing() {
+            let at = self.program.stop();
+            self.playhead = self.sequence.rate.snap(at);
+            self.sync_program();
+        }
+    }
+
+    /// While playing: page the timeline along so the playhead stays in view.
+    pub fn follow_playhead(&mut self) {
+        self.keep_in_view(self.playhead);
+    }
+
+    /// Meters show the newest peak, or fall back by 24 dB a second (about 0.4 dB a frame).
+    pub fn update_meters(&mut self) {
+        let a = self.program.take_peaks();
+        let b = self.source.take_peaks();
+        for i in 0..2 {
+            let peak = a[i].max(b[i]);
+            let db = if peak > 0.0 { 20.0 * peak.log10() } else { f32::NEG_INFINITY };
+            let fallen = self.meters[i] - 0.4;
+            self.meters[i] = if db >= fallen { db } else if fallen < -60.0 { f32::NEG_INFINITY } else { fallen };
+        }
     }
 
     /// Scrolls the timeline (a page at a time) so `t` is visible.
@@ -121,6 +174,10 @@ impl Editor {
     }
 
     pub(crate) fn timeline_message(&mut self, message: Message) {
+        // Edits at the playhead use where playback stopped (snapped to a frame).
+        if matches!(message, Message::AddEdit { .. } | Message::Insert | Message::Overwrite | Message::Lift | Message::Extract) {
+            self.stop_playback();
+        }
         match message {
             Message::TimelineWidth(w) => self.timeline_width = w,
             Message::SetPlayhead(t) => self.set_playhead(t),
@@ -383,6 +440,47 @@ mod tests {
         let _ = app.update(Message::SetPlayhead(app.sequence.rate.from_frames(30)));
         let _ = app.update(key_with("k", Modifiers::CTRL));
         assert_eq!(spans(&app, TrackRef::video(0)), [(0, 10), (10, 30), (30, 60)]);
+    }
+
+    #[test]
+    fn space_plays_the_timeline_to_the_end_and_edits_stop_it() {
+        let Some((mut app, id)) = with_clip() else { return };
+        app.source.item = None;
+        app.selected_media = Some(id);
+        let _ = app.update(Message::Overwrite);
+        let _ = app.update(Message::SetPlayhead(0));
+        let _ = app.update(iced::keyboard::Event::KeyPressed {
+            key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Space),
+            modified_key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Space),
+            physical_key: iced::keyboard::key::Physical::Unidentified(iced::keyboard::key::NativeCode::Unidentified),
+            location: iced::keyboard::Location::Standard,
+            modifiers: Modifiers::empty(),
+            text: None,
+            repeat: false,
+        }.into_message());
+        assert!(app.program.is_playing());
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        let _ = app.update(Message::Tick);
+        assert!(app.playhead > 0, "the playhead follows playback");
+        // An edit stops playback where it got to.
+        let _ = app.update(key_with("k", Modifiers::CTRL));
+        assert!(!app.program.is_playing());
+        let cut = app.playhead;
+        assert_eq!(app.sequence.video[0].clips[0].end(), cut, "Add Edit cut at the stopped position");
+        // Play again and let it run to the end (2 s at the tests' 2x).
+        let _ = app.update(Message::TogglePlay);
+        settle(&mut app, "end of playback", |a| !a.program.is_playing());
+        assert_eq!(app.playhead, app.sequence.duration());
+    }
+
+    trait IntoMessage {
+        fn into_message(self) -> Message;
+    }
+
+    impl IntoMessage for iced::keyboard::Event {
+        fn into_message(self) -> Message {
+            Message::Key(self)
+        }
     }
 
     #[test]

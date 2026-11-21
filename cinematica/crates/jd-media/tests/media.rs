@@ -127,3 +127,60 @@ fn missing_file_reports_an_error() {
     wait_until(&player, "error", |s| s.error.is_some());
     assert!(probe(Path::new("/nonexistent/clip.mp4")).is_err());
 }
+
+#[test]
+fn audio_decodes_to_stereo_at_the_asked_rate() {
+    let Some(path) = fixture() else { return };
+    let mut d = jd_media::AudioDecoder::open(&path, 48_000).unwrap();
+    let mut buf = vec![0.0f32; 48_000 * 2];
+    let mut total = 0;
+    let mut first_half_second = Vec::new();
+    loop {
+        let n = d.read(&mut buf).unwrap();
+        if first_half_second.is_empty() {
+            first_half_second = buf[..24_000 * 2].to_vec();
+        }
+        total += n;
+        if n < 48_000 {
+            break;
+        }
+    }
+    // 4 s, give or take the AAC encoder's padding.
+    assert!((total as i64 - 4 * 48_000).abs() < 3_000, "{total} frames");
+    // A 440 Hz sine: about 440 zero crossings (up and down) in half a second, on the left.
+    let left: Vec<f32> = first_half_second.iter().step_by(2).copied().collect();
+    let crossings = left.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count();
+    assert!((430..=450).contains(&crossings), "{crossings} crossings");
+    let peak = left.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+    assert!(peak > 0.05 && peak <= 1.0, "peak {peak}");
+}
+
+#[test]
+fn audio_seek_starts_reading_at_the_exact_time() {
+    let Some(path) = fixture() else { return };
+    let mut d = jd_media::AudioDecoder::open(&path, 48_000).unwrap();
+    d.seek(2.5).unwrap();
+    let mut buf = vec![0.0f32; 4 * 48_000 * 2];
+    let n = d.read(&mut buf).unwrap();
+    assert!((n as i64 - 72_000).abs() < 3_000, "1.5 s left after 2.5 s, got {n} frames");
+
+    // Reading from 1.0 s matches reading everything and skipping to 1.0 s.
+    let mut whole = jd_media::AudioDecoder::open(&path, 48_000).unwrap();
+    let mut all = vec![0.0f32; 4 * 48_000 * 2];
+    whole.read(&mut all).unwrap();
+    d.seek(1.0).unwrap();
+    let mut part = vec![0.0f32; 2_000];
+    d.read(&mut part).unwrap();
+    let expected = &all[48_000 * 2..48_000 * 2 + 2_000];
+    let err = part.iter().zip(expected).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+    assert!(err < 0.02, "seeked samples differ by {err}");
+}
+
+#[test]
+fn waveform_has_levels_per_bucket() {
+    let Some(path) = fixture() else { return };
+    let w = jd_media::waveform(&path, 10.0).unwrap();
+    assert!((38..=42).contains(&w.len()), "{} buckets", w.len());
+    assert!(w.iter().all(|&p| (0.0..=1.0).contains(&p)));
+    assert!(w[5] > 0.05, "the tone is audible");
+}

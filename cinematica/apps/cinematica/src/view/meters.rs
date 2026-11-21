@@ -12,7 +12,7 @@ use crate::app::{Editor, Message};
 /// Lowest level shown, in dB.
 const FLOOR_DB: f32 = -54.0;
 
-pub fn view(_app: &Editor) -> Element<'_, Message> {
+pub fn view(app: &Editor) -> Element<'_, Message> {
     let solo = |_: u8| {
         container(text("S").size(8).font(bold()).color(TEXT_SECONDARY))
             .center(14)
@@ -20,7 +20,7 @@ pub fn view(_app: &Editor) -> Element<'_, Message> {
     };
     panel(
         column![
-            Canvas::new(Meters { levels_db: [f32::NEG_INFINITY; 2] }).width(Fill).height(Fill),
+            Canvas::new(Meters { levels_db: app.meters }).width(Fill).height(Fill),
             row![solo(0), solo(1)].spacing(4),
         ]
         .spacing(6)

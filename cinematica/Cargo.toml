@@ -32,6 +32,7 @@ iced_winit = "0.14"
 # Cinematica (video). ffmpeg-next links the system FFmpeg (8.x); bindgen needs clang-devel.
 jd-media = { path = "crates/jd-media" }
 jd-timeline = { path = "crates/jd-timeline" }
+jd-playback = { path = "crates/jd-playback" }
 ffmpeg-next = "9.1"
 # image::allocate (pre-uploading video frames) isn't re-exported without iced's "image" codecs.
 iced_runtime = "0.14"
@@ -55,4 +56,7 @@ opt-level = 3
 opt-level = 3
 
 [profile.dev.package.jd-media]
+opt-level = 3
+
+[profile.dev.package.jd-playback]
 opt-level = 3

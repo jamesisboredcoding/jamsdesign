@@ -1,11 +1,14 @@
 //! The Source monitor: one clip from the bin, played by a `jd_media::Player`, with In/Out
 //! marks and Premiere's J/K/L shuttle.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use iced::widget::image;
 use iced_runtime::image::Allocation;
 use jd_media::{Player, Status};
+use jd_playback::{Request, SequencePlayer};
+use jd_timeline::{ClipSource, FrameRate, Sequence, from_seconds, to_seconds};
 
 use crate::media::{MediaId, to_handle};
 
@@ -63,14 +66,56 @@ pub struct SourceMonitor {
     pub status: Status,
     pub in_point: Option<f64>,
     pub out_point: Option<f64>,
+    /// Plays the clip with sound at 1x (the `player` covers scrubbing, stepping and other
+    /// speeds, silently). The clip as a one-clip sequence, if it has audio.
+    sound: SequencePlayer,
+    sound_clip: Option<(Sequence, HashMap<MediaId, PathBuf>)>,
+    with_sound: bool,
+}
+
+/// What the Source monitor needs to know about a clip besides its path.
+pub struct ClipInfo {
+    pub has_audio: bool,
+    pub rate: FrameRate,
+    pub duration: f64,
 }
 
 impl SourceMonitor {
     pub fn new() -> Self {
-        Self { player: Player::new(MONITOR_SIZE), item: None, title: NO_CLIP.into(), image: None, frames_sent: 0, frame_shown: 0, status: Status::default(), in_point: None, out_point: None }
+        Self::with_player(Player::new(MONITOR_SIZE))
     }
 
-    pub fn load(&mut self, id: MediaId, name: &str, path: PathBuf) {
+    fn with_player(player: Player) -> Self {
+        Self {
+            player,
+            item: None,
+            title: NO_CLIP.into(),
+            image: None,
+            frames_sent: 0,
+            frame_shown: 0,
+            status: Status::default(),
+            in_point: None,
+            out_point: None,
+            sound: SequencePlayer::new(),
+            sound_clip: None,
+            with_sound: false,
+        }
+    }
+
+    pub fn load(&mut self, id: MediaId, name: &str, path: PathBuf, info: ClipInfo) {
+        self.stop_sound();
+        self.sound_clip = info.has_audio.then(|| {
+            let mut seq = Sequence::new(name, info.rate, (1, 1), 1, 1);
+            let part = ClipSource {
+                media: id,
+                name: name.into(),
+                source_in: 0,
+                duration: info.rate.snap(from_seconds(info.duration)).max(info.rate.frame()),
+                media_duration: None,
+            };
+            let _ = seq.overwrite(0, Some(&part), Some(&part));
+            (seq, HashMap::from([(id, path.clone())]))
+        });
         self.item = Some(id);
         self.title = format!("Source: {name}");
         self.image = None;
@@ -82,7 +127,7 @@ impl SourceMonitor {
 
     #[cfg(test)]
     fn new_empty() -> Self {
-        Self { player: Player::new((1, 1)), item: None, title: NO_CLIP.into(), image: None, frames_sent: 0, frame_shown: 0, status: Status::default(), in_point: None, out_point: None }
+        Self::with_player(Player::new((1, 1)))
     }
 
     pub fn loaded(&self) -> bool {
@@ -91,6 +136,9 @@ impl SourceMonitor {
 
     /// Picks up the newest status, and the newest frame (to allocate, then [`Self::present`]).
     pub fn poll(&mut self) -> Option<(u64, image::Handle)> {
+        if self.with_sound {
+            return self.poll_sound();
+        }
         self.status = self.player.status();
         let frame = self.player.take_frame()?;
         self.frames_sent += 1;
@@ -107,7 +155,33 @@ impl SourceMonitor {
 
     /// Keep polling (playing, or a command still being decoded).
     pub fn busy(&self) -> bool {
-        self.item.is_some() && self.player.busy()
+        self.item.is_some() && (self.with_sound || self.player.busy())
+    }
+
+    fn poll_sound(&mut self) -> Option<(u64, image::Handle)> {
+        self.status.position = to_seconds(self.sound.position()).min(self.last_frame());
+        if !self.sound.playing() {
+            // Reached the end: hand back to the silent player at the same frame.
+            self.with_sound = false;
+            self.status.playing = false;
+            self.player.seek(self.status.position);
+        }
+        let frame = self.sound.take_frame()??;
+        self.frames_sent += 1;
+        Some((self.frames_sent, to_handle(frame)))
+    }
+
+    fn stop_sound(&mut self) {
+        if std::mem::take(&mut self.with_sound) {
+            self.sound.stop();
+            self.status.position = to_seconds(self.sound.position()).min(self.last_frame());
+            self.player.seek(self.status.position);
+        }
+    }
+
+    /// Peak levels of the clip's sound since the last call.
+    pub fn take_peaks(&self) -> [f32; 2] {
+        self.sound.take_peaks()
     }
 
     pub fn frame_duration(&self) -> f64 {
@@ -135,17 +209,35 @@ impl SourceMonitor {
             return;
         }
         // Update now so a second quick press doubles the speed before the next poll.
+        let from = if self.status.position >= self.last_frame() { 0.0 } else { self.status.position };
+        self.stop_sound();
         self.status.playing = true;
         self.status.speed = speed;
-        self.player.play(speed);
+        match &self.sound_clip {
+            // Normal speed with sound (not in tests: they must stay quiet).
+            Some((seq, media)) if speed == 1.0 && !cfg!(test) => {
+                self.player.pause();
+                self.with_sound = true;
+                self.sound.play(Request {
+                    sequence: seq.clone(),
+                    media: media.clone(),
+                    from: from_seconds(from),
+                    speed,
+                    max_size: MONITOR_SIZE,
+                });
+            }
+            _ => self.player.play(speed),
+        }
     }
 
     fn pause(&mut self) {
         self.status.playing = false;
+        self.stop_sound();
         self.player.pause();
     }
 
     pub fn step(&mut self, frames: i64) {
+        self.stop_sound();
         if self.loaded() {
             self.status.playing = false;
             self.player.step(frames);
@@ -153,6 +245,7 @@ impl SourceMonitor {
     }
 
     pub fn seek(&mut self, time: f64) {
+        self.stop_sound();
         if self.loaded() {
             let t = time.clamp(0.0, self.last_frame());
             self.status.position = t;

@@ -7,11 +7,15 @@
 //! Times are seconds from the start of the media (the stream's start offset is removed).
 //! Never depends on iced (see the workspace layering rule).
 
+mod audio;
 mod decode;
+mod output;
 mod player;
 mod probe;
 
+pub use audio::{AudioDecoder, waveform};
 pub use decode::{Frame, VideoDecoder, thumbnail};
+pub use output::AudioOutput;
 pub use player::{Player, Status};
 pub use probe::{AudioInfo, MediaInfo, Rate, VideoInfo, probe};
 
@@ -28,6 +32,9 @@ pub enum Error {
     Ffmpeg(String),
     /// The file has no stream of the kind that was asked for.
     NoVideo,
+    NoAudio,
+    /// The audio device couldn't be opened.
+    Audio(String),
 }
 
 impl std::fmt::Display for Error {
@@ -35,6 +42,8 @@ impl std::fmt::Display for Error {
         match self {
             Error::Ffmpeg(e) => write!(f, "{e}"),
             Error::NoVideo => write!(f, "no video stream"),
+            Error::NoAudio => write!(f, "no audio stream"),
+            Error::Audio(e) => write!(f, "audio output: {e}"),
         }
     }
 }

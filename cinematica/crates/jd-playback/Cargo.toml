@@ -1,0 +1,10 @@
+[package]
+name = "jd-playback"
+description = "Plays a jd-timeline sequence: mixes its audio to the output device and follows that clock with video frames."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+jd-media.workspace = true
+jd-timeline.workspace = true

@@ -67,6 +67,8 @@ pub struct Editor {
     pub timeline_width: f32,
     /// Last error or hint, shown in the timeline toolbar.
     pub notice: Option<String>,
+    /// Audio meter levels (dBFS, left and right), falling back slowly like a peak meter.
+    pub meters: [f32; 2],
 }
 
 #[derive(Debug, Clone)]
@@ -171,6 +173,7 @@ impl Editor {
             scroll: 0,
             timeline_width: 900.0,
             notice: None,
+            meters: [f32::NEG_INFINITY; 2],
         };
         (app, task.map(Message::Chrome))
     }
@@ -271,7 +274,14 @@ impl Editor {
                 match item.kind() {
                     media::Kind::Video | media::Kind::Still => {
                         let (name, path) = (item.name.clone(), item.path.clone());
-                        self.source.load(id, &name, path);
+                        let info = crate::source::ClipInfo {
+                            has_audio: item.info.as_ref().is_some_and(|i| i.audio.is_some()),
+                            rate: item.info.as_ref().and_then(|i| i.video.as_ref()).filter(|v| !v.still).map_or(self.sequence.rate, |v| {
+                                jd_timeline::FrameRate::new(v.rate.num.max(1) as u32, v.rate.den.max(1) as u32)
+                            }),
+                            duration: item.duration(),
+                        };
+                        self.source.load(id, &name, path, info);
                         self.source_tab = 0;
                         self.focus = Focus::Source;
                     }
@@ -289,9 +299,23 @@ impl Editor {
                 if let Some((n, handle)) = self.source.poll() {
                     tasks.push(iced_runtime::image::allocate(handle).map(move |r| Message::FrameReady(Monitor::Source, n, r.ok())));
                 }
-                if let Some((n, handle)) = self.program.poll() {
+                if self.program.is_playing() {
+                    let (frame, position, ended) = self.program.poll_playback();
+                    if let Some((n, handle)) = frame {
+                        tasks.push(iced_runtime::image::allocate(handle).map(move |r| Message::FrameReady(Monitor::Program, n, r.ok())));
+                    }
+                    self.playhead = position;
+                    self.follow_playhead();
+                    if ended {
+                        self.set_playhead(position);
+                    }
+                    if let Some(e) = self.program.take_error() {
+                        self.notice = Some(e);
+                    }
+                } else if let Some((n, handle)) = self.program.poll() {
                     tasks.push(iced_runtime::image::allocate(handle).map(move |r| Message::FrameReady(Monitor::Program, n, r.ok())));
                 }
+                self.update_meters();
                 return Task::batch(tasks);
             }
             Message::FrameReady(monitor, n, frame) => match (monitor, frame) {
@@ -322,8 +346,18 @@ impl Editor {
                     _ => {}
                 }
             }
-            Message::TogglePlay | Message::Shuttle(_) => {
-                self.notice = Some("Sequence playback arrives with the compositor and audio (M3); scrub the timeline for now".into());
+            Message::TogglePlay => {
+                if self.program.is_playing() {
+                    self.stop_playback();
+                } else {
+                    self.play_sequence(1.0);
+                }
+            }
+            Message::Shuttle(press) => {
+                match crate::source::shuttle_speed(self.program.is_playing(), self.program.speed, press) {
+                    Some(speed) => self.play_sequence(speed),
+                    None => self.stop_playback(),
+                }
             }
             Message::Step(n) => self.set_playhead(self.playhead + self.sequence.rate.from_frames(n)),
             Message::GoTo(g) => {
@@ -379,7 +413,7 @@ impl Editor {
             keyboard::listen().map(Message::Key),
             WindowChrome::subscription().map(Message::Chrome),
             window::close_requests().map(|_| Message::Quit),
-            if self.source.busy() || self.program.busy() {
+            if self.source.busy() || self.program.busy() || self.meters.iter().any(|m| m.is_finite()) {
                 window::frames().map(|_| Message::Tick)
             } else {
                 Subscription::none()

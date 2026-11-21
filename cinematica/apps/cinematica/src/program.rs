@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use iced::widget::image;
 use iced_runtime::image::Allocation;
 use jd_media::Player;
+use jd_playback::{Request, SequencePlayer};
+use jd_timeline::Time;
 
 use crate::media::{MediaId, to_handle};
 
@@ -23,11 +25,65 @@ pub struct ProgramMonitor {
     pub showing: bool,
     frames_sent: u64,
     frame_shown: u64,
+    /// Plays the sequence (the `player` shows single frames while paused).
+    sequence: SequencePlayer,
+    playing: bool,
+    pub speed: f64,
 }
 
 impl ProgramMonitor {
     pub fn new(sequence_name: &str) -> Self {
-        Self { title: format!("Program: {sequence_name}"), player: Player::new(MONITOR_SIZE), loaded: None, image: None, showing: false, frames_sent: 0, frame_shown: 0 }
+        Self { title: format!("Program: {sequence_name}"), player: Player::new(MONITOR_SIZE), loaded: None, image: None, showing: false, frames_sent: 0, frame_shown: 0, sequence: SequencePlayer::new(), playing: false, speed: 1.0 }
+    }
+
+    pub fn is_playing(&self) -> bool {
+        self.playing
+    }
+
+    pub fn play(&mut self, request: Request) {
+        self.playing = true;
+        self.speed = request.speed;
+        self.sequence.play(request);
+    }
+
+    /// Stops and returns where playback got to.
+    pub fn stop(&mut self) -> Time {
+        self.sequence.stop();
+        self.playing = false;
+        self.sequence.position()
+    }
+
+    /// While playing: the newest frame, the position, and whether playback just ended.
+    pub fn poll_playback(&mut self) -> (Option<(u64, image::Handle)>, Time, bool) {
+        // Late frames from the paused player would fight playback: drop them.
+        let _ = self.player.take_frame();
+        let ended = self.playing && !self.sequence.playing();
+        if ended {
+            self.playing = false;
+        }
+        let frame = match self.sequence.take_frame() {
+            Some(Some(f)) => {
+                self.showing = true;
+                self.frames_sent += 1;
+                Some((self.frames_sent, to_handle(f)))
+            }
+            Some(None) => {
+                self.showing = false;
+                self.frame_shown = self.frames_sent;
+                self.image = None;
+                None
+            }
+            None => None,
+        };
+        (frame, self.sequence.position(), ended)
+    }
+
+    pub fn take_peaks(&self) -> [f32; 2] {
+        self.sequence.take_peaks()
+    }
+
+    pub fn take_error(&self) -> Option<String> {
+        self.sequence.take_error()
     }
 
     /// Shows `media` at `time` seconds, or black for `None`.
@@ -51,10 +107,13 @@ impl ProgramMonitor {
     }
 
     pub fn busy(&self) -> bool {
-        self.loaded.is_some() && self.player.busy()
+        self.playing || (self.loaded.is_some() && self.player.busy())
     }
 
     pub fn poll(&mut self) -> Option<(u64, image::Handle)> {
+        if self.playing {
+            return None;
+        }
         let frame = self.player.take_frame()?;
         if !self.showing {
             return None;
