@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Cinematica
+GenericName=Video Editor
+Comment=Edit video (jamsdesign)
+Exec=cinematica %F
+Icon=dev.jamsdesign.Cinematica
+Terminal=false
+Categories=AudioVideo;Video;AudioVideoEditing;
+MimeType=video/mp4;video/quicktime;video/x-matroska;video/webm;video/x-msvideo;video/mpeg;audio/mpeg;audio/x-wav;audio/flac;
+StartupWMClass=dev.jamsdesign.Cinematica

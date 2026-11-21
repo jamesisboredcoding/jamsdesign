@@ -613,6 +613,7 @@ dependencies = [
  "jd-playback",
  "jd-timeline",
  "jd-ui",
+ "resvg",
  "rfd",
 ]
 

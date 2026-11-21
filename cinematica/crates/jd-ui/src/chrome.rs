@@ -14,7 +14,7 @@ use iced::{Element, Fill, Length, Padding, Point, Size, Subscription, Task};
 use crate::icon::{Icon, icon};
 use crate::style;
 use crate::tokens::*;
-use crate::widget::{MenuEntry, bold, menu};
+use crate::widget::{MenuEntry, menu};
 
 /// Height of the title bar. Dropdowns open just below it.
 pub const TITLE_BAR_HEIGHT: f32 = 30.0;
@@ -148,30 +148,20 @@ impl WindowChrome {
     }
 }
 
-/// The title bar: app badge, menu titles, centred title, the app's `actions` (workspace
+/// The title bar: app logo (SVG bytes), menu titles, centred title, the app's `actions` (workspace
 /// switcher, export...), then minimise / maximise / close. Empty space drags the window and
 /// double-click maximises.
 pub fn title_bar<'a, M: Clone + 'a>(
     chrome: &WindowChrome,
+    logo: &'static [u8],
     menus: &'a [&'a str],
     title: String,
     actions: impl Into<Element<'a, M>>,
     on_close: M,
     map: impl Fn(Event) -> M + Clone + 'a,
 ) -> Element<'a, M> {
-    let badge = container(text("Jd").size(10).font(bold()))
-        .center(20)
-        .style(|_| container::Style {
-            background: Some(
-                iced::gradient::Linear::new(std::f32::consts::FRAC_PI_4)
-                    .add_stop(0.0, iced::Color::from_rgb8(0x4C, 0x8D, 0xFF))
-                    .add_stop(1.0, iced::Color::from_rgb8(0x8C, 0x4D, 0xF2))
-                    .into(),
-            ),
-            text_color: Some(TEXT_PRIMARY),
-            border: iced::border::rounded(4),
-            ..Default::default()
-        });
+    // The app's logo, in its own colours (not tinted like the UI icons).
+    let badge = iced::widget::svg(iced::widget::svg::Handle::from_memory(logo)).width(22).height(22);
 
     let mut titles = row![badge, space().width(8)].align_y(Vertical::Center).spacing(2);
     for (i, m) in menus.iter().enumerate() {

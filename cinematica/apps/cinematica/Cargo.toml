@@ -13,3 +13,4 @@ rfd.workspace = true
 iced_runtime.workspace = true
 jd-timeline.workspace = true
 jd-playback.workspace = true
+resvg = { version = "0.45", default-features = false }

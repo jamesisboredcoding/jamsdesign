@@ -39,6 +39,7 @@ pub fn view(app: &Editor) -> Element<'_, Message> {
     let content = container(column![
         title_bar(
             &app.chrome,
+            crate::LOGO_SVG,
             menus::MENUS,
             format!("{} - {APP_NAME}", app.project_name),
             title_actions(),
