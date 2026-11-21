@@ -1,0 +1,10 @@
+[package]
+name = "jd-raster"
+description = "Raster document model: layers, blend modes."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+jd-core.workspace = true
+rayon.workspace = true

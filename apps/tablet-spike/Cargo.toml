@@ -1,0 +1,11 @@
+[package]
+name = "tablet-spike"
+description = "Throwaway test: does pen pressure/tilt reach us on this Linux setup?"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+octotablet.workspace = true
+winit = "0.30"
+softbuffer = "0.4"
