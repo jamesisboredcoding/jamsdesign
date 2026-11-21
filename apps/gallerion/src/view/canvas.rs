@@ -66,7 +66,7 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
         && let Some(i) = doc.layers().iter().position(|l| l.id == t.layer)
     {
         let m = t.affine().as_array();
-        let tiles = |g: &jd_raster::TileGrid| g.iter().map(|(x, y, t)| ([x, y], t.clone())).collect::<Vec<_>>();
+        let tiles = |g: &jd_raster::TileGrid| g.iter_all().map(|(x, y, t)| ([x, y], t.clone())).collect::<Vec<_>>();
         match &t.base {
             Some(base) => {
                 scene.layers[i].tiles = tiles(base);
@@ -82,7 +82,7 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
         && let Some(preview) = a.shown()
         && let Some(i) = doc.layers().iter().position(|l| l.id == a.layer)
     {
-        scene.layers[i].tiles = preview.iter().map(|(x, y, t)| ([x, y], t.clone())).collect();
+        scene.layers[i].tiles = preview.iter_all().map(|(x, y, t)| ([x, y], t.clone())).collect();
     }
 
     let pixels = Shader::new(Pixels { scene: Arc::new(scene), origin, zoom }).width(Fill).height(Fill);

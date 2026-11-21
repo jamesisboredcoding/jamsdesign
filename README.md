@@ -74,6 +74,11 @@ left-click in, right-click out.
       Down/Visible, Flatten, Arrange, Reselect, Expand/Contract/Feather, Box Blur, Sharpen,
       High Pass, Last Filter, Window panel toggles; drag layers to reorder or onto another
       document's tab/canvas to copy them
+- [x] 5c: content moved off the canvas is kept (and saved); layer right-click menu (Select
+      Pixels, Duplicate Into, ...); crossed-out eye for hidden layers; command search (search
+      icon or Ctrl+F); workspaces (Essentials, Photography, Painting, Minimal); Clone Stamp
+      and Healing Brush (Alt+click source), Dodge/Burn, Gradient (linear/radial), Rectangle
+      and Ellipse shapes, Crop tool
 - [ ] 6: text, PSD import, Flatpak
 
 ## Selections and transforms
@@ -100,9 +105,12 @@ Try it: `cargo run -p jd-io --example demo_doc -- demo.jdp base.jpg top.jpg`
   stop sending the pen as a mouse, so we replay it as synthetic pointer input through a
   patched `iced_winit` (`vendor/iced_winit`, changes marked `JAMSDESIGN PATCH`). Re-vendor
   and re-apply the patch when upgrading iced. `GALLERION_PEN=0` turns all of this off.
-- Pressure reaches Brush and Eraser; every other tool uses the pen as a plain pointer.
-- Moving or transforming content past the canvas edge crops it for good (Photoshop keeps the
-  off-canvas pixels). Pasting into a document of a different size lands at the top-left
+- Pressure reaches the brush-engine tools (Brush, Eraser, Clone Stamp, Healing, Dodge/Burn);
+  every other tool uses the pen as a plain pointer.
+- Off-canvas content survives moves, transforms, paste, Place and saving, but canvas
+  rotate/flip, merges, flatten, crop and filters only see the canvas and drop it. Shapes are
+  raster (not editable vector layers). Healing is an approximation (source texture plus the
+  destination's blurred tone), not Photoshop's solver. Pasting into a document of a different size lands at the top-left
   (Photoshop centres it). Move and Ctrl+T refuse on a locked layer (unlock it first).
 - The clipboard is internal to Gallerion (iced only exposes text clipboard access).
 - Marching ants don't animate. Transforms use bilinear resampling (Photoshop uses bicubic by

@@ -17,6 +17,23 @@ pub use wgpu;
 
 const TILE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const COMPOSITE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+/// The part of a tile to draw. Edge tiles are cut at the canvas edge (and edge-padded for
+/// mipmaps) unless they hold content past it (moved off the canvas), which must stay visible
+/// while it's being moved. Tiles wholly off the canvas are drawn in full.
+fn valid_area(pos: [i32; 2], doc_size: [u32; 2], tile: &Tile) -> [u32; 2] {
+    let ts = TILE_SIZE as i64;
+    let clip = |p: i32, size: u32| (size as i64 - p as i64 * ts).clamp(0, ts) as u32;
+    let v = [clip(pos[0], doc_size[0]), clip(pos[1], doc_size[1])];
+    let full = [TILE_SIZE, TILE_SIZE];
+    if v == full || v[0] == 0 || v[1] == 0 || pos[0] < 0 || pos[1] < 0 {
+        return full;
+    }
+    let beyond = tile.data().chunks_exact(4).enumerate().any(|(i, p)| {
+        p[3] != 0 && ((i as u32 % TILE_SIZE) >= v[0] || (i as u32 / TILE_SIZE) >= v[1])
+    });
+    if beyond { [TILE_SIZE, TILE_SIZE] } else { v }
+}
+
 /// Uniform offsets must be 256-byte aligned on every backend.
 const PARAMS_STRIDE: u64 = 256;
 
@@ -41,7 +58,8 @@ pub struct SceneLayer {
     /// Affine map applied to the layer's tiles (doc px to doc px), `[a, b, c, d, e, f]` with
     /// `x' = a*x + c*y + e`, `y' = b*x + d*y + f`. Used to preview moves and transforms.
     pub transform: [f32; 6],
-    pub tiles: Vec<([u32; 2], Arc<Tile>)>,
+    /// Tile grid positions; negative or past the canvas for content moved off it.
+    pub tiles: Vec<([i32; 2], Arc<Tile>)>,
 }
 
 pub const IDENTITY: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
@@ -61,7 +79,7 @@ impl Scene {
                     blend: l.blend,
                     dissolve_seed: composite::dissolve_seed(i),
                     transform: IDENTITY,
-                    tiles: l.pixels.iter().map(|(x, y, t)| ([x, y], t.clone())).collect(),
+                    tiles: l.pixels.iter_all().map(|(x, y, t)| ([x, y], t.clone())).collect(),
                 })
                 .collect(),
             retain: Vec::new(),
@@ -416,17 +434,14 @@ impl Renderer {
         for layer in &scene.layers {
             let start = instances.len() as u32;
             for (pos, tile) in &layer.tiles {
-                let valid = [
-                    TILE_SIZE.min(scene.doc_size[0] - pos[0] * TILE_SIZE),
-                    TILE_SIZE.min(scene.doc_size[1] - pos[1] * TILE_SIZE),
-                ];
+                let valid = valid_area(*pos, scene.doc_size, tile);
                 if !self.tiles.contains_key(&tile.id()) {
                     let gpu = self.upload(device, queue, tile, valid);
                     self.tiles.insert(tile.id(), gpu);
                 }
                 if layer.visible && layer.opacity > 0.0 {
                     instances.push(TileInstance {
-                        origin: [(pos[0] * TILE_SIZE) as f32, (pos[1] * TILE_SIZE) as f32],
+                        origin: [(pos[0] * TILE_SIZE as i32) as f32, (pos[1] * TILE_SIZE as i32) as f32],
                         size: [valid[0] as f32, valid[1] as f32],
                         opacity: layer.opacity,
                         m0: [layer.transform[0], layer.transform[1]],

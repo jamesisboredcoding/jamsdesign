@@ -71,10 +71,11 @@ struct LayerEntry {
     opacity: f32,
     blend: String,
     /// Grid positions of stored tiles.
-    tiles: Vec<[u32; 2]>,
+    /// Negative or past the canvas for content kept off it.
+    tiles: Vec<[i32; 2]>,
 }
 
-fn tile_path(layer: usize, x: u32, y: u32) -> String {
+fn tile_path(layer: usize, x: i32, y: i32) -> String {
     format!("layers/{layer}/{x}_{y}")
 }
 
@@ -103,11 +104,11 @@ pub fn write<W: Write + Seek>(doc: &Document, out: W) -> Result<W, SaveError> {
         layers: Vec::new(),
     };
     // Compress every tile in parallel, then write them in order.
-    let jobs: Vec<(usize, u32, u32, &[u8])> = doc
+    let jobs: Vec<(usize, i32, i32, &[u8])> = doc
         .layers()
         .iter()
         .enumerate()
-        .flat_map(|(i, l)| l.pixels.iter().map(move |(x, y, t)| (i, x, y, t.data())))
+        .flat_map(|(i, l)| l.pixels.iter_all().map(move |(x, y, t)| (i, x, y, t.data())))
         .collect();
     let compressed: Vec<std::io::Result<Vec<u8>>> = jobs
         .par_iter()
@@ -123,7 +124,7 @@ pub fn write<W: Write + Seek>(doc: &Document, out: W) -> Result<W, SaveError> {
     }
 
     for layer in doc.layers() {
-        let tiles = layer.pixels.iter().map(|(x, y, _)| [x, y]).collect();
+        let tiles = layer.pixels.iter_all().map(|(x, y, _)| [x, y]).collect();
         manifest.layers.push(LayerEntry {
             name: layer.name.clone(),
             visible: layer.visible,
@@ -182,7 +183,7 @@ pub fn read<R: Read + Seek>(name: impl Into<String>, input: R) -> Result<Documen
         }
     }
     let expected = (TILE_SIZE * TILE_SIZE * 4) as usize;
-    let tiles: Vec<Result<(usize, u32, u32, Tile), LoadError>> = raw
+    let tiles: Vec<Result<(usize, i32, i32, Tile), LoadError>> = raw
         .into_par_iter()
         .map(|(i, x, y, bytes)| {
             let mut data = Vec::with_capacity(expected);
@@ -197,7 +198,7 @@ pub fn read<R: Read + Seek>(name: impl Into<String>, input: R) -> Result<Documen
         manifest.layers.iter().map(|_| TileGrid::empty(manifest.width, manifest.height)).collect();
     for tile in tiles {
         let (i, x, y, tile) = tile?;
-        grids[i].set_tile(x, y, Some(Arc::new(tile)));
+        grids[i].set_tile_at(x, y, Some(Arc::new(tile)));
     }
 
     let mut doc = Document::blank(name, manifest.width, manifest.height);
@@ -259,6 +260,22 @@ mod tests {
         let bg = doc.layers()[0].id;
         doc.set_active(bg);
         doc
+    }
+
+    #[test]
+    fn roundtrip_keeps_content_off_the_canvas() {
+        let mut doc = Document::blank("t", 100, 100);
+        let id = doc.add_layer("moved");
+        {
+            let px = &mut doc.layer_mut(id).unwrap().pixels;
+            px.set_pixel_at(-300, 5, [9, 8, 7, 255]);
+            px.set_pixel_at(150, 40, [1, 2, 3, 200]);
+        }
+        let bytes = write(&doc, std::io::Cursor::new(Vec::new())).unwrap().into_inner();
+        let back = read("t", std::io::Cursor::new(bytes)).unwrap();
+        let px = &back.layers().last().unwrap().pixels;
+        assert_eq!(px.pixel_at(-300, 5), [9, 8, 7, 255]);
+        assert_eq!(px.pixel_at(150, 40), [1, 2, 3, 200]);
     }
 
     #[test]
