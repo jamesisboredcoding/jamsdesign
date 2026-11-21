@@ -1,6 +1,7 @@
 //! Shared look & feel for every jamsdesign app: colour tokens (mirroring the Figma
 //! `jamsdesign/color` variables), icons, and the small set of widgets the panels are built from.
 
+pub mod chrome;
 pub mod icon;
 pub mod style;
 pub mod theme;
