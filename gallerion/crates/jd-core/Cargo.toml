@@ -1,0 +1,6 @@
+[package]
+name = "jd-core"
+description = "Shared foundations for the jamsdesign suite: colour, geometry."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true

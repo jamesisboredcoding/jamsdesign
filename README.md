@@ -1,136 +1,104 @@
+<div align="center">
+
+<img src="img/jamsdesign.svg" alt="jamsdesign logo" width="128" height="128">
+
 # jamsdesign
 
-A Linux-first design suite. First app: **Gallerion**, the photo editor.
+**A Linux-first creative suite, written in Rust.**
 
-Design reference: Figma file "jamsdesign Photo Editor" (colour tokens there mirror `crates/jd-ui/src/theme.rs`).
+Native, GPU-accelerated apps for photo and video work, with the shortcuts and workflows you already know.
 
-## Run
+![Rust](https://img.shields.io/badge/Rust-2024-B7410E?logo=rust&logoColor=white)
+![iced](https://img.shields.io/badge/UI-iced%200.14-3D3846)
+![wgpu](https://img.shields.io/badge/GPU-wgpu-1C71D8)
+![Platform](https://img.shields.io/badge/platform-Linux-F5C211?logo=linux&logoColor=black)
+![Status](https://img.shields.io/badge/status-early%20development-E01B5A)
+
+</div>
+
+---
+
+## The apps
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="img/gallerion.svg" alt="Gallerion icon" width="96" height="96"><br>
+      <h3>Gallerion</h3>
+      <em>Photo editor</em>
+    </td>
+    <td align="center" width="50%">
+      <img src="img/cinematica.svg" alt="Cinematica icon" width="96" height="96"><br>
+      <h3>Cinematica</h3>
+      <em>Video editor</em>
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      Layer-based raster editing with all 24 blend modes rendered on the GPU, pressure-sensitive
+      brushes for pen tablets, selections, Free Transform, adjustments and filters with live
+      preview, and its own <code>.jdp</code> document format. Photoshop-compatible shortcuts
+      throughout.
+    </td>
+    <td valign="top">
+      A timeline-based video editor inspired by Premiere, built on the same core, renderer and
+      UI toolkit as Gallerion. In early development.
+    </td>
+  </tr>
+</table>
+
+More apps will join the suite later.
+
+## Highlights
+
+- **Native and fast.** Pure Rust with a wgpu renderer; pixel work is tiled, copy-on-write and parallel.
+- **Pen tablet support.** Pressure and tilt on Wayland, including KDE.
+- **Familiar.** Tools, menus and shortcuts follow the industry-standard layout, so there is nothing new to learn.
+- **Shared foundation.** Every app uses the same `jd-*` crates for colour, documents, GPU rendering and UI.
+
+## Getting started
+
+You need a recent stable Rust toolchain (edition 2024) and a Linux desktop with a Vulkan-capable GPU.
+Cinematica also needs the system FFmpeg development libraries.
 
 ```sh
-cargo run -p gallerion         # the photo editor (optionally: -- path/to/image.jpg ...)
-cargo run -p tablet-spike      # draw with your pen: width = pressure, bars = pressure / tilt
+# Gallerion
+cd gallerion
+cargo run -p gallerion -- path/to/photo.jpg
+
+# Cinematica
+cd cinematica
+cargo run -p cinematica
+
+# Tests
 cargo test --workspace
 ```
 
-## Layout
+Each app has its own README with full details, shortcuts and status:
+[Gallerion](gallerion/README.md) · [Cinematica](cinematica/README.md)
+
+## Repository layout
 
 ```
-crates/
-  jd-core     colour (linear Rgba, sRGB, HSV), no UI deps
-  jd-raster   document model: layers, 256px copy-on-write tiles, undo history, the blend-mode
-              maths, a CPU compositor (export, thumbnails, reference for the GPU) and the
-              brush engine (paint.rs), no UI deps
-  jd-io       open images (EXIF orientation applied), .jdp documents, export
-  jd-gpu      wgpu renderer: all 24 blend modes, perceptual or linear blending, mips,
-              checkerboard. tests/blend_parity.rs checks it against the CPU compositor
-  jd-ui       iced theme tokens, icons (icons/*.svg), shared widgets
-apps/
-  gallerion/    Gallerion, the photo editor (iced 0.14)
-  tablet-spike/ standalone pen test window (octotablet), handy for checking a tablet
+jamsdesign/
+├── gallerion/    git branch `gallerion`   (photo editor workspace)
+├── cinematica/   git worktree, branch `cinematica`   (video editor workspace)
+└── img/          suite and app logos (SVG)
 ```
 
-Rule: `jd-core`, `jd-raster`, `jd-io` and `jd-gpu` never depend on iced. The iced glue for
-the GPU canvas lives in `apps/gallerion/src/view/canvas.rs`.
+The workspaces share the same crates (`jd-media` and `jd-timeline` are Cinematica only for now):
 
-## Shortcuts (Photoshop-compatible)
+| Crate         | Purpose                                                                  |
+| ------------- | ------------------------------------------------------------------------ |
+| `jd-core`     | Colour maths (linear RGBA, sRGB, HSV). No UI dependencies.               |
+| `jd-raster`   | Document model: layers, tiles, undo history, blend modes, brush engine.  |
+| `jd-io`       | Image import and export, `.jdp` documents.                               |
+| `jd-gpu`      | wgpu renderer for compositing and blending.                              |
+| `jd-ui`       | iced theme tokens, icons and shared widgets.                             |
+| `jd-media`    | Video and audio probing, decoding and playback via FFmpeg.               |
+| `jd-timeline` | Sequences, tracks and clips with pure edit operations and undo.          |
 
-Tools: V M L W C I J B S E G O P T A U H Z · X swap colours · D reset colours ·
-`[` `]` brush size · Ctrl+= / Ctrl+- zoom · Ctrl+0 fit · Ctrl+1 100% · Ctrl+Shift+N new layer ·
-Delete/Backspace removes layer · Ctrl+J duplicate layer · Ctrl+] / Ctrl+[ move layer up/down ·
-double-click a layer name to rename · the padlock in the Layers panel locks/unlocks
-(opened images start with a locked Background, like Photoshop) · Ctrl+Z undo · Ctrl+Shift+Z or Ctrl+Y redo · Ctrl+S save ·
-Ctrl+Shift+S save as · Ctrl+Alt+Shift+W export · Ctrl+Q quit · Ctrl+O open · Ctrl+N new ·
-Ctrl+A select all · Ctrl+D deselect · Ctrl+Shift+I inverse · Shift + a tool key cycles that
-slot's tools (Shift+M rect/ellipse marquee, Shift+L lasso/polygonal lasso) · right-click a
-toolbar slot for its tools · right-click the canvas for a context menu (Free Transform etc.) ·
-Shift/Alt/Shift+Alt while starting a selection: add/subtract/intersect · Delete clears the
-selection (no selection: deletes the layer) · Alt+Backspace / Ctrl+Backspace fill with
-foreground / background · Ctrl+C / Ctrl+X / Ctrl+V · Ctrl+J / Ctrl+Shift+J layer via copy / cut ·
-Ctrl+T free transform (Enter commits, Esc cancels) · arrows nudge with the Move tool ·
-Ctrl+L levels · Ctrl+M curves · Ctrl+U hue/saturation · Ctrl+I invert · Shift+Ctrl+U desaturate ·
-Shift+Ctrl+L auto tone · Alt+Shift+Ctrl+L auto contrast · Alt+Ctrl+I image size · Alt+Ctrl+C
-canvas size · Ctrl+E merge down · Shift+Ctrl+E merge visible · Shift+Ctrl+C copy merged ·
-Shift+Ctrl+D reselect · Shift+F6 feather · Alt+Ctrl+F last filter · Shift+Ctrl+] / [ bring to
-front / send to back · Ctrl+W close tab · Ctrl+Tab next tab · F11 fullscreen ·
-scroll wheel zooms at the cursor · Space+drag, middle-drag or Hand tool pans · Zoom tool:
-left-click in, right-click out.
+## Design
 
-## Status
-
-- [x] Step 0: workspace, theme from Figma tokens, full window layout, tool/colour/layer state, tablet spike
-- [x] 1: open images (dialog, CLI args), tabs, GPU canvas, zoom/pan, custom title bar
-- [x] 2: blend modes on GPU, undo/redo + History panel, .jdp format, export, layer
-      duplicate/reorder/rename/thumbnails, unsaved-changes prompts
-- [x] 3: brush + eraser with pen pressure (size/opacity), flow/opacity/hardness/smoothing,
-      Shift+click lines, eyedropper (and Alt+click), pen eraser end, tool tooltips
-- [x] 4: marquee (rect/ellipse), lasso, magic wand, add/subtract/intersect, marching ants,
-      clear/fill/copy/cut/paste/layer via copy, Move tool + nudge, Free Transform (Ctrl+T),
-      New Document dialog with presets
-- [x] 5: Image > Adjustments (Brightness/Contrast, Levels, Curves, Hue/Saturation, Threshold,
-      Posterize, Invert, Desaturate) and Filters (Gaussian Blur, Unsharp Mask, Add Noise,
-      Mosaic) with live preview, selection-aware
-- [x] 5b: menus with submenus; Place, Copy Merged, Stroke, layer Transform (flip/rotate), Auto
-      Tone/Contrast, Image Size, Canvas Size, Image Rotation, Crop, Trim, Duplicate, Merge
-      Down/Visible, Flatten, Arrange, Reselect, Expand/Contract/Feather, Box Blur, Sharpen,
-      High Pass, Last Filter, Window panel toggles; drag layers to reorder or onto another
-      document's tab/canvas to copy them
-- [x] 5c: content moved off the canvas is kept (and saved); layer right-click menu (Select
-      Pixels, Duplicate Into, ...); crossed-out eye for hidden layers; command search (search
-      icon or Ctrl+F); workspaces (Essentials, Photography, Painting, Minimal); Clone Stamp
-      and Healing Brush (Alt+click source), Dodge/Burn, Gradient (linear/radial), Rectangle
-      and Ellipse shapes, Crop tool
-- [ ] 6: text, PSD import, Flatpak
-
-## Selections and transforms
-
-Selections live on the document (`jd-raster/src/selection.rs`: 256px tiles of 8-bit coverage,
-anti-aliased shapes) and are part of undo, like Photoshop. They aren't saved in .jdp files.
-Move/Free Transform previews on the GPU (a per-layer affine) and resamples on commit
-(`jd-raster/src/transform.rs`: exact for whole-pixel moves, bilinear otherwise).
-
-## The .jdp format
-
-A zip: `mimetype`, `document.json` (size, blend space, layers), one entry per non-empty
-256px tile (raw RGBA8 deflated in parallel), and `thumbnail.png`. Saves are atomic (temp file
-then rename). See `crates/jd-io/src/jdp.rs`. A 5120×2880 three-layer document saves in about
-0.4 s and opens in under 0.1 s on a 12-core machine.
-
-Try it: `cargo run -p jd-io --example demo_doc -- demo.jdp base.jpg top.jpg`
-
-## Known issues
-
-- Tablet: Gallerion reads the pen through octotablet on a background thread attached to its
-  own Wayland window (iced has no pen support). Wayland only; crates.io `octotablet 0.1.0`
-  crashes on KDE, so the GitHub master is pinned. Reading the tablet makes the compositor
-  stop sending the pen as a mouse, so we replay it as synthetic pointer input through a
-  patched `iced_winit` (`vendor/iced_winit`, changes marked `JAMSDESIGN PATCH`). Re-vendor
-  and re-apply the patch when upgrading iced. `GALLERION_PEN=0` turns all of this off.
-- Pressure reaches the brush-engine tools (Brush, Eraser, Clone Stamp, Healing, Dodge/Burn);
-  every other tool uses the pen as a plain pointer.
-- Off-canvas content survives moves, transforms, paste, Place, Crop, Canvas Size and saving
-  (Crop works like Photoshop with "Delete Cropped Pixels" off), but canvas rotate/flip,
-  Image Size, merges and flatten only see the canvas and drop it. Shapes are
-  raster (not editable vector layers). Healing is an approximation (source texture plus the
-  destination's blurred tone), not Photoshop's solver. Pasting into a document of a different size lands at the top-left
-  (Photoshop centres it). Move and Ctrl+T refuse on a locked layer (unlock it first).
-- The clipboard is internal to Gallerion (iced only exposes text clipboard access).
-- Marching ants don't animate. Transforms use bilinear resampling (Photoshop uses bicubic by
-  default), so large downscales can alias.
-- Adjustments are destructive (applied to the layer); adjustment layers come later. Levels and
-  Curves work on all channels together (no per-channel R/G/B yet). Brightness/Contrast is close
-  to, not identical to, Photoshop's. Large blurs take about 0.4 s per update on a 15 MP layer,
-  and OK waits for the final render if the preview hasn't caught up. Filters refuse images over
-  120 megapixels (they need a large working copy). Adjustment dialogs are modal, including the
-  title bar.
-- Dissolve as a brush mode paints like Normal for now (it's handled as a layer mode only).
-- Drag-and-drop to open doesn't work on Wayland: winit 0.30 has no Wayland drag-and-drop
-  support (it only works under X11). Fix later via our own Wayland data-device listener or
-  a winit upgrade.
-- No Inter font bundled yet; iced uses the system sans.
-- Images are converted to 8-bit sRGB on load and ICC profiles are ignored. 16-bit/float and
-  colour management are their own upcoming step.
-- Burn/dodge blend modes can differ from the CPU export by a few levels on a handful of
-  near-black/near-white pixels (GPU stores the composite as half floats).
-- GPU tiles are uploaded for the active document only and aren't memory-budgeted yet.
-- The window has no system decorations (custom title bar). Resize from the 5px window edges;
-  drag the title bar to move; double-click it to maximise.
+Interface mockups, icons and logos live in Figma. The app icons follow the GNOME / Adwaita
+style so they sit naturally on a Linux desktop.

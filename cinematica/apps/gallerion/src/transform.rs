@@ -1,0 +1,312 @@
+//! Move / Free Transform sessions: what's being transformed and how the handles drive it.
+//!
+//! While a session is open the document is untouched; the canvas previews it on the GPU (layer
+//! transform). Committing resamples on the CPU (jd_raster::transform) as one undo step.
+
+use iced::Point;
+use jd_raster::selection::{self, Selection};
+use jd_raster::transform::{Affine, content_bounds};
+use jd_raster::{Document, LayerId, TileGrid};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// Move tool drag or arrow-key nudge: translation only, commits on release.
+    Move,
+    /// Ctrl+T: handles for scale/rotate, commits on Enter.
+    Free,
+}
+
+/// What part of the transform box the pointer grabbed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Handle {
+    Inside,
+    /// 0 top-left, 1 top-right, 2 bottom-right, 3 bottom-left.
+    Corner(usize),
+    /// 0 top, 1 right, 2 bottom, 3 left.
+    Edge(usize),
+    Rotate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Params {
+    pub center: (f32, f32),
+    pub angle: f32,
+    pub sx: f32,
+    pub sy: f32,
+}
+
+#[derive(Debug, Clone)]
+struct Grab {
+    handle: Handle,
+    start: Point,
+    params: Params,
+}
+
+pub struct Session {
+    pub doc: u64,
+    pub layer: LayerId,
+    pub kind: Kind,
+    /// The layer with the transformed part removed (when moving a selection).
+    pub base: Option<TileGrid>,
+    /// The pixels being transformed.
+    pub content: TileGrid,
+    /// The selection at the start; it's transformed along with the pixels.
+    pub selection: Option<Selection>,
+    /// Content box before transforming: x0, y0, x1, y1 in document pixels.
+    pub bounds: [f32; 4],
+    pub params: Params,
+    grab: Option<Grab>,
+}
+
+impl Session {
+    /// Starts transforming the active layer (or the selected part of it). `None` if there's
+    /// nothing to transform.
+    pub fn begin(doc_id: u64, doc: &Document, kind: Kind) -> Result<Self, &'static str> {
+        let layer = doc.active().ok_or("No layer selected")?;
+        if layer.locked {
+            return Err("The layer is locked");
+        }
+        let (base, content) = match &doc.selection {
+            Some(sel) => {
+                let content = selection::extract(&layer.pixels, sel);
+                let mut base = layer.pixels.clone();
+                selection::clear(&mut base, sel);
+                (Some(base), content)
+            }
+            None => (None, layer.pixels.clone()),
+        };
+        let [x0, y0, x1, y1] = content_bounds(&content).ok_or("Nothing to transform here")?;
+        let bounds = [x0 as f32, y0 as f32, x1 as f32, y1 as f32];
+        Ok(Self {
+            doc: doc_id,
+            layer: layer.id,
+            kind,
+            base,
+            content,
+            selection: doc.selection.clone(),
+            bounds,
+            params: Params { center: centre(bounds), angle: 0.0, sx: 1.0, sy: 1.0 },
+            grab: None,
+        })
+    }
+
+    pub fn affine(&self) -> Affine {
+        let p = self.params;
+        Affine::from_parts(centre(self.bounds), p.center, p.angle, p.sx, p.sy)
+    }
+
+    /// Box corners after the transform, in document pixels (TL, TR, BR, BL).
+    pub fn corners(&self) -> [Point; 4] {
+        let [x0, y0, x1, y1] = self.bounds;
+        let m = self.affine();
+        [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|(x, y)| {
+            let (a, b) = m.apply(x, y);
+            Point::new(a, b)
+        })
+    }
+
+    pub fn is_identity(&self) -> bool {
+        self.affine() == Affine::IDENTITY || self.affine().integer_translation() == Some((0, 0))
+    }
+
+    /// Nudges by whole pixels.
+    pub fn translate(&mut self, dx: f32, dy: f32) {
+        self.params.center.0 += dx;
+        self.params.center.1 += dy;
+    }
+
+    pub fn grab(&mut self, handle: Handle, at: Point) {
+        self.grab = Some(Grab { handle, start: at, params: self.params });
+    }
+
+    pub fn release(&mut self) {
+        self.grab = None;
+    }
+
+    pub fn is_grabbing(&self) -> bool {
+        self.grab.is_some()
+    }
+
+    /// Drags the grabbed handle to `at` (document pixels). `shift`: free aspect for corners /
+    /// 15° steps for rotation. `alt`: scale around the centre.
+    pub fn drag(&mut self, at: Point, shift: bool, alt: bool) {
+        let Some(g) = self.grab.clone() else { return };
+        let p0 = g.params;
+        let half = ((self.bounds[2] - self.bounds[0]) / 2.0, (self.bounds[3] - self.bounds[1]) / 2.0);
+        let (sin, cos) = p0.angle.sin_cos();
+        // World vector -> box-local (unrotated) frame, and back.
+        let to_local = |v: (f32, f32)| (v.0 * cos + v.1 * sin, -v.0 * sin + v.1 * cos);
+        let to_world = |v: (f32, f32)| (v.0 * cos - v.1 * sin, v.0 * sin + v.1 * cos);
+
+        match g.handle {
+            Handle::Inside => {
+                let mut dx = at.x - g.start.x;
+                let mut dy = at.y - g.start.y;
+                if self.kind == Kind::Move {
+                    // Plain moves stay on whole pixels, so they're lossless.
+                    dx = dx.round();
+                    dy = dy.round();
+                }
+                self.params.center = (p0.center.0 + dx, p0.center.1 + dy);
+            }
+            Handle::Rotate => {
+                let (cx, cy) = p0.center;
+                let a0 = (g.start.y - cy).atan2(g.start.x - cx);
+                let a1 = (at.y - cy).atan2(at.x - cx);
+                let mut angle = p0.angle + (a1 - a0);
+                if shift {
+                    let step = std::f32::consts::PI / 12.0;
+                    angle = (angle / step).round() * step;
+                }
+                self.params.angle = angle;
+            }
+            Handle::Corner(_) | Handle::Edge(_) => {
+                // Which sides move: unit signs in box space; 0 means that axis is fixed.
+                let (ux, uy): (f32, f32) = match g.handle {
+                    Handle::Corner(0) => (-1.0, -1.0),
+                    Handle::Corner(1) => (1.0, -1.0),
+                    Handle::Corner(2) => (1.0, 1.0),
+                    Handle::Corner(_) => (-1.0, 1.0),
+                    Handle::Edge(0) => (0.0, -1.0),
+                    Handle::Edge(1) => (1.0, 0.0),
+                    Handle::Edge(2) => (0.0, 1.0),
+                    Handle::Edge(_) => (-1.0, 0.0),
+                    Handle::Inside | Handle::Rotate => unreachable!("handled above"),
+                };
+                let q = to_local((at.x - p0.center.0, at.y - p0.center.1));
+                // Fixed point (opposite side, or the centre with Alt), box-local.
+                let anchor = if alt { (0.0, 0.0) } else { (-ux * half.0 * p0.sx, -uy * half.1 * p0.sy) };
+                let span = if alt { 1.0 } else { 2.0 };
+                let mut sx = if ux != 0.0 { (q.0 - anchor.0) / (span * ux * half.0) } else { p0.sx };
+                let mut sy = if uy != 0.0 { (q.1 - anchor.1) / (span * uy * half.1) } else { p0.sy };
+                // Corners keep proportions unless Shift (Photoshop's current default).
+                if ux != 0.0 && uy != 0.0 && !shift {
+                    let (rx, ry) = (sx / p0.sx, sy / p0.sy);
+                    let k = if (rx - 1.0).abs() > (ry - 1.0).abs() { rx } else { ry };
+                    sx = p0.sx * k;
+                    sy = p0.sy * k;
+                }
+                let clamp = |s: f32| if s.abs() < 0.001 { 0.001f32.copysign(s) } else { s };
+                sx = clamp(sx);
+                sy = clamp(sy);
+                // New centre: midway between the anchor and the moved side, back in world space.
+                let moved = (anchor.0 + span * ux * half.0 * sx, anchor.1 + span * uy * half.1 * sy);
+                let centre_local = if alt {
+                    (0.0, 0.0)
+                } else {
+                    (
+                        if ux != 0.0 { (anchor.0 + moved.0) / 2.0 } else { 0.0 },
+                        if uy != 0.0 { (anchor.1 + moved.1) / 2.0 } else { 0.0 },
+                    )
+                };
+                let c = to_world(centre_local);
+                self.params = Params { center: (p0.center.0 + c.0, p0.center.1 + c.1), angle: p0.angle, sx, sy };
+            }
+        }
+    }
+
+    /// Applies the transform to the document's layer (and selection).
+    pub fn commit(&self, doc: &mut Document) {
+        let m = self.affine();
+        let moved = jd_raster::transform::transform_grid(&self.content, &m);
+        let Some(layer) = doc.layer_mut(self.layer) else { return };
+        layer.pixels = match &self.base {
+            Some(base) => {
+                let mut out = base.clone();
+                jd_raster::transform::composite_over(&mut out, &moved);
+                out
+            }
+            None => moved,
+        };
+        doc.selection = self
+            .selection
+            .as_ref()
+            .map(|s| jd_raster::transform::transform_selection(s, &m))
+            .filter(|s| !s.is_empty());
+    }
+}
+
+fn centre(b: [f32; 4]) -> (f32, f32) {
+    ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn doc_with_square() -> Document {
+        let mut doc = Document::new("t", 200, 200);
+        let id = doc.active_id().unwrap();
+        let l = doc.layer_mut(id).unwrap();
+        l.locked = false;
+        for y in 50..100 {
+            for x in 50..100 {
+                l.pixels.set_pixel(x, y, [10, 200, 10, 255]);
+            }
+        }
+        doc
+    }
+
+    #[test]
+    fn content_bounds_drive_the_box() {
+        let s = Session::begin(1, &doc_with_square(), Kind::Free).unwrap();
+        assert_eq!(s.bounds, [50.0, 50.0, 100.0, 100.0]);
+        assert_eq!(s.corners()[2], Point::new(100.0, 100.0));
+    }
+
+    #[test]
+    fn corner_drag_is_proportional_and_anchored_opposite() {
+        let mut s = Session::begin(1, &doc_with_square(), Kind::Free).unwrap();
+        s.grab(Handle::Corner(2), Point::new(100.0, 100.0));
+        s.drag(Point::new(150.0, 120.0), false, false);
+        let c = s.corners();
+        assert!((c[0].x - 50.0).abs() < 1e-3 && (c[0].y - 50.0).abs() < 1e-3, "{c:?}");
+        assert!((s.params.sx - s.params.sy).abs() < 1e-4);
+        assert!((s.params.sx - 2.0).abs() < 1e-3);
+        // Shift frees the aspect ratio.
+        s.drag(Point::new(150.0, 120.0), true, false);
+        assert!((s.params.sx - 2.0).abs() < 1e-3 && (s.params.sy - 1.4).abs() < 1e-3);
+    }
+
+    #[test]
+    fn alt_scales_around_centre_and_edges_move_one_axis() {
+        let mut s = Session::begin(1, &doc_with_square(), Kind::Free).unwrap();
+        s.grab(Handle::Edge(1), Point::new(100.0, 75.0));
+        s.drag(Point::new(125.0, 75.0), false, true);
+        assert_eq!(s.params.center, (75.0, 75.0));
+        assert!((s.params.sx - 2.0).abs() < 1e-3 && s.params.sy == 1.0);
+    }
+
+    #[test]
+    fn rotate_snaps_with_shift() {
+        let mut s = Session::begin(1, &doc_with_square(), Kind::Free).unwrap();
+        s.grab(Handle::Rotate, Point::new(150.0, 75.0));
+        s.drag(Point::new(75.0, 151.0), true, false);
+        assert!((s.params.angle - std::f32::consts::FRAC_PI_2).abs() < 1e-4);
+    }
+
+    #[test]
+    fn move_with_selection_lifts_and_drops_pixels() {
+        let mut doc = doc_with_square();
+        doc.selection = Some(Selection::rect(200, 200, 50.0, 50.0, 75.0, 100.0));
+        let mut s = Session::begin(1, &doc, Kind::Move).unwrap();
+        s.grab(Handle::Inside, Point::new(60.0, 60.0));
+        s.drag(Point::new(110.4, 60.0), false, false);
+        s.commit(&mut doc);
+        let px = |x, y| doc.layers()[0].pixels.pixel(x, y);
+        assert_eq!(px(55, 60)[3], 0, "hole left behind");
+        assert_eq!(px(80, 60), [10, 200, 10, 255], "unselected half stays");
+        assert_eq!(px(105, 60), [10, 200, 10, 255], "moved by 50");
+        assert_eq!(doc.selection.as_ref().unwrap().bounds(), Some([100, 50, 125, 100]));
+    }
+
+    #[test]
+    fn locked_and_empty_layers_refuse() {
+        let doc = Document::new("t", 50, 50);
+        assert!(Session::begin(1, &doc, Kind::Move).is_err());
+        let mut doc = doc;
+        let id = doc.active_id().unwrap();
+        doc.layer_mut(id).unwrap().locked = false;
+        assert_eq!(Session::begin(1, &doc, Kind::Move).err(), Some("Nothing to transform here"));
+    }
+}

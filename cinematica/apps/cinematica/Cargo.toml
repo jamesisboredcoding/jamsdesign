@@ -1,0 +1,13 @@
+[package]
+name = "cinematica"
+description = "Cinematica, the jamsdesign video editor."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+jd-ui.workspace = true
+iced.workspace = true
+jd-media.workspace = true
+rfd.workspace = true
+iced_runtime.workspace = true

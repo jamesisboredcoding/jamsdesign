@@ -1,0 +1,9 @@
+[package]
+name = "jd-ui"
+description = "Shared iced theme, icons and widgets for jamsdesign apps."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+iced.workspace = true

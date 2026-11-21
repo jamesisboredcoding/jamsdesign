@@ -1,0 +1,18 @@
+[package]
+name = "gallerion"
+description = "Gallerion, the jamsdesign photo editor."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+jd-core.workspace = true
+jd-raster.workspace = true
+jd-ui.workspace = true
+iced.workspace = true
+jd-io.workspace = true
+jd-gpu.workspace = true
+rfd.workspace = true
+octotablet.workspace = true
+raw-window-handle.workspace = true
+iced_winit.workspace = true

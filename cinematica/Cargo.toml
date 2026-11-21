@@ -1,0 +1,58 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace.dependencies]
+jd-core = { path = "crates/jd-core" }
+jd-raster = { path = "crates/jd-raster" }
+jd-ui = { path = "crates/jd-ui" }
+jd-io = { path = "crates/jd-io" }
+jd-gpu = { path = "crates/jd-gpu" }
+iced = { version = "0.14", features = ["svg", "canvas", "image-without-codecs"] }
+# Must stay on the same major version iced_wgpu uses (27 for iced 0.14).
+wgpu = "27"
+bytemuck = { version = "1", features = ["derive"] }
+image = "0.25"
+rfd = "0.18"
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+pollster = "1"
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+rayon = "1"
+# crates.io 0.1.0 crashes on KDE (binds tablet-v2 v2, only knows v1). Master knows v2.
+octotablet = { git = "https://github.com/Fuzzyzilla/octotablet", rev = "1b0a14e17f23e501cfa3be9a7f8872f8357cc9e0" }
+raw-window-handle = "0.6"
+iced_winit = "0.14"
+# Cinematica (video). ffmpeg-next links the system FFmpeg (8.x); bindgen needs clang-devel.
+jd-media = { path = "crates/jd-media" }
+jd-timeline = { path = "crates/jd-timeline" }
+ffmpeg-next = "9.1"
+# image::allocate (pre-uploading video frames) isn't re-exported without iced's "image" codecs.
+iced_runtime = "0.14"
+
+# Patched to accept synthetic pointer input (pen tablets on Wayland). See
+# vendor/iced_winit/src/synthetic.rs; every change is marked "JAMSDESIGN PATCH".
+[patch.crates-io]
+iced_winit = { path = "vendor/iced_winit" }
+
+# Dependencies and our pixel-crunching crates stay fast in debug builds.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev.package.jd-raster]
+opt-level = 3
+
+[profile.dev.package.jd-gpu]
+opt-level = 3
+
+[profile.dev.package.jd-io]
+opt-level = 3
+
+[profile.dev.package.jd-media]
+opt-level = 3
