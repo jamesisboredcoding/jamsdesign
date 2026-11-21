@@ -7,6 +7,7 @@ pub mod blend;
 pub mod composite;
 pub mod filter;
 pub mod gradient;
+pub mod heal;
 pub mod image_ops;
 mod history;
 pub mod paint;

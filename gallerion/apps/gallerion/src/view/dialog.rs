@@ -247,6 +247,41 @@ pub fn small(app: &Photo) -> Option<Element<'_, Message>> {
                 .into(),
             )
         }
+        DialogKind::BlendingOptions => {
+            let layer = d.original.and_then(|(id, ..)| app.document()?.layer(id));
+            let (mode, opacity) = layer.map_or((jd_raster::blend::BlendMode::Normal, 1.0), |l| (l.blend, l.opacity));
+            (
+                "Blending Options",
+                column![
+                    text("General Blending").size(TEXT_SIZE).font(bold()),
+                    row![
+                        text("Blend Mode").size(TEXT_SIZE_SMALL).color(TEXT_SECONDARY).width(80),
+                        iced::widget::pick_list(jd_raster::blend::BlendMode::ALL, Some(mode), Message::DialogBlend)
+                            .text_size(TEXT_SIZE_SMALL)
+                            .padding(Padding::from([4, 8]))
+                            .width(iced::Fill)
+                            .style(style::pick_list),
+                    ]
+                    .spacing(10)
+                    .align_y(iced::alignment::Vertical::Center),
+                    row![
+                        text("Opacity").size(TEXT_SIZE_SMALL).color(TEXT_SECONDARY).width(80),
+                        iced::widget::slider(0.0..=1.0, opacity, move |o| Message::DialogOpacity(o, mode))
+                            .step(0.01f32)
+                            .width(iced::Fill)
+                            .style(style::slider),
+                        text(format!("{:.0}%", opacity * 100.0)).size(TEXT_SIZE_SMALL).width(40),
+                    ]
+                    .spacing(10)
+                    .align_y(iced::alignment::Vertical::Center),
+                    text("Changes show on the canvas as you make them. Layer effects (shadow, stroke, glow) come later.")
+                        .size(TEXT_SIZE_SMALL)
+                        .color(TEXT_MUTED),
+                ]
+                .spacing(12)
+                .into(),
+            )
+        }
         kind => {
             let (title, label) = match kind {
                 DialogKind::Expand => ("Expand Selection", "Expand by (px)"),
@@ -273,5 +308,7 @@ pub fn small(app: &Photo) -> Option<Element<'_, Message>> {
     )
     .padding(20)
     .style(card_style);
-    Some(opaque(center(card).style(scrim)).into())
+    // Blending Options keeps the image fully visible for its live preview.
+    let backdrop = if d.kind == DialogKind::BlendingOptions { |_: &iced::Theme| container::Style::default() } else { scrim };
+    Some(opaque(center(card).style(backdrop)).into())
 }

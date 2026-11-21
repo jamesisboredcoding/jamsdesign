@@ -130,6 +130,9 @@ fn blend_picker<'a>(mode: BlendMode) -> Element<'a, Message> {
         .into()
 }
 
+/// Half a layer row's height (2px slot line + 40px row + 1px divider).
+const ROW_HALF: f32 = 21.5;
+
 fn layers_panel(app: &Photo) -> Element<'_, Message> {
     if app.layers_tab != 0 {
         return panel(
@@ -191,7 +194,10 @@ fn layers_panel(app: &Photo) -> Element<'_, Message> {
                 .on_input(Message::RenameInput)
                 .on_submit(Message::CommitRename)
                 .into(),
+            // The name handles its own clicks (double-click renames), so it must also start
+            // the select/drag itself, or only the thumbnail would.
             _ => mouse_area(text(&layer.name).size(TEXT_SIZE).width(Fill))
+                .on_press(Message::LayerPress(layer.id))
                 .on_double_click(Message::StartRename(layer.id))
                 .into(),
         };
@@ -211,20 +217,35 @@ fn layers_panel(app: &Photo) -> Element<'_, Message> {
             Message::ToggleLockOf(layer.id),
             Message::OpenLayerMenu(layer.id),
         );
-        // Drop indicator: accent line above the row the dragged layer would land on.
-        let target = app.layer_drag.is_some_and(|d| d.layer != layer.id && d.target == Some(DropTarget::Layer(layer.id)));
-        let line = if target { ACCENT_PRIMARY } else { iced::Color::TRANSPARENT };
-        list = list.push(
-            mouse_area(column![container(space()).width(Fill).height(2).style(style::fill(line)), row])
-                .on_enter(Message::DragOver(DropTarget::Layer(layer.id))),
-        );
+        // Drop slots: the upper half of a row means "above it", the lower half "below it".
+        // The accent line is drawn exactly where the layer will land.
+        let index = doc.layers().iter().position(|l| l.id == layer.id).unwrap_or(0);
+        let shown = app.layer_drag.and_then(|d| match d.target {
+            Some(DropTarget::Slot(slot)) if d.doc == open.id => {
+                let from = doc.layers().iter().position(|l| l.id == d.layer)?;
+                // Dropping right next to itself changes nothing, so show no line.
+                (slot != from && slot != from + 1).then_some(slot)
+            }
+            _ => None,
+        });
+        let line = |slot: usize| {
+            let color = if shown == Some(slot) { ACCENT_PRIMARY } else { iced::Color::TRANSPARENT };
+            container(space()).width(Fill).height(2).style(style::fill(color))
+        };
+        let mut cell = column![line(index + 1), row];
+        if index == 0 {
+            cell = cell.push(line(0));
+        }
+        list = list.push(mouse_area(cell).on_move(move |p| {
+            Message::DragOver(DropTarget::Slot(if p.y < ROW_HALF { index + 1 } else { index }))
+        }));
     }
 
     let mut actions = row![space::horizontal()].spacing(6).align_y(Vertical::Center);
     // Disabled icons are for features that don't exist yet.
     for (ic, msg) in [
         (Icon::Link, None),
-        (Icon::Fx, None),
+        (Icon::Fx, Some(Message::ShowDialog(crate::app::DialogKind::BlendingOptions))),
         (Icon::Mask, None),
         (Icon::Adjust, None),
         (Icon::Folder, None),

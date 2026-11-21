@@ -257,6 +257,9 @@ pub fn options_bar(app: &Photo) -> Element<'_, Message> {
         if matches!(tool, Tool::Dodge | Tool::Burn) {
             bar = bar.push(percent_slider("Exposure:", b.exposure, Message::BrushExposure)).push(vline(20.0, BORDER_SUBTLE));
         }
+        if tool == Tool::SpotHeal {
+            bar = bar.push(label("Paint over what you want removed; it's filled from its surroundings when you let go"));
+        }
         if tool.clones() {
             bar = bar.push(label(if app.clone_source.is_some() { "Alt+click: new source" } else { "Alt+click to set the source" }));
         }
@@ -447,9 +450,9 @@ pub fn status_bar(app: &Photo) -> Element<'_, Message> {
     }
     bar = bar.push(space::horizontal());
     if let Some(drag) = app.layer_drag
-        && drag.target.is_some_and(|t| t != crate::app::DropTarget::Layer(drag.layer))
+        && drag.target.is_some()
     {
-        bar = bar.push(label("Drop on a layer to reorder · on another document's tab or canvas to copy it there"));
+        bar = bar.push(label("Drop between layers to reorder · on another document's tab or canvas to copy it there"));
     } else if let Some(notice) = &app.notice {
         let color = if notice.error { DANGER } else { TEXT_SECONDARY };
         bar = bar.push(text(&notice.text).size(TEXT_SIZE_SMALL).color(color));

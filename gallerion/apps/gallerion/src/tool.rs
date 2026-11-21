@@ -10,6 +10,7 @@ pub enum Tool {
     Wand,
     Crop,
     Eyedropper,
+    SpotHeal,
     Heal,
     Brush,
     Stamp,
@@ -38,7 +39,7 @@ pub const GROUPS: &[&[&[Tool]]] = &[
     ],
     &[
         &[Tool::Eyedropper],
-        &[Tool::Heal],
+        &[Tool::SpotHeal, Tool::Heal],
         &[Tool::Brush],
         &[Tool::Stamp],
         &[Tool::Eraser],
@@ -65,6 +66,7 @@ impl Tool {
             Tool::Wand => Icon::Wand,
             Tool::Crop => Icon::Crop,
             Tool::Eyedropper => Icon::Eyedropper,
+            Tool::SpotHeal => Icon::SpotHeal,
             Tool::Heal => Icon::Heal,
             Tool::Brush => Icon::Brush,
             Tool::Stamp => Icon::Stamp,
@@ -92,6 +94,7 @@ impl Tool {
             Tool::Wand => "Magic Wand",
             Tool::Crop => "Crop",
             Tool::Eyedropper => "Eyedropper",
+            Tool::SpotHeal => "Spot Healing Brush",
             Tool::Heal => "Healing Brush",
             Tool::Brush => "Brush",
             Tool::Stamp => "Clone Stamp",
@@ -120,6 +123,7 @@ impl Tool {
             Tool::Wand => "Magic Wand Tool (W)",
             Tool::Crop => "Crop Tool (C)",
             Tool::Eyedropper => "Eyedropper Tool (I)",
+            Tool::SpotHeal => "Spot Healing Brush Tool (J)",
             Tool::Heal => "Healing Brush Tool (J)",
             Tool::Brush => "Brush Tool (B)",
             Tool::Stamp => "Clone Stamp Tool (S)",
@@ -146,7 +150,7 @@ impl Tool {
             Tool::Wand => 'w',
             Tool::Crop => 'c',
             Tool::Eyedropper => 'i',
-            Tool::Heal => 'j',
+            Tool::SpotHeal | Tool::Heal => 'j',
             Tool::Brush => 'b',
             Tool::Stamp => 's',
             Tool::Eraser => 'e',
@@ -173,7 +177,7 @@ impl Tool {
 
     /// Tools that paint with the brush engine.
     pub fn paints(self) -> bool {
-        matches!(self, Tool::Brush | Tool::Eraser | Tool::Stamp | Tool::Heal | Tool::Dodge | Tool::Burn)
+        matches!(self, Tool::Brush | Tool::Eraser | Tool::Stamp | Tool::SpotHeal | Tool::Heal | Tool::Dodge | Tool::Burn)
     }
 
     /// Tools whose options bar shows brush settings.

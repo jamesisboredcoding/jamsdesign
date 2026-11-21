@@ -103,6 +103,10 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
             corners: t.corners(),
             affine: t.affine(),
             grabbing: t.is_grabbing(),
+            guides: [
+                t.guides.iter().find(|g| g.0).map(|g| g.1),
+                t.guides.iter().find(|g| !g.0).map(|g| g.1),
+            ],
         }),
         covered: app.popup.is_some()
             || app.adjusting.is_some()
@@ -256,6 +260,8 @@ struct TransformView {
     corners: [Point; 4],
     affine: Affine,
     grabbing: bool,
+    /// Snap lines hit by the current drag (document px): vertical at x, horizontal at y.
+    guides: [Option<f32>; 2],
 }
 
 struct Overlay<'a> {
@@ -733,6 +739,20 @@ impl canvas::Program<Message> for Overlay<'_> {
             });
             frame.stroke(&cross, Stroke::default().with_width(3.0).with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.5)));
             frame.stroke(&cross, Stroke::default().with_width(1.0).with_color(Color::WHITE));
+        }
+
+        // Smart guides: the lines the content just snapped to, across the whole view.
+        if let Some(t) = &self.transform {
+            let magenta = Color::from_rgb8(0xFF, 0x2E, 0xC4);
+            for (vertical, at) in [(true, t.guides[0]), (false, t.guides[1])].into_iter().filter_map(|(v, a)| Some((v, a?))) {
+                let p = self.to_screen(Point::new(at, at));
+                let path = if vertical {
+                    Path::line(Point::new(p.x, 0.0), Point::new(p.x, bounds.height))
+                } else {
+                    Path::line(Point::new(0.0, p.y), Point::new(bounds.width, p.y))
+                };
+                frame.stroke(&path, Stroke::default().with_width(1.0).with_color(magenta));
+            }
         }
 
         // Free Transform box and handles.

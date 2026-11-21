@@ -12,6 +12,7 @@ use std::collections::HashMap;
 
 use crate::blend::{self, BlendMode};
 use crate::composite::{to_srgb8, to_working};
+use crate::heal;
 use crate::selection::Selection;
 use crate::{BlendSpace, Document, LayerId, TILE_SIZE, TileGrid};
 
@@ -45,9 +46,12 @@ pub enum Effect {
     Paint,
     /// Clone Stamp: paint the layer's own pixels from (dx, dy) away (source = point + offset).
     Clone { dx: i64, dy: i64 },
-    /// Healing Brush: clone, then [`Stroke::finish`] matches the copied area's colour and
-    /// brightness to its surroundings (keeping the source's texture).
+    /// Healing Brush: clone, then [`Stroke::finish`] blends the copy seamlessly into its
+    /// surroundings (keeps the source's texture, takes the destination's colour and light).
     Heal { dx: i64, dy: i64 },
+    /// Spot Healing Brush: marks the area while painting; [`Stroke::finish`] fills it with
+    /// matching content from around it (removes what was brushed over).
+    SpotHeal,
     /// Lighten (Dodge) by up to `exposure` (0..1).
     Dodge { exposure: f32 },
     /// Darken (Burn) by up to `exposure` (0..1).
@@ -265,6 +269,12 @@ impl Stroke {
                                     }
                                     to_srgb8(blend::composite(p.mode, to_working(o, self.space), src), self.space)
                                 }
+                                Effect::SpotHeal => {
+                                    // Preview: darken what will be healed (replaced on finish).
+                                    let k = 0.5 * m;
+                                    let d = |v: u8| (v as f32 * (1.0 - k) + 40.0 * k + 0.5) as u8;
+                                    [d(o[0]), d(o[1]), d(o[2]), o[3].max((255.0 * k) as u8)]
+                                }
                                 Effect::Dodge { exposure } | Effect::Burn { exposure } => {
                                     let k = (exposure * m).clamp(0.0, 1.0);
                                     let dodge = matches!(p.effect, Effect::Dodge { .. });
@@ -286,54 +296,82 @@ impl Stroke {
 }
 
 impl Stroke {
-    /// Bounds of everything this stroke touched: x0, y0, x1, y1.
-    fn touched(&self) -> Option<Region> {
-        let ts = TILE_SIZE;
-        self.mask.keys().fold(None, |acc, &(tx, ty)| {
-            let r = [tx * ts, ty * ts, ((tx + 1) * ts).min(self.width), ((ty + 1) * ts).min(self.height)];
-            Some(match acc {
-                None => r,
-                Some(a) => [a[0].min(r[0]), a[1].min(r[1]), a[2].max(r[2]), a[3].max(r[3])],
-            })
-        })
+    /// Coverage at a document pixel (brush mask times selection), 0..1.
+    fn coverage(&self, x: u32, y: u32) -> f32 {
+        let Some(mask) = self.mask.get(&(x / TILE_SIZE, y / TILE_SIZE)) else { return 0.0 };
+        let mut m = mask[((y % TILE_SIZE) * TILE_SIZE + x % TILE_SIZE) as usize];
+        if let Some(clip) = &self.clip {
+            m *= clip.get(x, y) as f32 / 255.0;
+        }
+        m
     }
 
-    /// Ends the stroke. For the Healing Brush this blends the cloned pixels into their
-    /// surroundings: the result keeps the source's fine detail but takes the destination's
-    /// broad colour and brightness (`result = src + blur(dst) - blur(src)`).
-    pub fn finish(self, doc: &mut Document) {
-        let Effect::Heal { dx, dy } = self.params.effect else { return };
-        let Some([x0, y0, x1, y1]) = self.touched() else { return };
-        let radius = (self.params.size / 4.0).max(2.0);
-        let margin = (radius * 3.0).ceil() as u32 + 1;
-        let (w, h) = (self.width, self.height);
-        let grow = [x0.saturating_sub(margin), y0.saturating_sub(margin), (x1 + margin).min(w), (y1 + margin).min(h)];
-        let area = Selection::rect(w, h, grow[0] as f32, grow[1] as f32, grow[2] as f32, grow[3] as f32);
-        let blur = crate::filter::Filter::GaussianBlur { radius };
-        // Blurred destination (before the stroke) and blurred, shifted source.
-        let dst_low = crate::filter::apply(&self.original, &blur, Some(&area));
-        let shifted = crate::transform::place(&self.original, w, h, -dx, -dy);
-        let src_low = crate::filter::apply(&shifted, &blur, Some(&area));
-        let Some(layer) = doc.layer_mut(self.layer) else { return };
-        for y in y0..y1 {
-            for x in x0..x1 {
-                let Some(mask) = self.mask.get(&(x / TILE_SIZE, y / TILE_SIZE)) else { continue };
-                let mut m = mask[((y % TILE_SIZE) * TILE_SIZE + x % TILE_SIZE) as usize] * self.params.opacity;
-                if let Some(clip) = &self.clip {
-                    m *= clip.get(x, y) as f32 / 255.0;
-                }
+    /// Exact bounds of the painted pixels: x0, y0, x1, y1.
+    fn painted_bounds(&self) -> Option<Region> {
+        let mut b: Option<Region> = None;
+        for (&(tx, ty), mask) in &self.mask {
+            for (i, &m) in mask.iter().enumerate() {
                 if m <= 0.0 {
                     continue;
                 }
-                let (o, s, dl, sl) = (self.original.pixel(x, y), shifted.pixel(x, y), dst_low.pixel(x, y), src_low.pixel(x, y));
-                let mut out = o;
-                for c in 0..3 {
-                    let healed = (s[c] as f32 + dl[c] as f32 - sl[c] as f32).clamp(0.0, 255.0);
-                    out[c] = (o[c] as f32 * (1.0 - m) + healed * m + 0.5) as u8;
+                let (x, y) = (tx * TILE_SIZE + i as u32 % TILE_SIZE, ty * TILE_SIZE + i as u32 / TILE_SIZE);
+                if x >= self.width || y >= self.height {
+                    continue;
                 }
-                out[3] = (o[3] as f32 * (1.0 - m) + s[3].max(o[3]) as f32 * m + 0.5) as u8;
-                layer.pixels.set_pixel(x, y, out);
+                b = Some(match b {
+                    None => [x, y, x + 1, y + 1],
+                    Some(a) => [a[0].min(x), a[1].min(y), a[2].max(x + 1), a[3].max(y + 1)],
+                });
             }
+        }
+        b
+    }
+
+    /// Ends the stroke. The healing tools do their real work here:
+    /// - Healing Brush: the cloned area is blended seamlessly into its surroundings.
+    /// - Spot Healing Brush: the painted area is filled from the content around it.
+    pub fn finish(self, doc: &mut Document) {
+        let shift = match self.params.effect {
+            Effect::Heal { dx, dy } => Some((dx, dy)),
+            Effect::SpotHeal => None,
+            _ => return,
+        };
+        let Some([x0, y0, x1, y1]) = self.painted_bounds() else { return };
+        // Spot healing searches the neighbourhood for content to copy, so give it room.
+        let margin = match shift {
+            Some(_) => 2,
+            // Capped so a long stroke doesn't search (and allocate for) a huge area.
+            None => ((x1 - x0).max(y1 - y0)).max(self.params.size as u32).clamp(32, 200),
+        };
+        let r = [x0.saturating_sub(margin), y0.saturating_sub(margin), (x1 + margin).min(self.width), (y1 + margin).min(self.height)];
+        let (w, h) = ((r[2] - r[0]) as usize, (r[3] - r[1]) as usize);
+        let at = |i: usize| (r[0] + (i % w) as u32, r[1] + (i / w) as u32);
+        let px = |p: [u8; 4]| p.map(|v| v as f32);
+        let orig: Vec<heal::Px> = (0..w * h).map(|i| { let (x, y) = at(i); px(self.original.pixel(x, y)) }).collect();
+        let cov: Vec<f32> = (0..w * h).map(|i| { let (x, y) = at(i); self.coverage(x, y) }).collect();
+        let hole: Vec<bool> = cov.iter().map(|&m| m > 0.0).collect();
+        let out = match shift {
+            Some((dx, dy)) => {
+                let src: Vec<heal::Px> =
+                    (0..w * h).map(|i| { let (x, y) = at(i); px(self.original.pixel_at(x as i64 + dx, y as i64 + dy)) }).collect();
+                heal::seamless(&orig, &src, &hole, w, h)
+            }
+            None => heal::inpaint(&orig, &hole, w, h),
+        };
+        let Some(layer) = doc.layer_mut(self.layer) else { return };
+        for i in 0..w * h {
+            if !hole[i] {
+                continue;
+            }
+            // The Healing Brush respects soft edges and opacity; Spot Healing replaces what
+            // was painted (anything less would leave a ghost of the removed object).
+            let k = match shift {
+                Some(_) => (cov[i] * self.params.opacity).min(1.0),
+                None => if self.clip.is_some() { cov[i].min(1.0) } else { 1.0 },
+            };
+            let v: [u8; 4] = [0, 1, 2, 3].map(|c| (orig[i][c] * (1.0 - k) + out[i][c] * k + 0.5).clamp(0.0, 255.0) as u8);
+            let (x, y) = at(i);
+            layer.pixels.set_pixel(x, y, v);
         }
     }
 }
@@ -475,6 +513,26 @@ mod tests {
         s.finish(&mut doc);
         let healed = doc.layers()[0].pixels.pixel(60, 20)[0];
         assert!(healed > 110, "after finishing it matches the grey around it ({healed})");
+    }
+
+    #[test]
+    fn spot_heal_removes_what_was_brushed_over() {
+        // Grey background with a black dot; brushing over the dot heals it away.
+        let mut px = [128u8, 128, 128, 255].repeat(120 * 120);
+        for y in 55..65 {
+            for x in 55..65 {
+                px[(y * 120 + x) * 4..(y * 120 + x) * 4 + 4].copy_from_slice(&[0, 0, 0, 255]);
+            }
+        }
+        let mut doc = Document::from_rgba8("t", 120, 120, &px);
+        let p = BrushParams { size: 20.0, hardness: 1.0, effect: Effect::SpotHeal, ..params() };
+        let mut s = Stroke::begin(&doc, p).unwrap();
+        s.add_point(&mut doc, 60.0, 60.0, 1.0);
+        s.finish(&mut doc);
+        for (x, y) in [(60, 60), (56, 56), (64, 63)] {
+            let v = doc.layers()[0].pixels.pixel(x, y);
+            assert!((v[0] as i32 - 128).abs() < 6, "healed to grey at {x},{y}: {v:?}");
+        }
     }
 
     #[test]

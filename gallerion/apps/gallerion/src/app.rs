@@ -134,8 +134,9 @@ pub struct LayerDrag {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DropTarget {
-    /// Onto another row: reorder.
-    Layer(LayerId),
+    /// Between rows: reorder. The insertion slot in stack order (0 = below the bottom layer,
+    /// `len` = above the top one).
+    Slot(usize),
     /// Onto a document tab: switches to it; dropping copies the layer there.
     Tab(usize),
     Canvas,
@@ -150,6 +151,8 @@ pub enum DialogKind {
     Contract,
     Feather,
     Stroke,
+    /// Layer > Blending Options (right-click a layer, or the fx button): previews live.
+    BlendingOptions,
 }
 
 pub struct Dialog {
@@ -163,6 +166,8 @@ pub struct Dialog {
     pub aspect: f32,
     /// Canvas Size anchor: column and row, 0..=2.
     pub anchor: (u8, u8),
+    /// Blending Options: the layer and its mode and opacity before the dialog opened.
+    pub original: Option<(LayerId, BlendMode, f32)>,
 }
 
 impl Dialog {
@@ -208,6 +213,22 @@ pub enum PopupKind {
     Layer(LayerId),
     /// The workspace switcher in the title bar.
     Workspace,
+}
+
+/// View > Snap and Snap To.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Snap {
+    pub on: bool,
+    pub bounds: bool,
+    pub layers: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapTo {
+    Bounds,
+    Layers,
+    All,
+    None,
 }
 
 /// Panel arrangements from the title bar's workspace switcher.
@@ -348,6 +369,7 @@ pub struct Photo {
     pub last_filter: Option<Op>,
     pub panels: Panels,
     pub workspace: Workspace,
+    pub snap: Snap,
     /// Command search (search icon / Ctrl+F): the query, while open.
     pub palette: Option<String>,
     /// Pointer over the dock, to place the layer right-click menu.
@@ -457,6 +479,10 @@ pub enum Message {
     CropBox(Option<[f32; 4]>),
     CommitCrop,
 
+    // Snapping
+    ToggleSnap,
+    SnapTo(SnapTo),
+
     // Layers panel right-click menu
     OpenLayerMenu(LayerId),
     DockPointer(Point),
@@ -503,6 +529,10 @@ pub enum Message {
     DialogAnchor(u8, u8),
     DialogOk,
     DialogCancel,
+    /// Blending Options preview: new mode.
+    DialogBlend(BlendMode),
+    /// Blending Options preview: new opacity (and the current mode).
+    DialogOpacity(f32, BlendMode),
 
     // New document
     NewDocDialog,
@@ -668,6 +698,7 @@ impl Photo {
             last_filter: None,
             panels: Panels { color: true, properties: true, layers: true },
             workspace: Workspace::Essentials,
+            snap: Snap { on: true, bounds: true, layers: true },
             palette: None,
             dock_pointer: Point::ORIGIN,
             clone_source: None,
@@ -986,7 +1017,10 @@ impl Photo {
                 }
             }
             Message::TransformDrag { at, shift, alt } => {
+                // About 6 screen pixels, whatever the zoom.
+                let tol = if self.snap.on { 6.0 / self.zoom_factor().max(0.01) } else { 0.0 };
                 if let Some(t) = self.transform.as_mut() {
+                    t.snap_tolerance = tol;
                     t.drag(at, shift, alt);
                 }
             }
@@ -1220,7 +1254,15 @@ impl Photo {
                     DialogKind::Feather => ("5".into(), String::new()),
                     _ => ("3".into(), String::new()),
                 };
-                self.dialog = Some(Dialog { kind, a, b, constrain: true, aspect: doc.width as f32 / doc.height as f32, anchor: (1, 1) });
+                let original = (kind == DialogKind::BlendingOptions).then(|| doc.active().map(|l| (l.id, l.blend, l.opacity))).flatten();
+                if kind == DialogKind::BlendingOptions && original.is_none() {
+                    return Task::none();
+                }
+                let aspect = doc.width as f32 / doc.height as f32;
+                if kind == DialogKind::BlendingOptions && !self.check_layer_editable() {
+                    return Task::none();
+                }
+                self.dialog = Some(Dialog { kind, a, b, constrain: true, aspect, anchor: (1, 1), original });
             }
             Message::DialogA(ref v) | Message::DialogB(ref v) => {
                 let first = matches!(message, Message::DialogA(_));
@@ -1250,7 +1292,28 @@ impl Photo {
                     d.anchor = (cx.min(2), cy.min(2));
                 }
             }
-            Message::DialogCancel => self.dialog = None,
+            Message::DialogCancel => {
+                // Blending Options previewed on the layer itself: put it back.
+                if let Some(Dialog { original: Some((id, blend, opacity)), .. }) = self.dialog.take()
+                    && let Some(d) = self.doc_mut()
+                    && let Some(l) = d.doc.layer_mut(id)
+                {
+                    l.blend = blend;
+                    l.opacity = opacity;
+                }
+            }
+            Message::DialogBlend(mode) | Message::DialogOpacity(_, mode) => {
+                let opacity = if let Message::DialogOpacity(o, _) = message { Some(o) } else { None };
+                if let Some(Dialog { original: Some((id, ..)), .. }) = self.dialog
+                    && let Some(d) = self.doc_mut()
+                    && let Some(l) = d.doc.layer_mut(id)
+                {
+                    l.blend = mode;
+                    if let Some(o) = opacity {
+                        l.opacity = o.clamp(0.0, 1.0);
+                    }
+                }
+            }
             Message::DialogOk => return self.dialog_ok(),
             Message::NewDocDialog => {
                 let n = self.docs.len() + 1;
@@ -1544,6 +1607,16 @@ impl Photo {
                 return self.update(*m);
             }
             Message::DockPointer(p) => self.dock_pointer = p,
+            Message::ToggleSnap => self.snap.on = !self.snap.on,
+            Message::SnapTo(t) => {
+                let s = &mut self.snap;
+                match t {
+                    SnapTo::Bounds => s.bounds = !s.bounds,
+                    SnapTo::Layers => s.layers = !s.layers,
+                    SnapTo::All => (s.bounds, s.layers) = (true, true),
+                    SnapTo::None => (s.bounds, s.layers) = (false, false),
+                }
+            }
             Message::SetCloneSource(at) => {
                 self.clone_source = Some(at);
                 self.clone_offset = None;
@@ -1971,21 +2044,21 @@ impl Photo {
         let Some(src) = self.doc_index(drag.doc) else { return };
         let into_other = self.active != src;
         match drag.target {
-            Some(DropTarget::Layer(target)) if !into_other && target != drag.layer => {
+            Some(DropTarget::Slot(slot)) if !into_other => {
                 let doc = &self.docs[src].doc;
-                let (Some(from), Some(to)) = (
-                    doc.layers().iter().position(|l| l.id == drag.layer),
-                    doc.layers().iter().position(|l| l.id == target),
-                ) else {
+                let Some(from) = doc.layers().iter().position(|l| l.id == drag.layer) else { return };
+                // Removing the layer first shifts the slots above it down by one.
+                let to = if slot > from { slot - 1 } else { slot };
+                if to == from {
                     return;
-                };
+                }
                 if doc.layers()[from].locked {
                     self.error("The layer is locked");
                     return;
                 }
                 self.edit("Move Layer", None, |doc| doc.move_layer(drag.layer, to as isize - from as isize));
             }
-            Some(DropTarget::Tab(_) | DropTarget::Canvas | DropTarget::Layer(_)) if into_other => {
+            Some(DropTarget::Tab(_) | DropTarget::Canvas | DropTarget::Slot(_)) if into_other => {
                 self.copy_layer_into(drag.doc, drag.layer);
             }
             _ => {}
@@ -2015,6 +2088,21 @@ impl Photo {
 
     fn dialog_ok(&mut self) -> Task<Message> {
         let Some(d) = self.dialog.take() else { return Task::none() };
+        if let Some((id, blend, opacity)) = d.original {
+            // The layer already shows the new settings; record the old ones as one undo step.
+            if let Some(open) = self.doc_mut()
+                && let Some(now) = open.doc.layer(id).map(|l| (l.blend, l.opacity))
+                && now != (blend, opacity)
+            {
+                let mut before = open.doc.clone();
+                if let Some(l) = before.layer_mut(id) {
+                    l.blend = blend;
+                    l.opacity = opacity;
+                }
+                open.history.record("Blending Options", &before, None);
+            }
+            return Task::none();
+        }
         let a = Dialog::number(&d.a);
         let b = Dialog::number(&d.b);
         match d.kind {
@@ -2117,6 +2205,10 @@ impl Photo {
                 | Message::MenuTitle(_)
                 | Message::PopupSub(_)
                 | Message::DockPointer(_)
+                | Message::ToggleSnap
+                | Message::DialogBlend(_)
+                | Message::DialogOpacity(..)
+                | Message::SnapTo(_)
                 | Message::CropBox(_)
                 | Message::SetCloneSource(_)
                 | Message::OpenPalette
@@ -2166,7 +2258,8 @@ impl Photo {
     fn begin_transform(&mut self, kind: transform::Kind) -> bool {
         let Some(d) = self.doc() else { return false };
         match transform::Session::begin(d.id, &d.doc, kind) {
-            Ok(session) => {
+            Ok(mut session) => {
+                session.snap = self.snap_lines(&d.doc, session.layer);
                 self.transform = Some(session);
                 true
             }
@@ -2175,6 +2268,27 @@ impl Photo {
                 false
             }
         }
+    }
+
+    /// What moved or transformed content can snap to: the canvas edges and centre, and the
+    /// edges and centres of the other visible layers.
+    fn snap_lines(&self, doc: &Document, moving: LayerId) -> transform::SnapLines {
+        let mut lines = transform::SnapLines::default();
+        let mut add = |[x0, y0, x1, y1]: [f32; 4]| {
+            lines.x.extend([x0, (x0 + x1) / 2.0, x1]);
+            lines.y.extend([y0, (y0 + y1) / 2.0, y1]);
+        };
+        if self.snap.bounds {
+            add([0.0, 0.0, doc.width as f32, doc.height as f32]);
+        }
+        if self.snap.layers {
+            for l in doc.layers().iter().filter(|l| l.visible && l.id != moving) {
+                if let Some(b) = jd_raster::transform::content_bounds(&l.pixels) {
+                    add(b.map(|v| v as f32));
+                }
+            }
+        }
+        lines
     }
 
     fn commit_transform(&mut self) {
@@ -2237,6 +2351,7 @@ impl Photo {
                         .get_or_insert(((src.x - at.x).round() as i64, (src.y - at.y).round() as i64));
                     if tool == Tool::Stamp { Effect::Clone { dx, dy } } else { Effect::Heal { dx, dy } }
                 }
+                Tool::SpotHeal => Effect::SpotHeal,
                 Tool::Dodge => Effect::Dodge { exposure: self.brush.exposure },
                 Tool::Burn => Effect::Burn { exposure: self.brush.exposure },
                 _ => Effect::Paint,
@@ -2250,6 +2365,7 @@ impl Photo {
             match tool {
                 Tool::Stamp => "Clone Stamp",
                 Tool::Heal => "Healing Brush",
+                Tool::SpotHeal => "Spot Healing Brush",
                 Tool::Dodge => "Dodge",
                 Tool::Burn => "Burn",
                 _ => "Brush Tool",
@@ -2486,6 +2602,7 @@ impl Photo {
                 "-" => Some(Message::ZoomOut),
                 "0" => Some(Message::ZoomTo(Zoom::Fit)),
                 "1" => Some(Message::ZoomTo(Zoom::Fixed(1.0))),
+                ";" | ":" if shift => Some(Message::ToggleSnap),
                 "o" => Some(Message::OpenDialog),
                 "n" if !shift => Some(Message::NewDocDialog),
                 "a" => Some(Message::SelectAll),
@@ -3098,7 +3215,7 @@ mod tests {
         let bottom = app.document().unwrap().layers()[0].id;
         // Reorder: drag the top layer onto the bottom row (it's unlocked by `white`).
         let _ = app.update(Message::LayerPress(top));
-        let _ = app.update(Message::DragOver(DropTarget::Layer(bottom)));
+        let _ = app.update(Message::DragOver(DropTarget::Slot(0)));
         let _ = app.update(Message::PointerReleased);
         assert_eq!(app.document().unwrap().layers()[0].id, top);
         assert!(app.layer_drag.is_none());
@@ -3233,6 +3350,87 @@ mod tests {
         assert!(app.clone_source.is_some());
         let _ = app.update(Message::SelectTool(Tool::Dodge));
         assert!(Tool::Dodge.paints() && Tool::Burn.paints() && Tool::Heal.clones());
+    }
+
+    #[test]
+    fn layer_drop_slots_land_where_the_line_is() {
+        let (mut app, _) = Photo::new();
+        white(&mut app, 20, 20);
+        let _ = app.update(Message::AddLayer);
+        let _ = app.update(Message::AddLayer);
+        let ids: Vec<LayerId> = app.document().unwrap().layers().iter().map(|l| l.id).collect();
+        // Unlock the Background so it can move.
+        app.docs[0].doc.layer_mut(ids[0]).unwrap().locked = false;
+        let order = |app: &Photo| app.document().unwrap().layers().iter().map(|l| l.id).collect::<Vec<_>>();
+        // Bottom layer into slot 2 (between the middle and the top layer).
+        let _ = app.update(Message::LayerPress(ids[0]));
+        let _ = app.update(Message::DragOver(DropTarget::Slot(2)));
+        let _ = app.update(Message::PointerReleased);
+        assert_eq!(order(&app), vec![ids[1], ids[0], ids[2]]);
+        // Top layer into slot 1 (just above the bottom one).
+        let _ = app.update(Message::LayerPress(ids[2]));
+        let _ = app.update(Message::DragOver(DropTarget::Slot(1)));
+        let _ = app.update(Message::PointerReleased);
+        assert_eq!(order(&app), vec![ids[1], ids[2], ids[0]]);
+        // Dropping right next to itself does nothing (and adds no undo step).
+        let depth = app.doc().unwrap().history.depth();
+        let _ = app.update(Message::LayerPress(ids[2]));
+        let _ = app.update(Message::DragOver(DropTarget::Slot(2)));
+        let _ = app.update(Message::PointerReleased);
+        assert_eq!(app.doc().unwrap().history.depth(), depth);
+    }
+
+    #[test]
+    fn moving_snaps_to_the_canvas_edge_and_can_be_turned_off() {
+        for on in [true, false] {
+            let (mut app, _) = Photo::new();
+            white(&mut app, 200, 200);
+            let _ = app.update(Message::AddLayer);
+            let id = app.document().unwrap().active_id().unwrap();
+            for y in 50..60 {
+                for x in 50..60 {
+                    app.docs[0].doc.layer_mut(id).unwrap().pixels.set_pixel(x, y, [0, 0, 0, 255]);
+                }
+            }
+            app.snap.on = on;
+            assert!(app.begin_transform(transform::Kind::Move));
+            let _ = app.update(Message::TransformGrab(transform::Handle::Inside, Point::new(55.0, 55.0)));
+            // Drag the box's left edge to x = 3, within snapping distance of the canvas edge.
+            let _ = app.update(Message::TransformDrag { at: Point::new(8.0, 55.0), shift: false, alt: false });
+            let t = app.transform.as_ref().unwrap();
+            let left = t.corners()[0].x;
+            if on {
+                assert_eq!(left, 0.0, "snapped to the canvas edge");
+                assert!(t.guides.contains(&(true, 0.0)));
+            } else {
+                assert_eq!(left, 3.0);
+                assert!(t.guides.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn blending_options_preview_cancel_and_ok() {
+        let (mut app, _) = Photo::new();
+        white(&mut app, 20, 20);
+        let _ = app.update(Message::AddLayer);
+        let depth = app.doc().unwrap().history.depth();
+        let layer = |app: &Photo| app.document().unwrap().active().map(|l| (l.blend, l.opacity)).unwrap();
+        let _ = app.update(Message::ShowDialog(DialogKind::BlendingOptions));
+        let _ = app.update(Message::DialogOpacity(0.4, BlendMode::Normal));
+        let _ = app.update(Message::DialogBlend(BlendMode::Screen));
+        assert_eq!(layer(&app), (BlendMode::Screen, 0.4), "previewed on the layer");
+        let _ = app.update(Message::DialogCancel);
+        assert_eq!(layer(&app), (BlendMode::Normal, 1.0), "cancel restores");
+        assert_eq!(app.doc().unwrap().history.depth(), depth);
+
+        let _ = app.update(Message::ShowDialog(DialogKind::BlendingOptions));
+        let _ = app.update(Message::DialogBlend(BlendMode::Multiply));
+        let _ = app.update(Message::DialogOk);
+        assert_eq!(layer(&app).0, BlendMode::Multiply);
+        assert_eq!(app.doc().unwrap().history.depth(), depth + 1, "one undo step");
+        let _ = app.update(Message::Undo);
+        assert_eq!(layer(&app).0, BlendMode::Normal);
     }
 
     #[test]

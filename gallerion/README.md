@@ -79,6 +79,10 @@ left-click in, right-click out.
       icon or Ctrl+F); workspaces (Essentials, Photography, Painting, Minimal); Clone Stamp
       and Healing Brush (Alt+click source), Dodge/Burn, Gradient (linear/radial), Rectangle
       and Ellipse shapes, Crop tool
+- [x] 5d: Spot Healing Brush (paint over something to remove it: patch-based fill like
+      Content-Aware), Healing Brush with seamless (Poisson) blending, View > Snap / Snap To
+      (layers, document bounds) with smart guides for Move and Free Transform, Layer >
+      Blending Options (mode, opacity, live preview), layer drag with exact drop slots
 - [ ] 6: text, PSD import, Flatpak
 
 ## App icon
@@ -117,8 +121,9 @@ Try it: `cargo run -p jd-io --example demo_doc -- demo.jdp base.jpg top.jpg`
 - Off-canvas content survives moves, transforms, paste, Place, Crop, Canvas Size and saving
   (Crop works like Photoshop with "Delete Cropped Pixels" off), but canvas rotate/flip,
   Image Size, merges and flatten only see the canvas and drop it. Shapes are
-  raster (not editable vector layers). Healing is an approximation (source texture plus the
-  destination's blurred tone), not Photoshop's solver. Pasting into a document of a different size lands at the top-left
+  raster (not editable vector layers). Spot Healing runs when the stroke ends and blocks
+  the UI briefly on big strokes (about 0.5 s for a 240 px blob). Snapping has no grid or
+  guides yet; Blending Options has no layer effects (shadow, stroke, glow) yet. Pasting into a document of a different size lands at the top-left
   (Photoshop centres it). Move and Ctrl+T refuse on a locked layer (unlock it first).
 - The clipboard is internal to Gallerion (iced only exposes text clipboard access).
 - Marching ants don't animate. Transforms use bilinear resampling (Photoshop uses bicubic by

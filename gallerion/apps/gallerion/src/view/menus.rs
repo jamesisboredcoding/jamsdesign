@@ -7,7 +7,7 @@ use jd_ui::widget::{MenuEntry, menu, menu_height};
 
 use super::chrome::MENUS;
 use crate::adjust::OpKind;
-use crate::app::{DialogKind, Message, Orient, Panel, Photo, PopupKind, Zoom};
+use crate::app::{DialogKind, Message, Orient, Panel, Photo, PopupKind, SnapTo, Zoom};
 use crate::tool::{self, Tool};
 
 const WIDTH: f32 = 260.0;
@@ -289,6 +289,18 @@ fn menu_bar(app: &Photo, i: usize) -> Vec<MenuEntry<'_, Message>> {
             item("Fit on Screen", "Ctrl+0", doc, Message::ZoomTo(Zoom::Fit)),
             item("100%", "Ctrl+1", doc, Message::ZoomTo(Zoom::Fixed(1.0))),
             Separator,
+            item("Snap", check(app.snap.on), true, Message::ToggleSnap),
+            MenuEntry::Submenu(
+                "Snap To",
+                vec![
+                    item("Layers", check(app.snap.layers), true, Message::SnapTo(SnapTo::Layers)),
+                    item("Document Bounds", check(app.snap.bounds), true, Message::SnapTo(SnapTo::Bounds)),
+                    Separator,
+                    item("All", "", true, Message::SnapTo(SnapTo::All)),
+                    item("None", "", true, Message::SnapTo(SnapTo::None)),
+                ],
+            ),
+            Separator,
             item("Full Screen", "F11", true, Message::ToggleFullscreen),
         ],
         "Help" => vec![item("About Gallerion", "", true, Message::About)],
@@ -318,6 +330,8 @@ fn layer_menu(app: &Photo) -> Vec<MenuEntry<'_, Message>> {
         .map(|(i, d)| item(d.doc.name.as_str(), "", true, Message::DuplicateInto(i)))
         .collect();
     let mut entries = vec![
+        item("Blending Options...", "", s.doc && !locked, Message::ShowDialog(DialogKind::BlendingOptions)),
+        Separator,
         item("Select Pixels", "", s.doc, Message::SelectPixels),
         Separator,
         item("Duplicate Layer", "Ctrl+J", s.doc, Message::DuplicateLayer),

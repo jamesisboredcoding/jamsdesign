@@ -42,6 +42,31 @@ struct Grab {
     params: Params,
 }
 
+/// Lines that moved or resized content snaps to (document px): vertical lines at `x`,
+/// horizontal lines at `y`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SnapLines {
+    pub x: Vec<f32>,
+    pub y: Vec<f32>,
+}
+
+impl SnapLines {
+    /// The box edges/centre (or a single point) along one axis, snapped: the shift to apply and
+    /// the line it snapped to, if any line is within `tol`.
+    fn nearest(lines: &[f32], values: &[f32], tol: f32) -> Option<(f32, f32)> {
+        let mut best: Option<(f32, f32)> = None;
+        for &v in values {
+            for &l in lines {
+                let d = l - v;
+                if d.abs() <= tol && best.is_none_or(|(b, _)| d.abs() < b.abs()) {
+                    best = Some((d, l));
+                }
+            }
+        }
+        best
+    }
+}
+
 pub struct Session {
     pub doc: u64,
     pub layer: LayerId,
@@ -56,6 +81,12 @@ pub struct Session {
     pub bounds: [f32; 4],
     pub params: Params,
     grab: Option<Grab>,
+    /// What to snap to (set by the app when the session starts).
+    pub snap: SnapLines,
+    /// Snap distance in document pixels; 0 turns snapping off.
+    pub snap_tolerance: f32,
+    /// Lines snapped to by the last drag, drawn as guides: (vertical, position).
+    pub guides: Vec<(bool, f32)>,
 }
 
 impl Session {
@@ -88,6 +119,9 @@ impl Session {
             bounds,
             params: Params { center: centre(bounds), angle: 0.0, sx: 1.0, sy: 1.0 },
             grab: None,
+            snap: SnapLines::default(),
+            snap_tolerance: 0.0,
+            guides: Vec::new(),
         })
     }
 
@@ -137,6 +171,7 @@ impl Session {
 
     pub fn release(&mut self) {
         self.grab = None;
+        self.guides.clear();
     }
 
     pub fn is_grabbing(&self) -> bool {
@@ -145,8 +180,10 @@ impl Session {
 
     /// Drags the grabbed handle to `at` (document pixels). `shift`: free aspect for corners /
     /// 15° steps for rotation. `alt`: scale around the centre.
-    pub fn drag(&mut self, at: Point, shift: bool, alt: bool) {
+    pub fn drag(&mut self, mut at: Point, shift: bool, alt: bool) {
         let Some(g) = self.grab.clone() else { return };
+        self.guides.clear();
+        let tol = self.snap_tolerance;
         let p0 = g.params;
         let half = ((self.bounds[2] - self.bounds[0]) / 2.0, (self.bounds[3] - self.bounds[1]) / 2.0);
         let (sin, cos) = p0.angle.sin_cos();
@@ -164,6 +201,24 @@ impl Session {
                     dy = dy.round();
                 }
                 self.params.center = (p0.center.0 + dx, p0.center.1 + dy);
+                if tol > 0.0 {
+                    // Snap the box's edges or centre (whichever is closest) on each axis.
+                    let c = self.corners();
+                    let (x0, x1) = (c.iter().map(|p| p.x).fold(f32::MAX, f32::min), c.iter().map(|p| p.x).fold(f32::MIN, f32::max));
+                    let (y0, y1) = (c.iter().map(|p| p.y).fold(f32::MAX, f32::min), c.iter().map(|p| p.y).fold(f32::MIN, f32::max));
+                    if let Some((d, line)) = SnapLines::nearest(&self.snap.x, &[x0, (x0 + x1) / 2.0, x1], tol) {
+                        self.params.center.0 += d;
+                        self.guides.push((true, line));
+                    }
+                    if let Some((d, line)) = SnapLines::nearest(&self.snap.y, &[y0, (y0 + y1) / 2.0, y1], tol) {
+                        self.params.center.1 += d;
+                        self.guides.push((false, line));
+                    }
+                    if self.kind == Kind::Move {
+                        self.params.center.0 = p0.center.0 + (self.params.center.0 - p0.center.0).round();
+                        self.params.center.1 = p0.center.1 + (self.params.center.1 - p0.center.1).round();
+                    }
+                }
             }
             Handle::Rotate => {
                 let (cx, cy) = p0.center;
@@ -189,6 +244,21 @@ impl Session {
                     Handle::Edge(_) => (-1.0, 0.0),
                     Handle::Inside | Handle::Rotate => unreachable!("handled above"),
                 };
+                // Snap the dragged side to nearby lines (only while the box is upright).
+                if tol > 0.0 && (p0.angle % std::f32::consts::FRAC_PI_2).abs() < 1e-4 {
+                    if ux != 0.0
+                        && let Some((d, line)) = SnapLines::nearest(&self.snap.x, &[at.x], tol)
+                    {
+                        at.x += d;
+                        self.guides.push((true, line));
+                    }
+                    if uy != 0.0
+                        && let Some((d, line)) = SnapLines::nearest(&self.snap.y, &[at.y], tol)
+                    {
+                        at.y += d;
+                        self.guides.push((false, line));
+                    }
+                }
                 let q = to_local((at.x - p0.center.0, at.y - p0.center.1));
                 // Fixed point (opposite side, or the centre with Alt), box-local.
                 let anchor = if alt { (0.0, 0.0) } else { (-ux * half.0 * p0.sx, -uy * half.1 * p0.sy) };
