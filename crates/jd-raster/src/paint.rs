@@ -34,6 +34,24 @@ pub struct BrushParams {
     pub mode: BlendMode,
     /// Remove pixels instead of painting.
     pub erase: bool,
+    /// What the brush does besides plain painting (clone, heal, dodge, burn).
+    pub effect: Effect,
+}
+
+/// Brush behaviours other than painting a colour.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum Effect {
+    #[default]
+    Paint,
+    /// Clone Stamp: paint the layer's own pixels from (dx, dy) away (source = point + offset).
+    Clone { dx: i64, dy: i64 },
+    /// Healing Brush: clone, then [`Stroke::finish`] matches the copied area's colour and
+    /// brightness to its surroundings (keeping the source's texture).
+    Heal { dx: i64, dy: i64 },
+    /// Lighten (Dodge) by up to `exposure` (0..1).
+    Dodge { exposure: f32 },
+    /// Darken (Burn) by up to `exposure` (0..1).
+    Burn { exposure: f32 },
 }
 
 impl Default for BrushParams {
@@ -49,6 +67,7 @@ impl Default for BrushParams {
             color: [0, 0, 0],
             mode: BlendMode::Normal,
             erase: false,
+            effect: Effect::Paint,
         }
     }
 }
@@ -225,18 +244,95 @@ impl Stroke {
                         if let Some(clip) = &self.clip {
                             m *= clip.get(tx * TILE_SIZE + lx, ty * TILE_SIZE + ly) as f32 / 255.0;
                         }
+                        let (x, y) = ((tx * TILE_SIZE + lx) as i64, (ty * TILE_SIZE + ly) as i64);
                         let out = if m <= 0.0 {
                             o
                         } else if p.erase {
                             let a = (o[3] as f32 * (1.0 - m) + 0.5) as u8;
                             if a == 0 { [0; 4] } else { [o[0], o[1], o[2], a] }
                         } else {
-                            let src = [color[0] * m, color[1] * m, color[2] * m, m];
-                            to_srgb8(blend::composite(p.mode, to_working(o, self.space), src), self.space)
+                            match p.effect {
+                                Effect::Paint => {
+                                    let src = [color[0] * m, color[1] * m, color[2] * m, m];
+                                    to_srgb8(blend::composite(p.mode, to_working(o, self.space), src), self.space)
+                                }
+                                Effect::Clone { dx, dy } | Effect::Heal { dx, dy } => {
+                                    // Source pixels come from the layer as it was when the stroke began.
+                                    let s = self.original.pixel_at(x + dx, y + dy);
+                                    let mut src = to_working(s, self.space);
+                                    for c in &mut src {
+                                        *c *= m;
+                                    }
+                                    to_srgb8(blend::composite(p.mode, to_working(o, self.space), src), self.space)
+                                }
+                                Effect::Dodge { exposure } | Effect::Burn { exposure } => {
+                                    let k = (exposure * m).clamp(0.0, 1.0);
+                                    let dodge = matches!(p.effect, Effect::Dodge { .. });
+                                    let f = |v: u8| {
+                                        let v = v as f32 / 255.0;
+                                        let r = if dodge { v + (1.0 - v) * k * v.sqrt() } else { v * (1.0 - k * (1.0 - v).sqrt()) };
+                                        (r * 255.0 + 0.5).clamp(0.0, 255.0) as u8
+                                    };
+                                    [f(o[0]), f(o[1]), f(o[2]), o[3]]
+                                }
+                            }
                         };
                         data[i * 4..i * 4 + 4].copy_from_slice(&out);
                     }
                 }
+            }
+        }
+    }
+}
+
+impl Stroke {
+    /// Bounds of everything this stroke touched: x0, y0, x1, y1.
+    fn touched(&self) -> Option<Region> {
+        let ts = TILE_SIZE;
+        self.mask.keys().fold(None, |acc, &(tx, ty)| {
+            let r = [tx * ts, ty * ts, ((tx + 1) * ts).min(self.width), ((ty + 1) * ts).min(self.height)];
+            Some(match acc {
+                None => r,
+                Some(a) => [a[0].min(r[0]), a[1].min(r[1]), a[2].max(r[2]), a[3].max(r[3])],
+            })
+        })
+    }
+
+    /// Ends the stroke. For the Healing Brush this blends the cloned pixels into their
+    /// surroundings: the result keeps the source's fine detail but takes the destination's
+    /// broad colour and brightness (`result = src + blur(dst) - blur(src)`).
+    pub fn finish(self, doc: &mut Document) {
+        let Effect::Heal { dx, dy } = self.params.effect else { return };
+        let Some([x0, y0, x1, y1]) = self.touched() else { return };
+        let radius = (self.params.size / 4.0).max(2.0);
+        let margin = (radius * 3.0).ceil() as u32 + 1;
+        let (w, h) = (self.width, self.height);
+        let grow = [x0.saturating_sub(margin), y0.saturating_sub(margin), (x1 + margin).min(w), (y1 + margin).min(h)];
+        let area = Selection::rect(w, h, grow[0] as f32, grow[1] as f32, grow[2] as f32, grow[3] as f32);
+        let blur = crate::filter::Filter::GaussianBlur { radius };
+        // Blurred destination (before the stroke) and blurred, shifted source.
+        let dst_low = crate::filter::apply(&self.original, &blur, Some(&area));
+        let shifted = crate::transform::place(&self.original, w, h, -dx, -dy);
+        let src_low = crate::filter::apply(&shifted, &blur, Some(&area));
+        let Some(layer) = doc.layer_mut(self.layer) else { return };
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let Some(mask) = self.mask.get(&(x / TILE_SIZE, y / TILE_SIZE)) else { continue };
+                let mut m = mask[((y % TILE_SIZE) * TILE_SIZE + x % TILE_SIZE) as usize] * self.params.opacity;
+                if let Some(clip) = &self.clip {
+                    m *= clip.get(x, y) as f32 / 255.0;
+                }
+                if m <= 0.0 {
+                    continue;
+                }
+                let (o, s, dl, sl) = (self.original.pixel(x, y), shifted.pixel(x, y), dst_low.pixel(x, y), src_low.pixel(x, y));
+                let mut out = o;
+                for c in 0..3 {
+                    let healed = (s[c] as f32 + dl[c] as f32 - sl[c] as f32).clamp(0.0, 255.0);
+                    out[c] = (o[c] as f32 * (1.0 - m) + healed * m + 0.5) as u8;
+                }
+                out[3] = (o[3] as f32 * (1.0 - m) + s[3].max(o[3]) as f32 * m + 0.5) as u8;
+                layer.pixels.set_pixel(x, y, out);
             }
         }
     }
@@ -332,6 +428,53 @@ mod tests {
         s.add_point(&mut doc, 32.0, 32.0, 1.0);
         assert_eq!(doc.layers()[0].pixels.pixel(28, 32)[0], 0);
         assert_eq!(doc.layers()[0].pixels.pixel(36, 32)[0], 255);
+    }
+
+    #[test]
+    fn clone_copies_from_the_offset() {
+        let mut px = [255u8, 255, 255, 255].repeat(64 * 64);
+        for y in 0..64 {
+            for x in 0..10 {
+                px[(y * 64 + x) * 4..(y * 64 + x) * 4 + 4].copy_from_slice(&[200, 0, 0, 255]);
+            }
+        }
+        let mut doc = Document::from_rgba8("t", 64, 64, &px);
+        let p = BrushParams { size: 6.0, hardness: 1.0, effect: Effect::Clone { dx: -40, dy: 0 }, ..params() };
+        let mut s = Stroke::begin(&doc, p).unwrap();
+        s.add_point(&mut doc, 45.0, 30.0, 1.0);
+        assert_eq!(doc.layers()[0].pixels.pixel(45, 30), [200, 0, 0, 255], "red from 40px to the left");
+    }
+
+    #[test]
+    fn dodge_lightens_and_burn_darkens() {
+        for (effect, lighter) in [(Effect::Dodge { exposure: 0.5 }, true), (Effect::Burn { exposure: 0.5 }, false)] {
+            let mut doc = Document::from_rgba8("t", 32, 32, &[100, 100, 100, 255].repeat(32 * 32));
+            let mut s = Stroke::begin(&doc, BrushParams { size: 8.0, effect, ..params() }).unwrap();
+            s.add_point(&mut doc, 16.0, 16.0, 1.0);
+            let v = doc.layers()[0].pixels.pixel(16, 16)[0];
+            assert_eq!(v > 100, lighter, "{effect:?}: {v}");
+        }
+    }
+
+    #[test]
+    fn heal_takes_destination_tone_with_source_texture() {
+        // Left half dark with a bright speck pattern (texture), right half mid grey.
+        let mut px = vec![0u8; 80 * 40 * 4];
+        for y in 0..40 {
+            for x in 0..80 {
+                let v = if x < 40 { if (x + y) % 4 == 0 { 60 } else { 20 } } else { 150 };
+                px[(y * 80 + x) * 4..(y * 80 + x) * 4 + 4].copy_from_slice(&[v, v, v, 255]);
+            }
+        }
+        let mut doc = Document::from_rgba8("t", 80, 40, &px);
+        let p = BrushParams { size: 10.0, hardness: 1.0, effect: Effect::Heal { dx: -40, dy: 0 }, ..params() };
+        let mut s = Stroke::begin(&doc, p).unwrap();
+        s.add_point(&mut doc, 60.0, 20.0, 1.0);
+        let cloned = doc.layers()[0].pixels.pixel(60, 20)[0];
+        assert!(cloned < 70, "while painting it's a plain clone ({cloned})");
+        s.finish(&mut doc);
+        let healed = doc.layers()[0].pixels.pixel(60, 20)[0];
+        assert!(healed > 110, "after finishing it matches the grey around it ({healed})");
     }
 
     #[test]

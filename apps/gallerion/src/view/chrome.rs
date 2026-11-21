@@ -264,7 +264,14 @@ pub fn options_bar(app: &Photo) -> Element<'_, Message> {
             .push(percent_slider("Opacity:", b.opacity, Message::BrushOpacity))
             .push(percent_slider("Flow:", b.flow, Message::BrushFlow))
             .push(percent_slider("Smoothing:", b.smoothing, Message::BrushSmoothing))
-            .push(vline(20.0, BORDER_SUBTLE))
+            .push(vline(20.0, BORDER_SUBTLE));
+        if matches!(tool, Tool::Dodge | Tool::Burn) {
+            bar = bar.push(percent_slider("Exposure:", b.exposure, Message::BrushExposure)).push(vline(20.0, BORDER_SUBTLE));
+        }
+        if tool.clones() {
+            bar = bar.push(label(if app.clone_source.is_some() { "Alt+click: new source" } else { "Alt+click to set the source" }));
+        }
+        bar = bar
             .push(toggle(
                 "Size",
                 b.pressure_size,
@@ -277,6 +284,22 @@ pub fn options_bar(app: &Photo) -> Element<'_, Message> {
                 Message::PressureOpacity(!b.pressure_opacity),
                 "Pen pressure controls opacity",
             ));
+    } else if tool == Tool::Gradient {
+        use jd_raster::gradient::Shape;
+        bar = bar
+            .push(toggle("Linear", app.gradient_shape == Shape::Linear, Message::GradientShape(Shape::Linear), "Linear gradient"))
+            .push(toggle("Radial", app.gradient_shape == Shape::Radial, Message::GradientShape(Shape::Radial), "Radial gradient"))
+            .push(vline(20.0, BORDER_SUBTLE))
+            .push(percent_slider("Opacity:", app.brush.opacity, Message::BrushOpacity))
+            .push(label("Drag: foreground to background colour · Shift snaps to 45°"));
+    } else if tool.is_shape() {
+        bar = bar.push(label("Drag to draw a filled shape on a new layer, in the foreground colour · Shift: square · Alt: from centre"));
+    } else if tool == Tool::Crop {
+        bar = bar.push(label(if app.crop_box.is_some() {
+            "Enter to crop · Esc to cancel · Drag again for a new box"
+        } else {
+            "Drag a crop box (Shift: square)"
+        }));
     } else {
         bar = bar.push(label(format!("{}: options for this tool come with its implementation", tool.name())));
     }

@@ -6,7 +6,7 @@ use iced::widget::{image, operation};
 use iced::window::{self, Direction};
 use iced::{Point, Rectangle, Size, Subscription, Task, Vector, event};
 use jd_core::{Hsv, Rgba};
-use jd_raster::paint::{BrushParams, Stroke};
+use jd_raster::paint::{BrushParams, Effect, Stroke};
 use jd_raster::selection::{self, Combine, Selection};
 use jd_raster::{BlendMode, BlendSpace, Document, History, LayerId, TileGrid, TileId};
 
@@ -39,6 +39,8 @@ pub struct BrushSettings {
     pub mode: BlendMode,
     pub pressure_size: bool,
     pub pressure_opacity: bool,
+    /// Dodge / Burn strength, 0..1.
+    pub exposure: f32,
 }
 
 /// A brush/eraser stroke in progress.
@@ -350,6 +352,16 @@ pub struct Photo {
     pub palette: Option<String>,
     /// Pointer over the dock, to place the layer right-click menu.
     pub dock_pointer: Point,
+    /// Clone Stamp / Healing Brush source (document px), set with Alt+click.
+    pub clone_source: Option<Point>,
+    /// Source minus destination, fixed by the first stroke after setting a source (aligned,
+    /// like Photoshop's default).
+    pub clone_offset: Option<(i64, i64)>,
+    pub gradient_shape: jd_raster::gradient::Shape,
+    /// The Crop tool's box (document px), waiting for Enter.
+    pub crop_box: Option<[f32; 4]>,
+    /// Keyboard modifiers, tracked for the pen (which has no modifier state of its own).
+    pub modifiers: keyboard::Modifiers,
     /// Cursor position in document pixels, when over the canvas.
     pub cursor: Option<Point>,
     /// Space bar held: temporary Hand tool, like Photoshop.
@@ -435,6 +447,15 @@ pub enum Message {
     AdjustReset,
     AdjustOk,
     AdjustCancel,
+
+    // Tools
+    SetCloneSource(Point),
+    BrushExposure(f32),
+    GradientShape(jd_raster::gradient::Shape),
+    GradientDraw { from: Point, to: Point },
+    ShapeDraw { ellipse: bool, rect: [f32; 4] },
+    CropBox(Option<[f32; 4]>),
+    CommitCrop,
 
     // Layers panel right-click menu
     OpenLayerMenu(LayerId),
@@ -628,6 +649,7 @@ impl Photo {
                 mode: BlendMode::Normal,
                 pressure_size: true,
                 pressure_opacity: false,
+                exposure: 0.5,
             },
             viewport: Size::new(1200.0, 800.0),
             canvas_bounds: Rectangle::new(Point::ORIGIN, Size::new(1200.0, 800.0)),
@@ -648,6 +670,11 @@ impl Photo {
             workspace: Workspace::Essentials,
             palette: None,
             dock_pointer: Point::ORIGIN,
+            clone_source: None,
+            clone_offset: None,
+            gradient_shape: jd_raster::gradient::Shape::Linear,
+            crop_box: None,
+            modifiers: keyboard::Modifiers::empty(),
             cursor: None,
             space_held: false,
             color_tab: 0,
@@ -1487,6 +1514,9 @@ impl Photo {
             }
 
             Message::SelectTool(t) => {
+                if t != Tool::Crop {
+                    self.crop_box = None;
+                }
                 self.tool = t;
                 self.slot_tools[t.slot()] = t;
                 self.popup = None;
@@ -1514,6 +1544,62 @@ impl Photo {
                 return self.update(*m);
             }
             Message::DockPointer(p) => self.dock_pointer = p,
+            Message::SetCloneSource(at) => {
+                self.clone_source = Some(at);
+                self.clone_offset = None;
+                self.info(format!("Clone source set at {:.0}, {:.0}", at.x, at.y));
+            }
+            Message::BrushExposure(v) => self.brush.exposure = v,
+            Message::GradientShape(shape) => self.gradient_shape = shape,
+            Message::GradientDraw { from, to } => {
+                if self.check_layer_editable() {
+                    let g = jd_raster::gradient::Gradient {
+                        shape: self.gradient_shape,
+                        from: (from.x, from.y),
+                        to: (to.x, to.y),
+                        start: self.fg.to_rgba().to_srgb8(),
+                        end: self.bg.to_rgba().to_srgb8(),
+                        opacity: self.brush.opacity,
+                        mode: self.brush.mode,
+                    };
+                    self.edit("Gradient", None, |doc| {
+                        let (sel, space) = (doc.selection.clone(), doc.blend_space);
+                        let Some(id) = doc.active_id() else { return false };
+                        doc.layer_mut(id)
+                            .map(|l| l.pixels = jd_raster::gradient::apply(&l.pixels, &g, sel.as_ref(), space))
+                            .is_some()
+                    });
+                }
+            }
+            Message::ShapeDraw { ellipse, rect: [x0, y0, x1, y1] } => {
+                let color = self.fg.to_rgba().to_srgb8();
+                let label = if ellipse { "Ellipse" } else { "Rectangle" };
+                self.edit(label, None, |doc| {
+                    let (w, h) = (doc.width, doc.height);
+                    let mask = if ellipse { Selection::ellipse(w, h, x0, y0, x1, y1) } else { Selection::rect(w, h, x0, y0, x1, y1) };
+                    if mask.is_empty() {
+                        return false;
+                    }
+                    // A new layer per shape, like Photoshop's shape layers (raster for now).
+                    let n = doc.layers().len();
+                    let id = doc.add_layer(format!("{label} {n}"));
+                    doc.layer_mut(id).map(|l| selection::fill(&mut l.pixels, &mask, color)).is_some()
+                });
+            }
+            Message::CropBox(b) => self.crop_box = b,
+            Message::CommitCrop => {
+                if let Some([x0, y0, x1, y1]) = self.crop_box.take() {
+                    self.edit("Crop", None, |doc| {
+                        let r = [x0.min(x1).round().max(0.0) as u32, y0.min(y1).round().max(0.0) as u32, x0.max(x1).round().max(0.0) as u32, y0.max(y1).round().max(0.0) as u32];
+                        let r = [r[0], r[1], r[2].min(doc.width), r[3].min(doc.height)];
+                        if r[2] <= r[0] || r[3] <= r[1] || r == [0, 0, doc.width, doc.height] {
+                            return false;
+                        }
+                        doc.crop(r);
+                        true
+                    });
+                }
+            }
             Message::OpenLayerMenu(id) => {
                 let _ = self.update(Message::SelectLayer(id));
                 // The dock is the rightmost 300px, below the toolbar line.
@@ -2031,6 +2117,8 @@ impl Photo {
                 | Message::MenuTitle(_)
                 | Message::PopupSub(_)
                 | Message::DockPointer(_)
+                | Message::CropBox(_)
+                | Message::SetCloneSource(_)
                 | Message::OpenPalette
                 | Message::PaletteInput(_)
                 | Message::ClosePalette
@@ -2104,7 +2192,7 @@ impl Photo {
         session.commit(&mut d.doc);
     }
 
-    fn brush_params(&self, erase: bool) -> BrushParams {
+    fn brush_params(&self, erase: bool, effect: Effect) -> BrushParams {
         let b = &self.brush;
         BrushParams {
             size: b.size,
@@ -2117,6 +2205,7 @@ impl Photo {
             color: self.fg.to_rgba().to_srgb8(),
             mode: b.mode,
             erase,
+            effect,
         }
     }
 
@@ -2133,9 +2222,39 @@ impl Photo {
             self.error("The layer is hidden");
             return;
         }
-        let params = self.brush_params(erase);
+        let tool = self.effective_tool();
+        let effect = if erase {
+            Effect::Paint
+        } else {
+            match tool {
+                Tool::Stamp | Tool::Heal => {
+                    let Some(src) = self.clone_source else {
+                        self.error("Alt+click to set a source point first");
+                        return;
+                    };
+                    let (dx, dy) = *self
+                        .clone_offset
+                        .get_or_insert(((src.x - at.x).round() as i64, (src.y - at.y).round() as i64));
+                    if tool == Tool::Stamp { Effect::Clone { dx, dy } } else { Effect::Heal { dx, dy } }
+                }
+                Tool::Dodge => Effect::Dodge { exposure: self.brush.exposure },
+                Tool::Burn => Effect::Burn { exposure: self.brush.exposure },
+                _ => Effect::Paint,
+            }
+        };
+        let params = self.brush_params(erase, effect);
         let from = if line { self.doc().and_then(|d| d.last_paint) } else { None };
-        let label = if erase { "Eraser" } else { "Brush Tool" };
+        let label = if erase {
+            "Eraser"
+        } else {
+            match tool {
+                Tool::Stamp => "Clone Stamp",
+                Tool::Heal => "Healing Brush",
+                Tool::Dodge => "Dodge",
+                Tool::Burn => "Burn",
+                _ => "Brush Tool",
+            }
+        };
         let Some(d) = self.doc_mut() else { return };
         let Some(mut stroke) = Stroke::begin(&d.doc, params) else { return };
         d.history.record(label, &d.doc, None);
@@ -2167,6 +2286,8 @@ impl Photo {
         // Catch the smoothed line up with where the input actually stopped.
         let (at, pressure) = s.last_raw;
         s.stroke.add_point(&mut self.docs[i].doc, at.x, at.y, pressure);
+        // Healing blends its result into the surroundings once the stroke is done.
+        s.stroke.finish(&mut self.docs[i].doc);
         self.docs[i].last_paint = Some(at);
     }
 
@@ -2198,6 +2319,9 @@ impl Photo {
             }
             Phase::Down if over_canvas => {
                 if let Some(at) = self.to_doc(local) {
+                    if tool.clones() && self.modifiers.alt() && !busy {
+                        return self.update(Message::SetCloneSource(at));
+                    }
                     if tool == Tool::Eyedropper && !busy {
                         return self.update(Message::PickColor(at));
                     }
@@ -2284,6 +2408,10 @@ impl Photo {
 
     /// Photoshop-style shortcuts.
     fn on_key(&mut self, event: keyboard::Event) -> Task<Message> {
+        if let keyboard::Event::ModifiersChanged(m) = event {
+            self.modifiers = m;
+            return Task::none();
+        }
         let (key, modifiers, pressed) = match event {
             keyboard::Event::KeyPressed { key, modifiers, .. } => (key, modifiers, true),
             keyboard::Event::KeyReleased { key, modifiers, .. } => (key, modifiers, false),
@@ -2336,6 +2464,13 @@ impl Photo {
                 Key::Named(Named::Enter) => self.update(Message::CreateNewDoc),
                 _ => Task::none(),
             };
+        }
+        if self.crop_box.is_some() {
+            match key.as_ref() {
+                Key::Named(Named::Escape) => return self.update(Message::CropBox(None)),
+                Key::Named(Named::Enter) => return self.update(Message::CommitCrop),
+                _ => {}
+            }
         }
         if self.transform.is_some() {
             match key.as_ref() {
@@ -3063,6 +3198,41 @@ mod tests {
         assert!(!app.panels.color && !app.panels.layers);
         let _ = app.update(Message::SetWorkspace(Workspace::Essentials));
         assert!(app.panels.color && app.panels.layers && app.panels.properties);
+    }
+
+    #[test]
+    fn gradient_shape_and_crop_tools() {
+        let (mut app, _) = Photo::new();
+        white(&mut app, 40, 30);
+        let _ = app.update(Message::AddLayer);
+        let _ = app.update(Message::GradientDraw { from: Point::new(0.0, 0.0), to: Point::new(40.0, 0.0) });
+        let layer = app.document().unwrap().active().unwrap();
+        assert!(layer.pixels.pixel(2, 5)[0] < layer.pixels.pixel(38, 5)[0], "foreground to background");
+
+        let before = app.document().unwrap().layers().len();
+        let _ = app.update(Message::ShapeDraw { ellipse: true, rect: [5.0, 5.0, 25.0, 25.0] });
+        let doc = app.document().unwrap();
+        assert_eq!(doc.layers().len(), before + 1, "a shape gets its own layer");
+        assert_eq!(doc.active().unwrap().pixels.pixel(15, 15)[3], 255);
+        assert_eq!(doc.active().unwrap().pixels.pixel(5, 5)[3], 0, "ellipse corner is empty");
+
+        let _ = app.update(Message::SelectTool(Tool::Crop));
+        let _ = app.update(Message::CropBox(Some([10.0, 5.0, 30.0, 25.0])));
+        let _ = app.update(Message::CommitCrop);
+        let doc = app.document().unwrap();
+        assert_eq!((doc.width, doc.height), (20, 20));
+        assert!(app.crop_box.is_none());
+    }
+
+    #[test]
+    fn clone_stamp_needs_a_source_then_paints_from_it() {
+        let (mut app, _) = Photo::new();
+        white(&mut app, 64, 64);
+        let _ = app.update(Message::SelectTool(Tool::Stamp));
+        let _ = app.update(Message::SetCloneSource(Point::new(10.0, 10.0)));
+        assert!(app.clone_source.is_some());
+        let _ = app.update(Message::SelectTool(Tool::Dodge));
+        assert!(Tool::Dodge.paints() && Tool::Burn.paints() && Tool::Heal.clones());
     }
 
     #[test]

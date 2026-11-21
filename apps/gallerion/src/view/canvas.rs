@@ -110,6 +110,12 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
             || app.confirm.is_some()
             || app.dialog.is_some()
             || app.palette.is_some(),
+        crop_box: app.crop_box,
+        // Where the clone source is: the set point, or (once aligned) cursor + offset.
+        clone_source: app.effective_tool().clones().then(|| match (app.clone_offset, app.cursor) {
+            (Some((dx, dy)), Some(c)) => Some(Point::new(c.x + dx as f32, c.y + dy as f32)),
+            _ => app.clone_source,
+        }).flatten(),
     })
     .width(Fill)
     .height(Fill);
@@ -269,6 +275,8 @@ struct Overlay<'a> {
     /// A dialog or menu is open over the canvas: show the normal arrow (the canvas would
     /// otherwise hide the cursor under it for brush tools) and no brush outline.
     covered: bool,
+    crop_box: Option<[f32; 4]>,
+    clone_source: Option<Point>,
 }
 
 /// A marquee or lasso being dragged.
@@ -301,6 +309,8 @@ struct DragState {
     moving: bool,
     transforming: bool,
     select: Option<SelectDrag>,
+    /// Gradient line, shape box or crop box being dragged (document px).
+    box_drag: Option<(Point, Point)>,
     modifiers: keyboard::Modifiers,
 }
 
@@ -490,6 +500,12 @@ impl canvas::Program<Message> for Overlay<'_> {
                         Some(canvas::Action::request_redraw().and_capture())
                     }
                     Tool::Wand => publish(Message::Wand { at: doc, combine: self.combine(m) }),
+                    Tool::Gradient | Tool::Shape | Tool::EllipseShape | Tool::Crop => {
+                        state.box_drag = Some((doc, doc));
+                        Some(canvas::Action::request_redraw().and_capture())
+                    }
+                    // Alt+click sets the Clone Stamp / Healing Brush source (also with the pen).
+                    t if t.clones() && m.alt() => publish(Message::SetCloneSource(doc)),
                     // The pen paints through its own path (with pressure); its pointer twin mustn't.
                     _ if self.pen_paints && crate::tablet::pen_near() => None,
                     Tool::Eyedropper => {
@@ -520,6 +536,17 @@ impl canvas::Program<Message> for Overlay<'_> {
                 }
                 if std::mem::take(&mut state.transforming) {
                     return publish(Message::TransformRelease);
+                }
+                if let Some((a, b)) = state.box_drag.take() {
+                    let moved = ((b.x - a.x).abs() + (b.y - a.y).abs()) * self.zoom > 2.0;
+                    if !moved {
+                        return Some(canvas::Action::request_redraw().and_capture());
+                    }
+                    return publish(match self.tool {
+                        Tool::Gradient => Message::GradientDraw { from: a, to: snap_45(a, b, m.shift()) },
+                        Tool::Crop => Message::CropBox(Some(drag_box(a, b, m.shift(), m.alt()))),
+                        t => Message::ShapeDraw { ellipse: t == Tool::EllipseShape, rect: drag_box(a, b, m.shift(), m.alt()) },
+                    });
                 }
                 if let Some(d) = state.select.take() {
                     let moved = (d.current.x - d.start.x).abs() * self.zoom > 2.0
@@ -559,6 +586,10 @@ impl canvas::Program<Message> for Overlay<'_> {
                 }
                 if state.transforming {
                     return publish(Message::TransformDrag { at: doc, shift: m.shift(), alt: m.alt() });
+                }
+                if let Some((_, b)) = &mut state.box_drag {
+                    *b = doc;
+                    return Some(canvas::Action::request_redraw().and_capture());
                 }
                 if let Some(d) = &mut state.select {
                     d.current = doc;
@@ -652,6 +683,58 @@ impl canvas::Program<Message> for Overlay<'_> {
             frame.stroke(&start, Stroke::default().with_width(1.5).with_color(ACCENT_PRIMARY));
         }
 
+        // Gradient line / shape outline / crop box being dragged.
+        if let Some((a, b)) = state.box_drag {
+            let m = state.modifiers;
+            match self.tool {
+                Tool::Gradient => {
+                    let (p, q) = (self.to_screen(a), self.to_screen(snap_45(a, b, m.shift())));
+                    frame.stroke(&Path::line(p, q), Stroke::default().with_width(3.0).with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.5)));
+                    frame.stroke(&Path::line(p, q), Stroke::default().with_width(1.0).with_color(Color::WHITE));
+                    for c in [p, q] {
+                        frame.fill(&Path::circle(c, 4.0), Color::WHITE);
+                    }
+                }
+                Tool::Crop => crop_shade(&mut frame, bounds, self, drag_box(a, b, m.shift(), m.alt())),
+                t => {
+                    let [x0, y0, x1, y1] = drag_box(a, b, m.shift(), m.alt());
+                    let (p, q) = (self.to_screen(Point::new(x0, y0)), self.to_screen(Point::new(x1, y1)));
+                    let size = iced::Size::new(q.x - p.x, q.y - p.y);
+                    let path = if t == Tool::EllipseShape {
+                        Path::new(|b| {
+                            b.ellipse(canvas::path::arc::Elliptical {
+                                center: Point::new(p.x + size.width / 2.0, p.y + size.height / 2.0),
+                                radii: Vector::new(size.width / 2.0, size.height / 2.0),
+                                rotation: iced::Radians(0.0),
+                                start_angle: iced::Radians(0.0),
+                                end_angle: iced::Radians(std::f32::consts::TAU),
+                            })
+                        })
+                    } else {
+                        Path::rectangle(p, size)
+                    };
+                    frame.stroke(&path, Stroke::default().with_width(1.0).with_color(ACCENT_PRIMARY));
+                }
+            }
+        } else if let Some(b) = self.crop_box {
+            crop_shade(&mut frame, bounds, self, b);
+        }
+
+        // Clone source marker (a small crosshair).
+        if let Some(src) = self.clone_source
+            && !self.covered
+        {
+            let c = self.to_screen(src);
+            let cross = Path::new(|b| {
+                b.move_to(c - Vector::new(6.0, 0.0));
+                b.line_to(c + Vector::new(6.0, 0.0));
+                b.move_to(c - Vector::new(0.0, 6.0));
+                b.line_to(c + Vector::new(0.0, 6.0));
+            });
+            frame.stroke(&cross, Stroke::default().with_width(3.0).with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.5)));
+            frame.stroke(&cross, Stroke::default().with_width(1.0).with_color(Color::WHITE));
+        }
+
         // Free Transform box and handles.
         if let Some(t) = &self.transform
             && t.kind == Kind::Free
@@ -737,6 +820,42 @@ impl canvas::Program<Message> for Overlay<'_> {
             _ => mouse::Interaction::Crosshair,
         }
     }
+}
+
+/// Box from a drag: Shift makes it square, Alt draws from the centre.
+fn drag_box(a: Point, b: Point, square: bool, centred: bool) -> [f32; 4] {
+    let (mut dx, mut dy) = (b.x - a.x, b.y - a.y);
+    if square {
+        let s = dx.abs().max(dy.abs());
+        dx = s.copysign(dx);
+        dy = s.copysign(dy);
+    }
+    let (x0, y0, x1, y1) = if centred { (a.x - dx, a.y - dy, a.x + dx, a.y + dy) } else { (a.x, a.y, a.x + dx, a.y + dy) };
+    [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)]
+}
+
+/// With Shift, snaps the line from `a` to `b` to 45 degree steps.
+fn snap_45(a: Point, b: Point, on: bool) -> Point {
+    if !on {
+        return b;
+    }
+    let (dx, dy) = (b.x - a.x, b.y - a.y);
+    let len = (dx * dx + dy * dy).sqrt();
+    let step = std::f32::consts::FRAC_PI_4;
+    let angle = (dy.atan2(dx) / step).round() * step;
+    Point::new(a.x + angle.cos() * len, a.y + angle.sin() * len)
+}
+
+/// Darkens everything outside the crop box and outlines it.
+fn crop_shade(frame: &mut Frame, bounds: Rectangle, o: &Overlay<'_>, [x0, y0, x1, y1]: [f32; 4]) {
+    let (p, q) = (o.to_screen(Point::new(x0, y0)), o.to_screen(Point::new(x1, y1)));
+    let shade = Color::from_rgba(0.0, 0.0, 0.0, 0.55);
+    let (w, h) = (bounds.width, bounds.height);
+    frame.fill_rectangle(Point::ORIGIN, iced::Size::new(w, p.y.max(0.0)), shade);
+    frame.fill_rectangle(Point::new(0.0, q.y), iced::Size::new(w, (h - q.y).max(0.0)), shade);
+    frame.fill_rectangle(Point::new(0.0, p.y), iced::Size::new(p.x.max(0.0), (q.y - p.y).max(0.0)), shade);
+    frame.fill_rectangle(Point::new(q.x, p.y), iced::Size::new((w - q.x).max(0.0), (q.y - p.y).max(0.0)), shade);
+    frame.stroke(&Path::rectangle(p, iced::Size::new(q.x - p.x, q.y - p.y)), Stroke::default().with_width(1.0).with_color(Color::WHITE));
 }
 
 /// Edges of a closed polygon.

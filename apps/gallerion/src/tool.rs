@@ -16,10 +16,12 @@ pub enum Tool {
     Eraser,
     Gradient,
     Dodge,
+    Burn,
     Pen,
     Type,
     Select,
     Shape,
+    EllipseShape,
     Hand,
     Zoom,
 }
@@ -41,9 +43,9 @@ pub const GROUPS: &[&[&[Tool]]] = &[
         &[Tool::Stamp],
         &[Tool::Eraser],
         &[Tool::Gradient],
-        &[Tool::Dodge],
+        &[Tool::Dodge, Tool::Burn],
     ],
-    &[&[Tool::Pen], &[Tool::Type], &[Tool::Select], &[Tool::Shape]],
+    &[&[Tool::Pen], &[Tool::Type], &[Tool::Select], &[Tool::Shape, Tool::EllipseShape]],
     &[&[Tool::Hand], &[Tool::Zoom]],
 ];
 
@@ -69,10 +71,12 @@ impl Tool {
             Tool::Eraser => Icon::Eraser,
             Tool::Gradient => Icon::Gradient,
             Tool::Dodge => Icon::Dodge,
+            Tool::Burn => Icon::Burn,
             Tool::Pen => Icon::Pen,
             Tool::Type => Icon::Type,
             Tool::Select => Icon::Select,
             Tool::Shape => Icon::Shape,
+            Tool::EllipseShape => Icon::EllipseShape,
             Tool::Hand => Icon::Hand,
             Tool::Zoom => Icon::Zoom,
         }
@@ -94,10 +98,12 @@ impl Tool {
             Tool::Eraser => "Eraser",
             Tool::Gradient => "Gradient",
             Tool::Dodge => "Dodge",
+            Tool::Burn => "Burn",
             Tool::Pen => "Pen",
             Tool::Type => "Type",
             Tool::Select => "Path Selection",
             Tool::Shape => "Rectangle",
+            Tool::EllipseShape => "Ellipse",
             Tool::Hand => "Hand",
             Tool::Zoom => "Zoom",
         }
@@ -120,10 +126,12 @@ impl Tool {
             Tool::Eraser => "Eraser Tool (E)",
             Tool::Gradient => "Gradient Tool (G)",
             Tool::Dodge => "Dodge Tool (O)",
+            Tool::Burn => "Burn Tool (O)",
             Tool::Pen => "Pen Tool (P)",
             Tool::Type => "Type Tool (T)",
             Tool::Select => "Path Selection Tool (A)",
             Tool::Shape => "Rectangle Tool (U)",
+            Tool::EllipseShape => "Ellipse Tool (U)",
             Tool::Hand => "Hand Tool (H)",
             Tool::Zoom => "Zoom Tool (Z)",
         }
@@ -143,11 +151,11 @@ impl Tool {
             Tool::Stamp => 's',
             Tool::Eraser => 'e',
             Tool::Gradient => 'g',
-            Tool::Dodge => 'o',
+            Tool::Dodge | Tool::Burn => 'o',
             Tool::Pen => 'p',
             Tool::Type => 't',
             Tool::Select => 'a',
-            Tool::Shape => 'u',
+            Tool::Shape | Tool::EllipseShape => 'u',
             Tool::Hand => 'h',
             Tool::Zoom => 'z',
         }
@@ -163,14 +171,23 @@ impl Tool {
         slots().position(|s| s[0].shortcut() == c)
     }
 
-    /// Tools that paint with the brush engine today (others with brush options come later).
+    /// Tools that paint with the brush engine.
     pub fn paints(self) -> bool {
-        matches!(self, Tool::Brush | Tool::Eraser)
+        matches!(self, Tool::Brush | Tool::Eraser | Tool::Stamp | Tool::Heal | Tool::Dodge | Tool::Burn)
     }
 
     /// Tools whose options bar shows brush settings.
     pub fn uses_brush(self) -> bool {
-        matches!(self, Tool::Brush | Tool::Eraser | Tool::Stamp | Tool::Heal | Tool::Dodge)
+        self.paints()
+    }
+
+    /// Clone Stamp and Healing Brush paint from a source set with Alt+click.
+    pub fn clones(self) -> bool {
+        matches!(self, Tool::Stamp | Tool::Heal)
+    }
+
+    pub fn is_shape(self) -> bool {
+        matches!(self, Tool::Shape | Tool::EllipseShape)
     }
 
     pub fn is_selection(self) -> bool {
