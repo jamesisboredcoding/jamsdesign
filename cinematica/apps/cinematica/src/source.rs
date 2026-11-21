@@ -71,10 +71,13 @@ pub struct SourceMonitor {
     sound: SequencePlayer,
     sound_clip: Option<(Sequence, HashMap<MediaId, PathBuf>)>,
     with_sound: bool,
+    /// No pictures: the monitor shows the waveform and only `sound` plays it.
+    pub audio_only: bool,
 }
 
 /// What the Source monitor needs to know about a clip besides its path.
 pub struct ClipInfo {
+    pub has_video: bool,
     pub has_audio: bool,
     pub rate: FrameRate,
     pub duration: f64,
@@ -99,6 +102,7 @@ impl SourceMonitor {
             sound: SequencePlayer::new(),
             sound_clip: None,
             with_sound: false,
+            audio_only: false,
         }
     }
 
@@ -113,7 +117,7 @@ impl SourceMonitor {
                 duration: info.rate.snap(from_seconds(info.duration)).max(info.rate.frame()),
                 media_duration: None,
             };
-            let _ = seq.overwrite(0, Some(&part), Some(&part));
+            let _ = seq.overwrite(0, info.has_video.then_some(&part), Some(&part));
             (seq, HashMap::from([(id, path.clone())]))
         });
         self.item = Some(id);
@@ -121,8 +125,19 @@ impl SourceMonitor {
         self.image = None;
         self.in_point = None;
         self.out_point = None;
-        self.status = Status { path: Some(path.clone()), ..Status::default() };
-        self.player.load(path);
+        self.audio_only = !info.has_video;
+        if self.audio_only {
+            // Nothing for the picture player to do: the monitor keeps time itself.
+            self.status = Status {
+                path: Some(path),
+                duration: info.duration,
+                rate: jd_media::Rate { num: info.rate.num as i32, den: info.rate.den as i32 },
+                ..Status::default()
+            };
+        } else {
+            self.status = Status { path: Some(path.clone()), ..Status::default() };
+            self.player.load(path);
+        }
     }
 
     #[cfg(test)]
@@ -138,6 +153,9 @@ impl SourceMonitor {
     pub fn poll(&mut self) -> Option<(u64, image::Handle)> {
         if self.with_sound {
             return self.poll_sound();
+        }
+        if self.audio_only {
+            return None;
         }
         self.status = self.player.status();
         let frame = self.player.take_frame()?;
@@ -155,7 +173,7 @@ impl SourceMonitor {
 
     /// Keep polling (playing, or a command still being decoded).
     pub fn busy(&self) -> bool {
-        self.item.is_some() && (self.with_sound || self.player.busy())
+        self.item.is_some() && (self.with_sound || (!self.audio_only && self.player.busy()))
     }
 
     fn poll_sound(&mut self) -> Option<(u64, image::Handle)> {
@@ -164,7 +182,9 @@ impl SourceMonitor {
             // Reached the end: hand back to the silent player at the same frame.
             self.with_sound = false;
             self.status.playing = false;
-            self.player.seek(self.status.position);
+            if !self.audio_only {
+                self.player.seek(self.status.position);
+            }
         }
         let frame = self.sound.take_frame()??;
         self.frames_sent += 1;
@@ -175,7 +195,9 @@ impl SourceMonitor {
         if std::mem::take(&mut self.with_sound) {
             self.sound.stop();
             self.status.position = to_seconds(self.sound.position()).min(self.last_frame());
-            self.player.seek(self.status.position);
+            if !self.audio_only {
+                self.player.seek(self.status.position);
+            }
         }
     }
 
@@ -214,15 +236,16 @@ impl SourceMonitor {
         self.status.playing = true;
         self.status.speed = speed;
         match &self.sound_clip {
-            // Normal speed with sound (not in tests: they must stay quiet).
-            Some((seq, media)) if speed == 1.0 && !cfg!(test) => {
+            // Normal speed with sound (not in tests: they must stay quiet). Audio-only clips
+            // always play this way (silently at other speeds).
+            Some((seq, media)) if (speed == 1.0 && !cfg!(test)) || self.audio_only => {
                 self.player.pause();
                 self.with_sound = true;
                 self.sound.play(Request {
                     sequence: seq.clone(),
                     media: media.clone(),
                     from: from_seconds(from),
-                    speed,
+                    speed: if cfg!(test) && speed == 1.0 { 2.0 } else { speed },
                     max_size: MONITOR_SIZE,
                 });
             }
@@ -238,6 +261,11 @@ impl SourceMonitor {
 
     pub fn step(&mut self, frames: i64) {
         self.stop_sound();
+        if self.audio_only {
+            self.status.playing = false;
+            self.seek(self.status.position + frames as f64 * self.frame_duration());
+            return;
+        }
         if self.loaded() {
             self.status.playing = false;
             self.player.step(frames);
@@ -249,7 +277,9 @@ impl SourceMonitor {
         if self.loaded() {
             let t = time.clamp(0.0, self.last_frame());
             self.status.position = t;
-            self.player.seek(t);
+            if !self.audio_only {
+                self.player.seek(t);
+            }
         }
     }
 

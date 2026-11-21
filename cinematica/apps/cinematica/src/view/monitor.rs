@@ -34,6 +34,19 @@ fn source_body(app: &Editor) -> Element<'_, Message> {
     let s = &app.source;
     let fps = app.source_item().map_or(app.sequence.rate.timecode_base(), |m| m.fps(app.sequence.rate.timecode_base()));
     let viewer: Element<'_, Message> = match (&s.status.error, &s.image, s.item) {
+        (None, _, Some(_)) if s.audio_only => {
+            let duration = s.status.duration.max(1e-6);
+            let frac = |t: f64| (t / duration) as f32;
+            Canvas::new(Waveform {
+                peaks: app.source_item().and_then(|m| m.waveform.clone()),
+                head: frac(s.status.position),
+                in_point: s.in_point.map(frac),
+                out_point: s.out_point.map(frac),
+            })
+            .width(Fill)
+            .height(Fill)
+            .into()
+        }
         (Some(e), _, _) => placeholder_owned(format!("Can't play this clip: {e}")),
         (None, Some(img), _) => image(img.handle().clone()).content_fit(ContentFit::Contain).width(Fill).height(Fill).into(),
         (None, None, Some(_)) => placeholder("Loading..."),
@@ -285,5 +298,52 @@ impl canvas::Program<Message> for ScrubBar {
         } else {
             mouse::Interaction::default()
         }
+    }
+}
+
+/// An audio-only clip in the Source monitor: its whole waveform, marks and playhead.
+struct Waveform {
+    peaks: Option<std::sync::Arc<Vec<f32>>>,
+    head: f32,
+    in_point: Option<f32>,
+    out_point: Option<f32>,
+}
+
+impl canvas::Program<Message> for Waveform {
+    type State = ();
+
+    fn draw(&self, _: &(), renderer: &Renderer, _: &Theme, bounds: Rectangle, _: mouse::Cursor) -> Vec<Geometry> {
+        let mut frame = Frame::new(renderer, bounds.size());
+        frame.fill_rectangle(Point::ORIGIN, bounds.size(), BG_CANVAS);
+        let (left, width) = (SCRUB_MARGIN, (bounds.width - 2.0 * SCRUB_MARGIN).max(1.0));
+        let mid = bounds.height / 2.0;
+        let half = bounds.height * 0.4;
+        if self.in_point.is_some() || self.out_point.is_some() {
+            let a = left + width * self.in_point.unwrap_or(0.0);
+            let b = left + width * self.out_point.unwrap_or(1.0);
+            frame.fill_rectangle(Point::new(a, 0.0), Size::new((b - a).max(1.0), bounds.height), iced::Color { a: 0.12, ..ACCENT_PRIMARY });
+        }
+        match &self.peaks {
+            Some(peaks) if !peaks.is_empty() => {
+                let mut lines = canvas::path::Builder::new();
+                let n = peaks.len() as f32;
+                for px in 0..width as usize {
+                    let a = (px as f32 / width * n) as usize;
+                    let b = (((px + 1) as f32 / width * n) as usize).max(a + 1).min(peaks.len());
+                    let peak = peaks[a.min(peaks.len() - 1)..b].iter().fold(0.0f32, |m, v| m.max(*v));
+                    let y = (peak.sqrt() * half).max(0.5);
+                    let x = left + px as f32 + 0.5;
+                    lines.move_to(Point::new(x, mid - y));
+                    lines.line_to(Point::new(x, mid + y));
+                }
+                frame.stroke(&lines.build(), canvas::Stroke::default().with_width(1.0).with_color(iced::Color::from_rgb8(0x5F, 0xC2, 0x96)));
+            }
+            _ => {
+                frame.fill_rectangle(Point::new(left, mid), Size::new(width, 1.0), BORDER_SUBTLE);
+            }
+        }
+        let x = (left + width * self.head.clamp(0.0, 1.0)).round();
+        frame.fill_rectangle(Point::new(x, 0.0), Size::new(1.0, bounds.height), ACCENT_PRIMARY);
+        vec![frame.into_geometry()]
     }
 }

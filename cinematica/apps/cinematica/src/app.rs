@@ -260,6 +260,7 @@ impl Editor {
                     Ok(a) => {
                         item.info = Some(a.info);
                         item.thumb = a.thumb.map(media::to_handle);
+                        item.waveform = a.waveform;
                     }
                     Err(e) => {
                         self.notice = Some(format!("Couldn't import {}: {e}", item.name));
@@ -272,9 +273,10 @@ impl Editor {
                 self.selected_media = Some(id);
                 let Some(item) = self.media_item(id) else { return Task::none() };
                 match item.kind() {
-                    media::Kind::Video | media::Kind::Still => {
+                    media::Kind::Video | media::Kind::Still | media::Kind::Audio => {
                         let (name, path) = (item.name.clone(), item.path.clone());
                         let info = crate::source::ClipInfo {
+                            has_video: item.info.as_ref().is_some_and(|i| i.video.is_some()),
                             has_audio: item.info.as_ref().is_some_and(|i| i.audio.is_some()),
                             rate: item.info.as_ref().and_then(|i| i.video.as_ref()).filter(|v| !v.still).map_or(self.sequence.rate, |v| {
                                 jd_timeline::FrameRate::new(v.rate.num.max(1) as u32, v.rate.den.max(1) as u32)
@@ -284,11 +286,6 @@ impl Editor {
                         self.source.load(id, &name, path, info);
                         self.source_tab = 0;
                         self.focus = Focus::Source;
-                    }
-                    // Audio clips show a waveform in the Source monitor (M3, with audio).
-                    // Until then, `,` and `.` edit the whole selected audio file in.
-                    media::Kind::Audio => {
-                        self.notice = Some("Audio opens in the Source monitor with audio playback; , and . edit the whole file in".into())
                     }
                     media::Kind::Pending | media::Kind::Unreadable => {}
                 }

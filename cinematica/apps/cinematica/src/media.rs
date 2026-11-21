@@ -1,6 +1,7 @@
 //! The project's media bin: imported files, analysed in the background.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use iced::Task;
 use iced::widget::image;
@@ -10,6 +11,9 @@ pub type MediaId = u64;
 
 /// Thumbnail size: the Project panel shows them at 116×65, rendered at 2x for HiDPI.
 pub const THUMB_SIZE: (u32, u32) = (232, 130);
+
+/// Waveform resolution: peak levels per second of audio.
+pub const WAVEFORM_RATE: f64 = 100.0;
 
 /// What the timeline treats a still image's length as (Premiere's default is 5 s).
 pub const STILL_DURATION: f64 = 5.0;
@@ -32,13 +36,15 @@ pub struct MediaItem {
     pub name: String,
     pub info: Option<MediaInfo>,
     pub thumb: Option<image::Handle>,
+    /// Peak levels, [`WAVEFORM_RATE`] per second, for clips with audio.
+    pub waveform: Option<Arc<Vec<f32>>>,
     pub error: Option<String>,
 }
 
 impl MediaItem {
     pub fn new(id: MediaId, path: PathBuf) -> Self {
         let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
-        Self { id, path, name, info: None, thumb: None, error: None }
+        Self { id, path, name, info: None, thumb: None, waveform: None, error: None }
     }
 
     pub fn kind(&self) -> Kind {
@@ -77,6 +83,7 @@ impl MediaItem {
 pub struct Analysis {
     pub info: MediaInfo,
     pub thumb: Option<Frame>,
+    pub waveform: Option<Arc<Vec<f32>>>,
 }
 
 pub fn analyse(path: &Path) -> Result<Analysis, String> {
@@ -88,7 +95,8 @@ pub fn analyse(path: &Path) -> Result<Analysis, String> {
         .video
         .as_ref()
         .and_then(|_| jd_media::thumbnail(path, (info.duration * 0.1).min(1.0), THUMB_SIZE).ok());
-    Ok(Analysis { info, thumb })
+    let waveform = info.audio.as_ref().and_then(|_| jd_media::waveform(path, WAVEFORM_RATE).ok()).map(Arc::new);
+    Ok(Analysis { info, thumb, waveform })
 }
 
 pub fn to_handle(frame: Frame) -> image::Handle {

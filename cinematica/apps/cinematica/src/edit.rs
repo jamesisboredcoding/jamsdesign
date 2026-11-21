@@ -483,6 +483,62 @@ mod tests {
         }
     }
 
+    /// A 2 s 440 Hz WAV made with the ffmpeg CLI.
+    fn wav_fixture() -> Option<std::path::PathBuf> {
+        static FIXTURE: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+        FIXTURE
+            .get_or_init(|| {
+                let dir = std::env::temp_dir().join("cinematica-tests");
+                std::fs::create_dir_all(&dir).ok()?;
+                let path = dir.join("tone_2s.wav");
+                if !path.exists() {
+                    let tmp = dir.join(format!("tmp-{}.wav", std::process::id()));
+                    let ok = std::process::Command::new("ffmpeg")
+                        .args(["-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=2:sample_rate=48000"])
+                        .arg(&tmp)
+                        .status()
+                        .is_ok_and(|s| s.success());
+                    if !ok {
+                        return None;
+                    }
+                    std::fs::rename(&tmp, &path).ok()?;
+                }
+                Some(path)
+            })
+            .clone()
+    }
+
+    #[test]
+    fn audio_only_clips_play_mark_and_edit_in_from_the_source_monitor() {
+        let Some(path) = wav_fixture() else { return };
+        let (mut app, _) = crate::app::Editor::new();
+        let _ = app.update(Message::Import(vec![path.clone()]));
+        let id = app.media[0].id;
+        let _ = app.update(Message::Analysed(id, Box::new(crate::media::analyse(&path))));
+        assert_eq!(app.media[0].kind(), crate::media::Kind::Audio);
+        assert!(app.media[0].waveform.as_ref().is_some_and(|w| w.len() >= 190), "100 peaks a second");
+
+        let _ = app.update(Message::OpenInSource(id));
+        assert!(app.source.audio_only && app.source.loaded());
+        // Step 5 frames in, mark In; scrub to 1 s, mark Out.
+        let _ = app.update(Message::Step(5));
+        let _ = app.update(key("i"));
+        let _ = app.update(Message::Scrub((1.0 / app.source.last_frame()) as f32));
+        let _ = app.update(key("o"));
+        assert_eq!(app.source.in_point, Some(0.2));
+
+        // Plays (silently in tests) to the end.
+        let _ = app.update(Message::TogglePlay);
+        assert!(app.source.status.playing);
+        settle(&mut app, "audio playback", |a| !a.source.status.playing);
+        assert!((app.source.status.position - app.source.last_frame()).abs() < 0.05);
+
+        // Insert: audio only, frames 5 to 25 of the file (21 frames with the Out frame).
+        let _ = app.update(key(","));
+        assert!(app.sequence.video[0].clips.is_empty());
+        assert_eq!(spans(&app, TrackRef::audio(0)), [(0, 21)]);
+    }
+
     #[test]
     fn lift_without_marks_explains_itself() {
         let (mut app, _) = crate::app::Editor::new();

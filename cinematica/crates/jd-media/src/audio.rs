@@ -151,8 +151,14 @@ impl AudioDecoder {
     /// Converts the decoded frame (which starts at `time`) and appends it to `pending`,
     /// trimming or padding the first frame after a seek so reads start exactly there.
     fn resample(&mut self, time: Option<f64>) -> Result<()> {
+        // Files with an unspecified layout (common for mono WAVs) get the standard one for
+        // their channel count, on the frame too, or the resampler sees "input changed".
+        let given = self.frame.channel_layout();
+        let layout = if given.bits() != 0 { given } else { ChannelLayout::default(self.frame.channels() as i32) };
+        if given.bits() == 0 {
+            self.frame.set_channel_layout(layout);
+        }
         let f = &self.frame;
-        let layout = if f.channel_layout().channels() > 0 { f.channel_layout() } else { ChannelLayout::default(f.channels() as i32) };
         let key = (f.format(), layout.bits(), f.rate());
         if self.resampler.as_ref().is_none_or(|(k, _)| *k != key) {
             let ctx = resampling::Context::get(f.format(), layout, f.rate(), Sample::F32(SampleType::Packed), ChannelLayout::STEREO, self.rate)?;

@@ -404,6 +404,52 @@ impl<'a> Lanes<'a> {
     }
 }
 
+impl Lanes<'_> {
+    /// What's inside a clip below its label: the first frame for video (on tall tracks),
+    /// the waveform for audio.
+    fn draw_content(&self, frame: &mut Frame, c: &Clip, kind: TrackKind, r: Row, (x0, x1): (f32, f32), w: f32) {
+        let Some(item) = self.app.media_item(c.media) else { return };
+        let (top, bottom) = (r.y + 15.0, r.y + r.height - 3.0);
+        if bottom - top < 8.0 {
+            return;
+        }
+        match kind {
+            TrackKind::Video => {
+                let Some(thumb) = &item.thumb else { return };
+                if r.height < 45.0 || x0 < -1.0 {
+                    return;
+                }
+                let h = bottom - top;
+                let tw = (h * 16.0 / 9.0).min(x1 - x0 - 3.0);
+                if tw > 8.0 {
+                    frame.draw_image(Rectangle::new(Point::new(x0 + 1.0, top), Size::new(tw, h)), canvas::Image::new(thumb.clone()));
+                }
+            }
+            TrackKind::Audio => {
+                let Some(peaks) = &item.waveform else { return };
+                let mid = (top + bottom) / 2.0;
+                let half = (bottom - top) / 2.0;
+                let mut lines = canvas::path::Builder::new();
+                let (from, to) = (x0.max(0.0).ceil() as i32, (x1.min(w) - 1.0).floor() as i32);
+                let bucket = |x: f32| -> usize {
+                    let t = c.source_time(self.time_at(x));
+                    (to_seconds(t) * crate::media::WAVEFORM_RATE).max(0.0) as usize
+                };
+                for px in from..=to {
+                    let (a, b) = (bucket(px as f32), bucket(px as f32 + 1.0).max(bucket(px as f32) + 1));
+                    let peak = peaks.get(a..b.min(peaks.len())).map_or(0.0, |s| s.iter().fold(0.0f32, |m, v| m.max(*v)));
+                    if peak > 0.002 {
+                        let y = (peak.sqrt() * half).max(0.5);
+                        lines.move_to(Point::new(px as f32 + 0.5, mid - y));
+                        lines.line_to(Point::new(px as f32 + 0.5, mid + y));
+                    }
+                }
+                frame.stroke(&lines.build(), Stroke::default().with_width(1.0).with_color(Color::from_rgba(1.0, 1.0, 1.0, 0.5)));
+            }
+        }
+    }
+}
+
 impl canvas::Program<Message> for Lanes<'_> {
     type State = State;
 
@@ -592,6 +638,7 @@ impl canvas::Program<Message> for Lanes<'_> {
                         ..Text::default()
                     });
                 }
+                self.draw_content(&mut frame, c, tr.kind, *r, (x0, x1), w);
                 if selected {
                     frame.stroke(&rect, Stroke::default().with_width(1.5).with_color(Color::WHITE));
                 }
