@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Gallerion
+GenericName=Photo Editor
+Comment=Edit photos and images (jamsdesign)
+Exec=gallerion %F
+Icon=dev.jamsdesign.Gallerion
+Terminal=false
+Categories=Graphics;2DGraphics;RasterGraphics;Photography;
+MimeType=image/png;image/jpeg;image/webp;image/bmp;image/tiff;image/gif;
+StartupWMClass=dev.jamsdesign.Gallerion

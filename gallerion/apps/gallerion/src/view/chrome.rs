@@ -20,19 +20,8 @@ pub const MENUS: &[&str] = &[
 /// Our own title bar (the window has no system decorations): app badge, menus, title,
 /// actions and window controls. Empty space drags the window; double-click maximises.
 pub fn title_bar(app: &Photo) -> Element<'_, Message> {
-    let badge = container(text("Jd").size(10).font(bold()))
-        .center(20)
-        .style(|_| container::Style {
-            background: Some(
-                iced::gradient::Linear::new(std::f32::consts::FRAC_PI_4)
-                    .add_stop(0.0, iced::Color::from_rgb8(0x4C, 0x8D, 0xFF))
-                    .add_stop(1.0, iced::Color::from_rgb8(0x8C, 0x4D, 0xF2))
-                    .into(),
-            ),
-            text_color: Some(TEXT_PRIMARY),
-            border: iced::border::rounded(4),
-            ..Default::default()
-        });
+    // The Gallerion logo, in its own colours (not tinted like the UI icons).
+    let badge = iced::widget::svg(iced::widget::svg::Handle::from_memory(crate::LOGO_SVG)).width(22).height(22);
 
     let mut menus = row![badge, space().width(8)].align_y(Vertical::Center).spacing(2);
     for m in MENUS {

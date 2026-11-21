@@ -81,6 +81,13 @@ left-click in, right-click out.
       and Ellipse shapes, Crop tool
 - [ ] 6: text, PSD import, Flatpak
 
+## App icon
+
+The logo is the suite artwork at `../img/gallerion.svg` (embedded at build time). It shows in
+the title bar and as the window icon. On Wayland, KDE takes the taskbar icon from a desktop
+entry matching the app id `dev.jamsdesign.Gallerion`: run `packaging/install-desktop.sh
+[binary]` once to install it for your user (defaults to `target/release/gallerion`).
+
 ## Selections and transforms
 
 Selections live on the document (`jd-raster/src/selection.rs`: 256px tiles of 8-bit coverage,

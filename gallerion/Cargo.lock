@@ -1278,6 +1278,7 @@ dependencies = [
  "jd-ui",
  "octotablet",
  "raw-window-handle",
+ "resvg",
  "rfd",
 ]
 
