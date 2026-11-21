@@ -60,6 +60,9 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
     if let Some(popup) = menus::popup(app) {
         layers = layers.push(popup);
     }
+    if let Some(small) = dialog::small(app) {
+        layers = layers.push(small);
+    }
     if let Some(new) = dialog::new_document(app) {
         layers = layers.push(new);
     }

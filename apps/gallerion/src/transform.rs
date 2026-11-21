@@ -109,6 +109,21 @@ impl Session {
         self.affine() == Affine::IDENTITY || self.affine().integer_translation() == Some((0, 0))
     }
 
+    /// Flips and/or turns by quarter turns clockwise (Edit > Transform). The box is snapped so
+    /// its corners land on whole pixels, which keeps the result pixel-exact.
+    pub fn orient(&mut self, flip_h: bool, flip_v: bool, quarter_turns: u32) {
+        let (w, h) = (self.bounds[2] - self.bounds[0], self.bounds[3] - self.bounds[1]);
+        let (cx, cy) = centre(self.bounds);
+        let q = quarter_turns % 4;
+        let (bw, bh) = if q % 2 == 1 { (h, w) } else { (w, h) };
+        self.params = Params {
+            center: ((cx - bw / 2.0).round() + bw / 2.0, (cy - bh / 2.0).round() + bh / 2.0),
+            angle: q as f32 * std::f32::consts::FRAC_PI_2,
+            sx: if flip_h { -1.0 } else { 1.0 },
+            sy: if flip_v { -1.0 } else { 1.0 },
+        };
+    }
+
     /// Nudges by whole pixels.
     pub fn translate(&mut self, dx: f32, dy: f32) {
         self.params.center.0 += dx;
@@ -298,6 +313,27 @@ mod tests {
         assert_eq!(px(80, 60), [10, 200, 10, 255], "unselected half stays");
         assert_eq!(px(105, 60), [10, 200, 10, 255], "moved by 50");
         assert_eq!(doc.selection.as_ref().unwrap().bounds(), Some([100, 50, 125, 100]));
+    }
+
+    #[test]
+    fn orient_flips_and_rotates_exactly() {
+        let mut doc = Document::new("t", 200, 200);
+        let id = doc.active_id().unwrap();
+        let l = doc.layer_mut(id).unwrap();
+        l.locked = false;
+        // Away from the edges, so the turned shape stays on the canvas.
+        for x in 80..110 {
+            l.pixels.set_pixel(x, 100, [255, 0, 0, 255]);
+        }
+        l.pixels.set_pixel(80, 101, [0, 0, 255, 255]);
+        let mut s = Session::begin(1, &doc, Kind::Free).unwrap();
+        s.orient(false, false, 1);
+        s.commit(&mut doc);
+        let px = |d: &Document, x, y| d.layers()[0].pixels.pixel(x, y);
+        // A 30×2 box rotated 90° CW becomes 2×30, exact colours, no blur.
+        assert_eq!(jd_raster::transform::content_bounds(&doc.layers()[0].pixels).map(|b| (b[2] - b[0], b[3] - b[1])), Some((2, 30)));
+        let reds = (0..200).flat_map(|y| (0..200).map(move |x| (x, y))).filter(|&(x, y)| px(&doc, x, y) == [255, 0, 0, 255]).count();
+        assert_eq!(reds, 30);
     }
 
     #[test]

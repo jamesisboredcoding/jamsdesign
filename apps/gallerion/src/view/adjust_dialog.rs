@@ -81,6 +81,9 @@ pub fn view(app: &Photo) -> Option<Element<'_, Message>> {
         ]
         .spacing(10)
         .into(),
+        Op::Filter(Filter::BoxBlur { radius }) => slider_row("Radius", format!("{radius:.0} px"), 1.0..=100.0, radius, move |v| set(Op::Filter(Filter::BoxBlur { radius: v.round() }))),
+        Op::Filter(Filter::HighPass { radius }) => slider_row("Radius", format!("{radius:.1} px"), 0.0..=1.0, radius_to_t(radius), move |t| set(Op::Filter(Filter::HighPass { radius: t_to_radius(t) }))),
+        Op::Filter(Filter::Sharpen) | Op::Adjust(Adjustment::ChannelLut(_)) => space().into(),
         Op::Filter(Filter::Mosaic { cell }) => slider_row("Cell Size", format!("{cell} px"), 2.0..=200.0, cell as f32, move |v| set(Op::Filter(Filter::Mosaic { cell: v as u32 }))),
     };
 

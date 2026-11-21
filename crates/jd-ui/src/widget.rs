@@ -1,7 +1,7 @@
 //! Building blocks matching the Figma components (Tool Button, Panel Tab, Layer Row...).
 
 use iced::alignment::{Horizontal, Vertical};
-use iced::widget::{button, column, container, row, space, stack, text, tooltip};
+use iced::widget::{button, column, container, mouse_area, row, space, stack, text, tooltip};
 use iced::{Color, Element, Fill, Length, Padding};
 
 use crate::icon::{Icon, icon};
@@ -242,22 +242,69 @@ pub enum MenuEntry<'a, M> {
     Item(&'a str, &'a str, Option<M>),
     /// An item with a leading icon (tool flyouts).
     IconItem(Icon, &'a str, &'a str, Option<M>),
+    /// Opens a nested menu on hover (one level deep).
+    Submenu(&'a str, Vec<MenuEntry<'a, M>>),
     Separator,
 }
 
-/// A Photoshop-style popup menu: dark card, items with right-aligned shortcuts.
-pub fn menu<'a, M: Clone + 'a>(entries: Vec<MenuEntry<'a, M>>, width: f32) -> Element<'a, M> {
+/// Fixed row heights, so a submenu can be placed next to its row.
+pub const MENU_ITEM_HEIGHT: f32 = 26.0;
+pub const MENU_SEPARATOR_HEIGHT: f32 = 9.0;
+pub const MENU_PADDING: f32 = 4.0;
+
+/// Height a list of entries takes in a menu.
+pub fn menu_height<M>(entries: &[MenuEntry<'_, M>]) -> f32 {
+    entries
+        .iter()
+        .map(|e| if matches!(e, MenuEntry::Separator) { MENU_SEPARATOR_HEIGHT } else { MENU_ITEM_HEIGHT })
+        .sum::<f32>()
+        + 2.0 * MENU_PADDING
+}
+
+/// A rendered menu, plus its open submenu (y offset of its row, and the submenu itself).
+pub struct MenuView<'a, M> {
+    pub main: Element<'a, M>,
+    pub sub: Option<(f32, Element<'a, M>)>,
+}
+
+/// A Photoshop-style popup menu: dark card, items with right-aligned shortcuts, optional
+/// submenus. `on_hover(Some(i))` fires when the pointer enters submenu row `i`, `None` for any
+/// other row; the caller keeps `open_sub` and positions `MenuView::sub`.
+pub fn menu<'a, M: Clone + 'a>(
+    entries: Vec<MenuEntry<'a, M>>,
+    width: f32,
+    open_sub: Option<usize>,
+    on_hover: impl Fn(Option<usize>) -> M + 'a,
+) -> MenuView<'a, M> {
+    menu_inner(entries, width, open_sub, &on_hover)
+}
+
+// Not generic over the closure, so building a submenu doesn't recurse through new types.
+fn menu_inner<'a, M: Clone + 'a>(
+    entries: Vec<MenuEntry<'a, M>>,
+    width: f32,
+    open_sub: Option<usize>,
+    on_hover: &dyn Fn(Option<usize>) -> M,
+) -> MenuView<'a, M> {
     let mut col = column![].width(width);
-    for entry in entries {
-        let (lead, label_text, shortcut, msg) = match entry {
+    let mut sub = None;
+    let mut y = MENU_PADDING;
+    for (i, entry) in entries.into_iter().enumerate() {
+        let (lead, label_text, shortcut, msg, children) = match entry {
             MenuEntry::Separator => {
-                col = col.push(container(hline(BORDER_SUBTLE)).padding(Padding::from([4, 0])));
+                col = col.push(
+                    container(hline(BORDER_SUBTLE)).height(MENU_SEPARATOR_HEIGHT).center_y(MENU_SEPARATOR_HEIGHT),
+                );
+                y += MENU_SEPARATOR_HEIGHT;
                 continue;
             }
-            MenuEntry::Item(l, s, m) => (None, l, s, m),
-            MenuEntry::IconItem(i, l, s, m) => (Some(i), l, s, m),
+            MenuEntry::Item(l, s, m) => (None, l, s, m, None),
+            MenuEntry::IconItem(i, l, s, m) => (Some(i), l, s, m, None),
+            MenuEntry::Submenu(l, children) => (None, l, "›", None, Some(children)),
         };
-        let enabled = msg.is_some();
+        let is_sub = children.is_some();
+        let open = is_sub && open_sub == Some(i);
+        let enabled = msg.is_some() || is_sub;
         let color = if enabled { TEXT_PRIMARY } else { TEXT_MUTED };
         let mut content = row![].spacing(8).align_y(Vertical::Center);
         if let Some(i) = lead {
@@ -265,23 +312,30 @@ pub fn menu<'a, M: Clone + 'a>(entries: Vec<MenuEntry<'a, M>>, width: f32) -> El
         }
         content = content
             .push(text(label_text).size(TEXT_SIZE).color(color).width(Fill))
-            .push(text(shortcut).size(TEXT_SIZE_SMALL).color(TEXT_MUTED));
-        col = col.push(
-            button(content)
-                .width(Fill)
-                .padding(Padding::from([5, 12]))
-                .style(move |_, status| button::Style {
-                    background: (enabled && matches!(status, button::Status::Hovered | button::Status::Pressed))
-                        .then(|| ACCENT_PRIMARY.into()),
-                    text_color: TEXT_PRIMARY,
-                    border: iced::border::rounded(3),
-                    ..Default::default()
-                })
-                .on_press_maybe(msg),
-        );
+            .push(text(shortcut).size(if is_sub { TEXT_SIZE + 2.0 } else { TEXT_SIZE_SMALL }).color(TEXT_MUTED));
+        let press = if is_sub { Some(on_hover(Some(i))) } else { msg };
+        let item = button(content)
+            .width(Fill)
+            .height(MENU_ITEM_HEIGHT)
+            .padding(Padding::from([5, 12]))
+            .style(move |_, status| button::Style {
+                background: (enabled && (open || matches!(status, button::Status::Hovered | button::Status::Pressed)))
+                    .then(|| ACCENT_PRIMARY.into()),
+                text_color: TEXT_PRIMARY,
+                border: iced::border::rounded(3),
+                ..Default::default()
+            })
+            .on_press_maybe(press);
+        col = col.push(mouse_area(item).on_enter(on_hover(is_sub.then_some(i))));
+        if open && let Some(children) = children {
+            // Hovering inside the submenu keeps it open.
+            let keep = on_hover(Some(i));
+            sub = Some((y - MENU_PADDING, menu_inner(children, width, None, &move |_| keep.clone()).main));
+        }
+        y += MENU_ITEM_HEIGHT;
     }
-    container(col)
-        .padding(4)
+    let main = container(col)
+        .padding(MENU_PADDING)
         .style(|_| container::Style {
             background: Some(BG_PANEL_HEADER.into()),
             border: iced::Border { color: BORDER_SUBTLE, width: 1.0, radius: 6.0.into() },
@@ -292,5 +346,6 @@ pub fn menu<'a, M: Clone + 'a>(entries: Vec<MenuEntry<'a, M>>, width: f32) -> El
             },
             ..Default::default()
         })
-        .into()
+        .into();
+    MenuView { main, sub }
 }

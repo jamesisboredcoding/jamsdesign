@@ -305,3 +305,172 @@ mod tests {
         assert_eq!((dst.pixel(0, 0), dst.pixel(1, 0)), ([0, 0, 0, 255], [255, 255, 255, 255]));
     }
 }
+
+/// Copies `src`'s content into a new `w`×`h` grid, shifted by (dx, dy). Used to move layers
+/// between documents and for crop / canvas size. Same size and no shift shares the tiles.
+pub fn place(src: &TileGrid, w: u32, h: u32, dx: i64, dy: i64) -> TileGrid {
+    if dx == 0 && dy == 0 && src.width() == w && src.height() == h {
+        return src.clone();
+    }
+    let mut out = TileGrid::empty(w, h);
+    let Some([x0, y0, x1, y1]) = content_bounds(src) else { return out };
+    // Visible part in destination coordinates.
+    let (ox0, oy0) = ((x0 as i64 + dx).max(0), (y0 as i64 + dy).max(0));
+    let (ox1, oy1) = ((x1 as i64 + dx).min(w as i64), (y1 as i64 + dy).min(h as i64));
+    if ox0 >= ox1 || oy0 >= oy1 {
+        return out;
+    }
+    let ow = (ox1 - ox0) as usize;
+    let rows: Vec<Vec<u8>> = (oy0..oy1)
+        .into_par_iter()
+        .map(|y| {
+            let mut row = vec![0u8; ow * 4];
+            for (i, x) in (ox0..ox1).enumerate() {
+                row[i * 4..i * 4 + 4].copy_from_slice(&src.pixel((x - dx) as u32, (y - dy) as u32));
+            }
+            row
+        })
+        .collect();
+    out.write_region(ox0 as u32, oy0 as u32, ow as u32, (oy1 - oy0) as u32, &rows.concat());
+    out
+}
+
+/// Pixel-exact remap into a `w`×`h` grid: output (x, y) takes `src` at `f(x, y)`. For rotating
+/// and flipping the canvas.
+pub fn remap(src: &TileGrid, w: u32, h: u32, f: impl Fn(u32, u32) -> (u32, u32) + Sync) -> TileGrid {
+    let rows: Vec<Vec<u8>> = (0..h)
+        .into_par_iter()
+        .map(|y| {
+            let mut row = vec![0u8; w as usize * 4];
+            for x in 0..w {
+                let (sx, sy) = f(x, y);
+                row[x as usize * 4..x as usize * 4 + 4].copy_from_slice(&src.pixel(sx, sy));
+            }
+            row
+        })
+        .collect();
+    let mut out = TileGrid::empty(w, h);
+    out.write_region(0, 0, w, h, &rows.concat());
+    out
+}
+
+/// Resamples the whole grid to `w`×`h` (Image Size). Separable filter that averages over the
+/// source footprint when shrinking (no aliasing) and is bilinear when enlarging. Premultiplied.
+pub fn resize(src: &TileGrid, w: u32, h: u32) -> TileGrid {
+    let (sw, sh) = (src.width() as usize, src.height() as usize);
+    let (w, h) = (w.max(1) as usize, h.max(1) as usize);
+    let mut buf: Vec<[f32; 4]> = (0..sh)
+        .into_par_iter()
+        .flat_map_iter(|y| {
+            (0..sw).map(move |x| {
+                let p = src.pixel(x as u32, y as u32);
+                let a = p[3] as f32 / 255.0;
+                [p[0] as f32 * a, p[1] as f32 * a, p[2] as f32 * a, a]
+            })
+        })
+        .collect();
+    // Horizontal pass: sw -> w for each row, then vertical: sh -> h for each column.
+    buf = resample_rows(&buf, sw, sh, w);
+    let t = transpose4(&buf, w, sh);
+    let t = resample_rows(&t, sh, w, h);
+    let out = transpose4(&t, h, w);
+    let rows: Vec<u8> = out
+        .iter()
+        .flat_map(|v| {
+            if v[3] <= 0.0 {
+                [0u8; 4]
+            } else {
+                let a = v[3].min(1.0);
+                [(v[0] / v[3]).clamp(0.0, 255.0) as u8, (v[1] / v[3]).clamp(0.0, 255.0) as u8, (v[2] / v[3]).clamp(0.0, 255.0) as u8, (a * 255.0 + 0.5) as u8]
+            }
+        })
+        .collect();
+    let mut grid = TileGrid::empty(w as u32, h as u32);
+    grid.write_region(0, 0, w as u32, h as u32, &rows);
+    grid
+}
+
+fn resample_rows(buf: &[[f32; 4]], sw: usize, rows: usize, w: usize) -> Vec<[f32; 4]> {
+    let scale = w as f32 / sw as f32;
+    let support = (1.0 / scale).max(1.0);
+    // Precompute weights per output column (triangle filter widened by the shrink factor).
+    let taps: Vec<(usize, Vec<f32>)> = (0..w)
+        .map(|x| {
+            let centre = (x as f32 + 0.5) / scale;
+            let lo = (centre - support).floor().max(0.0) as usize;
+            let hi = ((centre + support).ceil() as usize).min(sw);
+            let mut weights: Vec<f32> = (lo..hi).map(|i| (1.0 - ((i as f32 + 0.5 - centre) / support).abs()).max(0.0)).collect();
+            let sum: f32 = weights.iter().sum();
+            if sum > 0.0 {
+                weights.iter_mut().for_each(|v| *v /= sum);
+            }
+            (lo, weights)
+        })
+        .collect();
+    let mut out = vec![[0f32; 4]; w * rows];
+    out.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+        let src = &buf[y * sw..(y + 1) * sw];
+        for (x, (lo, weights)) in taps.iter().enumerate() {
+            let mut acc = [0f32; 4];
+            for (k, wt) in weights.iter().enumerate() {
+                let p = src[lo + k];
+                for c in 0..4 {
+                    acc[c] += p[c] * wt;
+                }
+            }
+            row[x] = acc;
+        }
+    });
+    out
+}
+
+fn transpose4(buf: &[[f32; 4]], w: usize, h: usize) -> Vec<[f32; 4]> {
+    let mut out = vec![[0f32; 4]; w * h];
+    out.par_chunks_mut(h).enumerate().for_each(|(x, col)| {
+        for (y, v) in col.iter_mut().enumerate() {
+            *v = buf[y * w + x];
+        }
+    });
+    out
+}
+
+#[cfg(test)]
+mod place_tests {
+    use super::*;
+
+    #[test]
+    fn place_shifts_and_clips_and_shares_when_unchanged() {
+        let mut g = TileGrid::empty(300, 20);
+        g.set_pixel(10, 5, [1, 2, 3, 255]);
+        g.set_pixel(290, 5, [4, 5, 6, 255]);
+        let out = place(&g, 100, 50, -5, 10);
+        assert_eq!(out.pixel(5, 15), [1, 2, 3, 255]);
+        assert_eq!((out.width(), out.height()), (100, 50));
+        assert_eq!(content_bounds(&out), Some([5, 15, 6, 16]), "the far pixel is clipped off");
+        let same = place(&g, 300, 20, 0, 0);
+        assert_eq!(same.tile(0, 0).unwrap().id(), g.tile(0, 0).unwrap().id());
+    }
+
+    #[test]
+    fn remap_rotates_exactly() {
+        let mut g = TileGrid::empty(3, 2);
+        g.set_pixel(0, 0, [9, 9, 9, 255]);
+        // 90° clockwise: (x, y) in the 2×3 output reads src (y, h-1-x).
+        let out = remap(&g, 2, 3, |x, y| (y, 1 - x));
+        assert_eq!(out.pixel(1, 0), [9, 9, 9, 255]);
+    }
+
+    #[test]
+    fn resize_averages_when_shrinking() {
+        // Fine black/white stripes shrunk 4x become mid grey, not aliased stripes.
+        let px: Vec<u8> = (0..64 * 4).flat_map(|i| if i % 2 == 0 { [0, 0, 0, 255] } else { [255, 255, 255, 255] }).collect();
+        let g = TileGrid::from_rgba8(64, 4, &px);
+        let out = resize(&g, 16, 1);
+        for x in 1..15 {
+            let v = out.pixel(x, 0)[0];
+            assert!((110..=145).contains(&v), "x={x}: {v}");
+        }
+        let up = resize(&TileGrid::from_rgba8(2, 1, &[0, 0, 0, 255, 200, 200, 200, 255]), 8, 1);
+        assert!(up.pixel(0, 0)[0] < up.pixel(4, 0)[0] && up.pixel(4, 0)[0] < up.pixel(7, 0)[0] + 1);
+    }
+}

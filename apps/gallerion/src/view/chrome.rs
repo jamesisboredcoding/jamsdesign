@@ -380,7 +380,7 @@ pub fn document_tabs(app: &Photo) -> Element<'_, Message> {
             .style(style::ghost(false))
             .on_press(Message::RequestCloseDoc(i));
         tabs = tabs
-            .push(
+            .push(mouse_area(
                 button(
                     row![text(label).size(TEXT_SIZE_SMALL), close]
                         .spacing(10)
@@ -390,6 +390,8 @@ pub fn document_tabs(app: &Photo) -> Element<'_, Message> {
                 .style(style::tab(is_active))
                 .on_press(Message::SelectDoc(i)),
             )
+            // Dragging a layer over a tab switches to that document (drop copies it there).
+            .on_enter(Message::DragOver(crate::app::DropTarget::Tab(i))))
             .push(vline(28.0, BORDER_DEFAULT));
     }
     if app.loading > 0 {
@@ -423,7 +425,11 @@ pub fn status_bar(app: &Photo) -> Element<'_, Message> {
             .push(blend_space_toggle(doc.blend_space));
     }
     bar = bar.push(space::horizontal());
-    if let Some(notice) = &app.notice {
+    if let Some(drag) = app.layer_drag
+        && drag.target.is_some_and(|t| t != crate::app::DropTarget::Layer(drag.layer))
+    {
+        bar = bar.push(label("Drop on a layer to reorder · on another document's tab or canvas to copy it there"));
+    } else if let Some(notice) = &app.notice {
         let color = if notice.error { DANGER } else { TEXT_SECONDARY };
         bar = bar.push(text(&notice.text).size(TEXT_SIZE_SMALL).color(color));
     }

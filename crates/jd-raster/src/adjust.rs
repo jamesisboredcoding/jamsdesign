@@ -28,6 +28,8 @@ pub enum Adjustment {
     Posterize { levels: u8 },
     Invert,
     Desaturate,
+    /// A separate lookup table per channel (what Auto Tone / Auto Contrast produce).
+    ChannelLut(Box<[[u8; 256]; 3]>),
 }
 
 impl Adjustment {
@@ -41,6 +43,7 @@ impl Adjustment {
             Self::Posterize { .. } => "Posterize",
             Self::Invert => "Invert",
             Self::Desaturate => "Desaturate",
+            Self::ChannelLut(_) => "Levels",
         }
     }
 
@@ -75,7 +78,7 @@ impl Adjustment {
                 Box::new(move |v| (v * n).round() / n)
             }
             Self::Invert => Box::new(|v| 1.0 - v),
-            Self::HueSaturation { .. } | Self::Desaturate => return None,
+            Self::HueSaturation { .. } | Self::Desaturate | Self::ChannelLut(_) => return None,
         };
         Some(std::array::from_fn(|i| (f(i as f32 / 255.0) * 255.0).round().clamp(0.0, 255.0) as u8))
     }
@@ -95,13 +98,14 @@ impl Adjustment {
                     _ => [lut[p[0] as usize], lut[p[1] as usize], lut[p[2] as usize], p[3]],
                 };
             }
-            match this {
+            match &this {
+                Adjustment::ChannelLut(t) => [t[0][p[0] as usize], t[1][p[1] as usize], t[2][p[2] as usize], p[3]],
                 Adjustment::Desaturate => {
                     // Photoshop's Desaturate: HSL lightness, (max + min) / 2.
                     let v = ((p[0].max(p[1]).max(p[2]) as u16 + p[0].min(p[1]).min(p[2]) as u16 + 1) / 2) as u8;
                     [v, v, v, p[3]]
                 }
-                Adjustment::HueSaturation { hue, saturation, lightness } => {
+                &Adjustment::HueSaturation { hue, saturation, lightness } => {
                     let rgb = [p[0], p[1], p[2]].map(|c| c as f32 / 255.0);
                     let mut hsv = Hsv::from_srgb(rgb);
                     hsv.h = (hsv.h + hue).rem_euclid(360.0);
@@ -118,6 +122,58 @@ impl Adjustment {
             }
         }
     }
+}
+
+/// Per-channel histograms (R, G, B) of the selected (or all) non-transparent pixels.
+pub fn channel_histograms(grid: &TileGrid, sel: Option<&Selection>) -> [[u32; 256]; 3] {
+    let mut h = [[0u32; 256]; 3];
+    for (tx, ty, tile) in grid.iter() {
+        if sel.is_some_and(|s| s.tile_is_empty(tx, ty)) {
+            continue;
+        }
+        for (i, p) in tile.data().chunks_exact(4).enumerate() {
+            if p[3] == 0 {
+                continue;
+            }
+            if let Some(s) = sel
+                && s.get(tx * TILE_SIZE + i as u32 % TILE_SIZE, ty * TILE_SIZE + i as u32 / TILE_SIZE) < 128
+            {
+                continue;
+            }
+            for c in 0..3 {
+                h[c][p[c] as usize] += 1;
+            }
+        }
+    }
+    h
+}
+
+/// Levels that stretch a histogram so the darkest/brightest 0.1% clip to black/white.
+fn stretch(h: &[u32; 256]) -> [u8; 256] {
+    let total: u32 = h.iter().sum();
+    let clip = (total as f32 * 0.001) as u32;
+    let mut acc = 0;
+    let lo = h.iter().position(|&v| { acc += v; acc > clip }).unwrap_or(0);
+    acc = 0;
+    let hi = 255 - h.iter().rev().position(|&v| { acc += v; acc > clip }).unwrap_or(0);
+    if hi <= lo {
+        return std::array::from_fn(|i| i as u8);
+    }
+    std::array::from_fn(|i| (((i as f32 - lo as f32) / (hi - lo) as f32).clamp(0.0, 1.0) * 255.0).round() as u8)
+}
+
+/// Auto Tone: stretches each channel on its own (also neutralises casts, like Photoshop's).
+pub fn auto_tone(grid: &TileGrid, sel: Option<&Selection>) -> Adjustment {
+    let h = channel_histograms(grid, sel);
+    Adjustment::ChannelLut(Box::new([stretch(&h[0]), stretch(&h[1]), stretch(&h[2])]))
+}
+
+/// Auto Contrast: one stretch for all channels (keeps colours, adjusts contrast only).
+pub fn auto_contrast(grid: &TileGrid, sel: Option<&Selection>) -> Adjustment {
+    let h = channel_histograms(grid, sel);
+    let combined: [u32; 256] = std::array::from_fn(|i| h[0][i] + h[1][i] + h[2][i]);
+    let t = stretch(&combined);
+    Adjustment::ChannelLut(Box::new([t, t, t]))
 }
 
 /// Rec. 601 luma, like Photoshop's grayscale conversion for Threshold.
@@ -327,6 +383,19 @@ mod tests {
         let id = |g: &TileGrid, x| g.tile(x, 0).unwrap().id();
         assert_eq!(id(&out, 2), id(&grid, 2), "untouched tile shared");
         assert_ne!(id(&out, 0), id(&grid, 0));
+    }
+
+    #[test]
+    fn auto_contrast_stretches_to_full_range() {
+        let px: Vec<u8> = (0..256u32).flat_map(|i| { let v = (60 + i * 100 / 255) as u8; [v, v, v, 255] }).collect();
+        let g = TileGrid::from_rgba8(256, 1, &px);
+        let out = apply(&g, &auto_contrast(&g, None), None);
+        assert_eq!((out.pixel(0, 0)[0], out.pixel(255, 0)[0]), (0, 255));
+        // Auto Tone fixes a colour cast: a red-tinted grey ramp becomes neutral.
+        let tinted: Vec<u8> = (0..256u32).flat_map(|i| { let v = (i / 2) as u8; [v.saturating_add(100), v, v, 255] }).collect();
+        let g = TileGrid::from_rgba8(256, 1, &tinted);
+        let p = apply(&g, &auto_tone(&g, None), None).pixel(128, 0);
+        assert!((p[0] as i32 - p[1] as i32).abs() <= 3, "{p:?}");
     }
 
     #[test]

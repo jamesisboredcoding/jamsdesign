@@ -9,19 +9,21 @@ use jd_ui::widget::{bold, field_box, hline, icon_button, label, layer_row, panel
 use jd_ui::{Icon, icon, style, tokens::*};
 
 use super::{color, to_color};
-use crate::app::{Message, Photo, RENAME_INPUT};
+use crate::app::{DropTarget, Message, Photo, RENAME_INPUT};
 
 pub fn view(app: &Photo) -> Element<'_, Message> {
-    container(
-        column![
-            color_panel(app),
-            hline(BORDER_DEFAULT),
-            properties_panel(app),
-            hline(BORDER_DEFAULT),
-            layers_panel(app),
-        ]
-        .height(Fill),
-    )
+    // Window menu toggles which panels show; Layers takes the remaining height.
+    let mut col = column![].height(Fill);
+    if app.panels.color {
+        col = col.push(color_panel(app)).push(hline(BORDER_DEFAULT));
+    }
+    if app.panels.properties {
+        col = col.push(properties_panel(app)).push(hline(BORDER_DEFAULT));
+    }
+    if app.panels.layers {
+        col = col.push(layers_panel(app));
+    }
+    container(col)
     .width(300)
     .height(Fill)
     .style(style::fill(BG_PANEL))
@@ -194,16 +196,24 @@ fn layers_panel(app: &Photo) -> Element<'_, Message> {
             Some((_, handle)) => image(handle.clone()).width(40).height(28).content_fit(iced::ContentFit::Contain).into(),
             None => space().into(),
         };
-        list = list.push(layer_row(
+        let row = layer_row(
             name,
             thumb,
             layer.visible,
             layer.locked,
             Some(layer.id) == active_id,
-            Message::SelectLayer(layer.id),
+            // Pressing a row selects it and may start a drag (reorder, or onto a tab).
+            Message::LayerPress(layer.id),
             Message::ToggleVisible(layer.id),
             Message::ToggleLockOf(layer.id),
-        ));
+        );
+        // Drop indicator: accent line above the row the dragged layer would land on.
+        let target = app.layer_drag.is_some_and(|d| d.layer != layer.id && d.target == Some(DropTarget::Layer(layer.id)));
+        let line = if target { ACCENT_PRIMARY } else { iced::Color::TRANSPARENT };
+        list = list.push(
+            mouse_area(column![container(space()).width(Fill).height(2).style(style::fill(line)), row])
+                .on_enter(Message::DragOver(DropTarget::Layer(layer.id))),
+        );
     }
 
     let mut actions = row![space::horizontal()].spacing(6).align_y(Vertical::Center);

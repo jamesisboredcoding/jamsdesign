@@ -51,6 +51,9 @@ impl Op {
             OpKind::UnsharpMask => Op::Filter(Filter::UnsharpMask { amount: 100.0, radius: 1.5, threshold: 0 }),
             OpKind::AddNoise => Op::Filter(Filter::AddNoise { amount: 10.0, monochrome: false, seed: 1 }),
             OpKind::Mosaic => Op::Filter(Filter::Mosaic { cell: 12 }),
+            OpKind::BoxBlur => Op::Filter(Filter::BoxBlur { radius: 4.0 }),
+            OpKind::HighPass => Op::Filter(Filter::HighPass { radius: 10.0 }),
+            OpKind::Sharpen => Op::Filter(Filter::Sharpen),
         }
     }
 }
@@ -70,12 +73,15 @@ pub enum OpKind {
     UnsharpMask,
     AddNoise,
     Mosaic,
+    BoxBlur,
+    HighPass,
+    Sharpen,
 }
 
 impl OpKind {
     /// Applied straight away, without a dialog (like Photoshop's Invert / Desaturate).
     pub fn is_instant(self) -> bool {
-        matches!(self, OpKind::Invert | OpKind::Desaturate)
+        matches!(self, OpKind::Invert | OpKind::Desaturate | OpKind::Sharpen)
     }
 }
 

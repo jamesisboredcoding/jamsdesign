@@ -188,3 +188,90 @@ fn card_style(_: &iced::Theme) -> container::Style {
 fn scrim(_: &iced::Theme) -> container::Style {
     container::Style { background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.45).into()), ..Default::default() }
 }
+
+/// Image Size, Canvas Size and the one-value Select/Edit dialogs.
+pub fn small(app: &Photo) -> Option<Element<'_, Message>> {
+    use crate::app::DialogKind;
+    use iced::widget::text_input;
+    let d = app.dialog.as_ref()?;
+    let field = |label: &'static str, value: &str, on: fn(String) -> Message| {
+        column![
+            text(label).size(TEXT_SIZE_SMALL).color(TEXT_SECONDARY),
+            text_input("", value).size(TEXT_SIZE).padding(Padding::from([5, 8])).on_input(on).on_submit(Message::DialogOk),
+        ]
+        .spacing(4)
+    };
+    let (title, body): (&str, Element<'_, Message>) = match d.kind {
+        DialogKind::ImageSize => (
+            "Image Size",
+            column![
+                row![field("Width (px)", &d.a, Message::DialogA), field("Height (px)", &d.b, Message::DialogB)].spacing(10),
+                button(text(if d.constrain { "Keep proportions: on" } else { "Keep proportions: off" }).size(TEXT_SIZE_SMALL))
+                    .padding(Padding::from([4, 10]))
+                    .style(style::ghost(d.constrain))
+                    .on_press(Message::DialogConstrain),
+                text("Resamples every layer (smooth averaging when shrinking).").size(TEXT_SIZE_SMALL).color(TEXT_MUTED),
+            ]
+            .spacing(10)
+            .into(),
+        ),
+        DialogKind::CanvasSize => {
+            let mut grid = column![].spacing(3);
+            for cy in 0..3u8 {
+                let mut r = row![].spacing(3);
+                for cx in 0..3u8 {
+                    let on = d.anchor == (cx, cy);
+                    r = r.push(
+                        button(space().width(14).height(14))
+                            .padding(0)
+                            .style(move |_, status| button::Style {
+                                background: Some(
+                                    if on { ACCENT_PRIMARY } else if matches!(status, button::Status::Hovered) { BG_HOVER } else { BG_INPUT }.into(),
+                                ),
+                                border: iced::Border { color: BORDER_SUBTLE, width: 1.0, radius: 2.0.into() },
+                                ..Default::default()
+                            })
+                            .on_press(Message::DialogAnchor(cx, cy)),
+                    );
+                }
+                grid = grid.push(r);
+            }
+            (
+                "Canvas Size",
+                column![
+                    row![field("Width (px)", &d.a, Message::DialogA), field("Height (px)", &d.b, Message::DialogB)].spacing(10),
+                    row![text("Anchor").size(TEXT_SIZE_SMALL).color(TEXT_SECONDARY).width(60), grid].spacing(10),
+                    text("New area on the Background is filled with the background colour.").size(TEXT_SIZE_SMALL).color(TEXT_MUTED),
+                ]
+                .spacing(10)
+                .into(),
+            )
+        }
+        kind => {
+            let (title, label) = match kind {
+                DialogKind::Expand => ("Expand Selection", "Expand by (px)"),
+                DialogKind::Contract => ("Contract Selection", "Contract by (px)"),
+                DialogKind::Feather => ("Feather Selection", "Feather radius (px)"),
+                _ => ("Stroke", "Width (px), in the foreground colour, centred on the edge"),
+            };
+            (title, field(label, &d.a, Message::DialogA).into())
+        }
+    };
+    let card = container(
+        column![
+            text(title).size(15).font(bold()),
+            body,
+            row![
+                space::horizontal(),
+                button(text("Cancel").size(TEXT_SIZE)).padding(Padding::from([6, 14])).style(style::ghost(false)).on_press(Message::DialogCancel),
+                button(text("OK").size(TEXT_SIZE).font(bold())).padding(Padding::from([6, 18])).style(style::primary).on_press(Message::DialogOk),
+            ]
+            .spacing(8),
+        ]
+        .spacing(16)
+        .width(360),
+    )
+    .padding(20)
+    .style(card_style);
+    Some(opaque(center(card).style(scrim)).into())
+}

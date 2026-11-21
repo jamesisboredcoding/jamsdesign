@@ -22,6 +22,12 @@ pub enum Filter {
     AddNoise { amount: f32, monochrome: bool, seed: u32 },
     /// Square cells of this many pixels.
     Mosaic { cell: u32 },
+    /// Plain average over a square of this radius.
+    BoxBlur { radius: f32 },
+    /// Keeps detail finer than `radius`, flattening the rest to grey (for sharpening/texture).
+    HighPass { radius: f32 },
+    /// One-step sharpening (a fixed, gentle Unsharp Mask), like Photoshop's Filter > Sharpen.
+    Sharpen,
 }
 
 impl Filter {
@@ -31,20 +37,28 @@ impl Filter {
             Self::UnsharpMask { .. } => "Unsharp Mask",
             Self::AddNoise { .. } => "Add Noise",
             Self::Mosaic { .. } => "Mosaic",
+            Self::BoxBlur { .. } => "Box Blur",
+            Self::HighPass { .. } => "High Pass",
+            Self::Sharpen => "Sharpen",
         }
     }
 
     /// How far a pixel's result can depend on its neighbours.
     fn margin(&self) -> u32 {
         match *self {
-            Self::GaussianBlur { radius } | Self::UnsharpMask { radius, .. } => (radius * 3.0).ceil() as u32 + 1,
+            Self::GaussianBlur { radius } | Self::UnsharpMask { radius, .. } | Self::HighPass { radius } => (radius * 3.0).ceil() as u32 + 1,
+            Self::BoxBlur { radius } => radius.ceil() as u32 + 1,
             Self::Mosaic { cell } => cell,
             Self::AddNoise { .. } => 0,
+            Self::Sharpen => 4,
         }
     }
 }
 
 pub fn apply(grid: &TileGrid, filter: &Filter, sel: Option<&Selection>) -> TileGrid {
+    if *filter == Filter::Sharpen {
+        return apply(grid, &Filter::UnsharpMask { amount: 60.0, radius: 1.0, threshold: 0 }, sel);
+    }
     if let Filter::AddNoise { amount, monochrome, seed } = *filter {
         let a = amount.clamp(0.0, 400.0) / 100.0 * 127.0;
         return map_pixels_xy(grid, sel, move |x, y, p| {
@@ -124,7 +138,26 @@ pub fn apply(grid: &TileGrid, filter: &Filter, sel: Option<&Selection>) -> TileG
             });
         }
         Filter::Mosaic { cell } => mosaic(&mut buf, rw, rh, rx0, ry0, cell.max(1)),
-        Filter::AddNoise { .. } => unreachable!("handled above"),
+        Filter::BoxBlur { radius } => {
+            let r = radius.round().max(0.0) as usize;
+            box_rows(&mut buf, rw, r);
+            columns(&mut buf, rw, rh, |col| box_line(col, r));
+        }
+        Filter::HighPass { radius } => {
+            let mut blurred = buf.clone();
+            gaussian(&mut blurred, rw, rh, radius);
+            buf.par_iter_mut().zip(blurred.par_iter()).for_each(|(o, b)| {
+                if o[3] <= 0.0 {
+                    return;
+                }
+                let a = o[3];
+                for c in 0..3 {
+                    let bu = if b[3] > 0.0 { b[c] / b[3] } else { 0.0 };
+                    o[c] = (0.5 + o[c] / a - bu).clamp(0.0, 1.0) * a;
+                }
+            });
+        }
+        Filter::AddNoise { .. } | Filter::Sharpen => unreachable!("handled above"),
     }
 
     // Write back the output box, mixed with the original by selection coverage.
@@ -393,6 +426,16 @@ mod tests {
         let out = apply(&g, &Filter::UnsharpMask { amount: 150.0, radius: 2.0, threshold: 0 }, None);
         assert!(out.pixel(19, 5)[0] < 80 && out.pixel(20, 5)[0] > 160);
         assert_eq!(out.pixel(2, 5)[0], 80, "flat areas unchanged");
+    }
+
+    #[test]
+    fn box_blur_and_high_pass() {
+        let out = apply(&dot(60, 60), &Filter::BoxBlur { radius: 2.0 }, None);
+        assert!(out.pixel(18, 25)[3] > 0 && out.pixel(17, 25)[3] == 0);
+        let flat = TileGrid::from_rgba8(30, 30, &[90, 90, 90, 255].repeat(900));
+        let hp = apply(&flat, &Filter::HighPass { radius: 3.0 }, None);
+        let p = hp.pixel(15, 15);
+        assert!((126..=129).contains(&p[0]), "flat areas become mid grey: {p:?}");
     }
 
     #[test]

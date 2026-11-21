@@ -8,7 +8,7 @@ use iced::keyboard;
 use iced::mouse::{self, ScrollDelta};
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
 use iced::widget::shader::{self, Viewport};
-use iced::widget::{Canvas, Shader, button, column, container, row, stack, text};
+use iced::widget::{Canvas, Shader, button, column, container, mouse_area, row, stack, text};
 use iced::{Color, Element, Fill, Point, Rectangle, Renderer, Theme, Vector};
 use jd_gpu::{Scene, SceneLayer, View, wgpu};
 use jd_raster::selection::{Combine, Segment};
@@ -104,11 +104,19 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
             affine: t.affine(),
             grabbing: t.is_grabbing(),
         }),
+        covered: app.popup.is_some()
+            || app.adjusting.is_some()
+            || app.new_doc.is_some()
+            || app.confirm.is_some()
+            || app.dialog.is_some(),
     })
     .width(Fill)
     .height(Fill);
 
-    stack![pixels, overlay].width(Fill).height(Fill).into()
+    // A layer dragged from the Layers panel can be dropped on the canvas of another document.
+    mouse_area(stack![pixels, overlay].width(Fill).height(Fill))
+        .on_enter(Message::DragOver(crate::app::DropTarget::Canvas))
+        .into()
 }
 
 fn empty_state(app: &Photo) -> Element<'_, Message> {
@@ -257,6 +265,9 @@ struct Overlay<'a> {
     selection: Option<&'a jd_raster::selection::Selection>,
     ants: &'a Ants,
     transform: Option<TransformView>,
+    /// A dialog or menu is open over the canvas: show the normal arrow (the canvas would
+    /// otherwise hide the cursor under it for brush tools) and no brush outline.
+    covered: bool,
 }
 
 /// A marquee or lasso being dragged.
@@ -671,6 +682,7 @@ impl canvas::Program<Message> for Overlay<'_> {
         };
         if self.tool.uses_brush()
             && self.transform.is_none()
+            && !self.covered
             && let Some(p) = at
         {
             let r = (self.brush_size * self.zoom / 2.0).max(1.5);
@@ -694,6 +706,10 @@ impl canvas::Program<Message> for Overlay<'_> {
     fn mouse_interaction(&self, state: &DragState, bounds: Rectangle, cursor: mouse::Cursor) -> mouse::Interaction {
         if state.panning.is_some() {
             return mouse::Interaction::Grabbing;
+        }
+        if self.covered {
+            // Idle (not None) so the stack stops here and shows the arrow.
+            return mouse::Interaction::Idle;
         }
         let Some(p) = cursor.position_in(bounds) else { return mouse::Interaction::default() };
         if let Some(t) = &self.transform

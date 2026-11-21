@@ -47,7 +47,11 @@ Shift/Alt/Shift+Alt while starting a selection: add/subtract/intersect · Delete
 selection (no selection: deletes the layer) · Alt+Backspace / Ctrl+Backspace fill with
 foreground / background · Ctrl+C / Ctrl+X / Ctrl+V · Ctrl+J / Ctrl+Shift+J layer via copy / cut ·
 Ctrl+T free transform (Enter commits, Esc cancels) · arrows nudge with the Move tool ·
-Ctrl+L levels · Ctrl+M curves · Ctrl+U hue/saturation · Ctrl+I invert · Shift+Ctrl+U desaturate · Ctrl+W close tab · Ctrl+Tab next tab · F11 fullscreen ·
+Ctrl+L levels · Ctrl+M curves · Ctrl+U hue/saturation · Ctrl+I invert · Shift+Ctrl+U desaturate ·
+Shift+Ctrl+L auto tone · Alt+Shift+Ctrl+L auto contrast · Alt+Ctrl+I image size · Alt+Ctrl+C
+canvas size · Ctrl+E merge down · Shift+Ctrl+E merge visible · Shift+Ctrl+C copy merged ·
+Shift+Ctrl+D reselect · Shift+F6 feather · Alt+Ctrl+F last filter · Shift+Ctrl+] / [ bring to
+front / send to back · Ctrl+W close tab · Ctrl+Tab next tab · F11 fullscreen ·
 scroll wheel zooms at the cursor · Space+drag, middle-drag or Hand tool pans · Zoom tool:
 left-click in, right-click out.
 
@@ -65,6 +69,11 @@ left-click in, right-click out.
 - [x] 5: Image > Adjustments (Brightness/Contrast, Levels, Curves, Hue/Saturation, Threshold,
       Posterize, Invert, Desaturate) and Filters (Gaussian Blur, Unsharp Mask, Add Noise,
       Mosaic) with live preview, selection-aware
+- [x] 5b: menus with submenus; Place, Copy Merged, Stroke, layer Transform (flip/rotate), Auto
+      Tone/Contrast, Image Size, Canvas Size, Image Rotation, Crop, Trim, Duplicate, Merge
+      Down/Visible, Flatten, Arrange, Reselect, Expand/Contract/Feather, Box Blur, Sharpen,
+      High Pass, Last Filter, Window panel toggles; drag layers to reorder or onto another
+      document's tab/canvas to copy them
 - [ ] 6: text, PSD import, Flatpak
 
 ## Selections and transforms

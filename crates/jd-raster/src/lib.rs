@@ -6,6 +6,7 @@ pub mod adjust;
 pub mod blend;
 pub mod composite;
 pub mod filter;
+pub mod image_ops;
 mod history;
 pub mod paint;
 pub mod selection;
@@ -143,6 +144,10 @@ impl Document {
     /// Bottom-to-top.
     pub fn layers(&self) -> &[Layer] {
         &self.layers
+    }
+
+    pub(crate) fn layers_mut(&mut self) -> &mut [Layer] {
+        &mut self.layers
     }
 
     pub fn layer(&self, id: LayerId) -> Option<&Layer> {

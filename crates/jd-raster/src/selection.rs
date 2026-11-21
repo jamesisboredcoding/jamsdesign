@@ -606,3 +606,147 @@ mod tests {
         assert_eq!(s.bounds(), Some([10, 3, 15, 8]));
     }
 }
+
+// ---- Select > Modify -----------------------------------------------------------------------
+
+impl Selection {
+    /// Dense coverage over the selection bounds grown by `margin` (clipped): (x0, y0, w, h, mask).
+    fn dense(&self, margin: u32) -> Option<(u32, u32, usize, usize, Vec<u8>)> {
+        let [x0, y0, x1, y1] = self.bounds()?;
+        let (x0, y0) = (x0.saturating_sub(margin), y0.saturating_sub(margin));
+        let (x1, y1) = ((x1 + margin).min(self.width), (y1 + margin).min(self.height));
+        let (w, h) = ((x1 - x0) as usize, (y1 - y0) as usize);
+        let mut m = vec![0u8; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                m[y * w + x] = self.get(x0 + x as u32, y0 + y as u32);
+            }
+        }
+        Some((x0, y0, w, h, m))
+    }
+
+    fn from_dense(width: u32, height: u32, x0: u32, y0: u32, w: usize, m: &[u8]) -> Self {
+        let mut s = Self::empty(width, height);
+        for (i, &v) in m.iter().enumerate() {
+            if v != 0 {
+                s.set(x0 + (i % w) as u32, y0 + (i / w) as u32, v);
+            }
+        }
+        s
+    }
+
+    /// Grows the selection by `r` pixels (square, like Photoshop's Expand).
+    pub fn expand(&self, r: u32) -> Self {
+        self.morph(r, true)
+    }
+
+    /// Shrinks the selection by `r` pixels.
+    pub fn contract(&self, r: u32) -> Self {
+        self.morph(r, false)
+    }
+
+    fn morph(&self, r: u32, grow: bool) -> Self {
+        let Some((x0, y0, w, h, mut m)) = self.dense(if grow { r } else { 1 }) else { return self.clone() };
+        let r = r as usize;
+        // Separable sliding max/min; outside counts as unselected (so contract eats edges).
+        for y in 0..h {
+            let row: Vec<u8> = m[y * w..(y + 1) * w].to_vec();
+            sliding(&row, r, grow, &mut m[y * w..(y + 1) * w]);
+        }
+        let mut col = vec![0u8; h];
+        let mut out = vec![0u8; h];
+        for x in 0..w {
+            for y in 0..h {
+                col[y] = m[y * w + x];
+            }
+            sliding(&col, r, grow, &mut out);
+            for y in 0..h {
+                m[y * w + x] = out[y];
+            }
+        }
+        Self::from_dense(self.width, self.height, x0, y0, w, &m)
+    }
+
+    /// Softens the edge with a Gaussian of radius `r` (Select > Modify > Feather).
+    pub fn feather(&self, r: f32) -> Self {
+        let Some([x0, y0, x1, y1]) = self.bounds() else { return self.clone() };
+        // Coverage as alpha of a white layer, blurred by the shared filter code.
+        let mut g = TileGrid::empty(self.width, self.height);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let v = self.get(x, y);
+                if v != 0 {
+                    g.set_pixel(x, y, [255, 255, 255, v]);
+                }
+            }
+        }
+        let blurred = crate::filter::apply(&g, &crate::filter::Filter::GaussianBlur { radius: r }, None);
+        let mut s = Self::empty(self.width, self.height);
+        for (tx, ty, tile) in blurred.iter() {
+            for (i, p) in tile.data().chunks_exact(4).enumerate() {
+                if p[3] != 0 {
+                    s.set(tx * TILE_SIZE + i as u32 % TILE_SIZE, ty * TILE_SIZE + i as u32 / TILE_SIZE, p[3]);
+                }
+            }
+        }
+        s
+    }
+
+    /// A band `width` pixels wide centred on the selection edge (for Edit > Stroke).
+    pub fn border(&self, width: u32) -> Self {
+        let half = width / 2;
+        let mut band = self.expand(width - half);
+        band.combine(&self.contract(half), Combine::Subtract);
+        band
+    }
+}
+
+/// Max (or min) over a window of radius `r`, O(n) with a monotonic deque.
+fn sliding(src: &[u8], r: usize, max: bool, out: &mut [u8]) {
+    let n = src.len();
+    let better = |a: u8, b: u8| if max { a >= b } else { a <= b };
+    let mut dq: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+    let mut next = 0;
+    for (i, o) in out.iter_mut().enumerate().take(n) {
+        let hi = (i + r).min(n - 1);
+        while next <= hi {
+            while dq.back().is_some_and(|&j| better(src[next], src[j])) {
+                dq.pop_back();
+            }
+            dq.push_back(next);
+            next += 1;
+        }
+        while dq.front().is_some_and(|&j| j + r < i) {
+            dq.pop_front();
+        }
+        let v = src[*dq.front().expect("window non-empty")];
+        // Contract: the window running off the edge sees "unselected".
+        *o = if !max && (i < r || i + r >= n) { 0 } else { v };
+    }
+}
+
+#[cfg(test)]
+mod modify_tests {
+    use super::*;
+
+    #[test]
+    fn expand_contract_border_feather() {
+        let s = Selection::rect(100, 100, 40.0, 40.0, 60.0, 60.0);
+        assert_eq!(s.expand(5).bounds(), Some([35, 35, 65, 65]));
+        assert_eq!(s.contract(5).bounds(), Some([45, 45, 55, 55]));
+        let b = s.border(4);
+        assert_eq!((b.get(40, 50), b.get(50, 50), b.get(37, 50)), (255, 0, 0));
+        assert_eq!(b.get(38, 50), 255);
+        let f = s.feather(4.0);
+        let edge = f.get(40, 50);
+        assert!(edge > 60 && edge < 200, "{edge}");
+        assert!(f.get(50, 50) >= 250, "centre stays selected");
+        assert!(f.get(33, 50) > 0, "softness spreads outside");
+    }
+
+    #[test]
+    fn contract_eats_selections_touching_the_canvas_edge() {
+        let s = Selection::all(50, 50).contract(3);
+        assert_eq!(s.bounds(), Some([3, 3, 47, 47]));
+    }
+}

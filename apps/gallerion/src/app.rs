@@ -77,6 +77,8 @@ pub struct OpenDoc {
     pub last_paint: Option<Point>,
     /// Marching-ants outline and its drawn geometry, rebuilt when the selection or view changes.
     pub ants: crate::view::Ants,
+    /// The selection before the last Deselect, for Select > Reselect.
+    pub last_selection: Option<Selection>,
 }
 
 impl OpenDoc {
@@ -116,6 +118,80 @@ impl Default for SelectOptions {
 pub struct Popup {
     pub kind: PopupKind,
     pub at: Point,
+    /// Index of the open submenu row, if any.
+    pub sub: Option<usize>,
+}
+
+/// A layer being dragged in the Layers panel.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LayerDrag {
+    pub doc: u64,
+    pub layer: LayerId,
+    pub target: Option<DropTarget>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DropTarget {
+    /// Onto another row: reorder.
+    Layer(LayerId),
+    /// Onto a document tab: switches to it; dropping copies the layer there.
+    Tab(usize),
+    Canvas,
+}
+
+/// Small modal dialogs with one or two numeric fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DialogKind {
+    ImageSize,
+    CanvasSize,
+    Expand,
+    Contract,
+    Feather,
+    Stroke,
+}
+
+pub struct Dialog {
+    pub kind: DialogKind,
+    /// Width (or the single value).
+    pub a: String,
+    /// Height.
+    pub b: String,
+    /// Image Size: keep proportions.
+    pub constrain: bool,
+    pub aspect: f32,
+    /// Canvas Size anchor: column and row, 0..=2.
+    pub anchor: (u8, u8),
+}
+
+impl Dialog {
+    pub fn number(s: &str) -> Option<u32> {
+        s.trim().parse().ok().filter(|v| (1..=30_000).contains(v))
+    }
+}
+
+/// Which dock panels are shown (Window menu).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Panels {
+    pub color: bool,
+    pub properties: bool,
+    pub layers: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Panel {
+    Color,
+    Properties,
+    Layers,
+}
+
+/// Edit > Transform shortcuts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Orient {
+    FlipH,
+    FlipV,
+    Rotate90Cw,
+    Rotate90Ccw,
+    Rotate180,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -234,6 +310,11 @@ pub struct Photo {
     /// Pixels copied with Ctrl+C / Ctrl+X (an internal clipboard for now).
     pub clipboard: Option<Clip>,
     pub new_doc: Option<NewDocForm>,
+    pub dialog: Option<Dialog>,
+    pub layer_drag: Option<LayerDrag>,
+    /// The last filter applied, for Filter > Last Filter (Alt+Ctrl+F).
+    pub last_filter: Option<Op>,
+    pub panels: Panels,
     /// Cursor position in document pixels, when over the canvas.
     pub cursor: Option<Point>,
     /// Space bar held: temporary Hand tool, like Photoshop.
@@ -319,6 +400,40 @@ pub enum Message {
     AdjustReset,
     AdjustOk,
     AdjustCancel,
+
+    // Layer dragging
+    LayerPress(LayerId),
+    DragOver(DropTarget),
+    PointerReleased,
+
+    // More menu commands
+    PopupSub(Option<usize>),
+    Place,
+    Placed(PathBuf, Result<Box<Document>, String>),
+    DuplicateImage,
+    CopyMerged,
+    OrientLayer(Orient),
+    AutoTone,
+    AutoContrast,
+    RotateCanvas(u32),
+    FlipCanvas(bool),
+    CropToSelection,
+    Trim,
+    MergeDown,
+    MergeVisible,
+    Flatten,
+    /// Bring to front (true) / send to back (false).
+    ArrangeEnd(bool),
+    Reselect,
+    LastFilter,
+    TogglePanel(Panel),
+    ShowDialog(DialogKind),
+    DialogA(String),
+    DialogB(String),
+    DialogConstrain,
+    DialogAnchor(u8, u8),
+    DialogOk,
+    DialogCancel,
 
     // New document
     NewDocDialog,
@@ -425,6 +540,17 @@ pub enum Message {
     Noop,
 }
 
+/// `src` moved into a `w`×`h` document: same position if the sizes match, otherwise centred.
+fn centred(src: &TileGrid, w: u32, h: u32) -> TileGrid {
+    if src.width() == w && src.height() == h {
+        return src.clone();
+    }
+    let Some([x0, y0, x1, y1]) = jd_raster::transform::content_bounds(src) else { return TileGrid::empty(w, h) };
+    let dx = (w as i64 - (x1 - x0) as i64) / 2 - x0 as i64;
+    let dy = (h as i64 - (y1 - y0) as i64) / 2 - y0 as i64;
+    jd_raster::transform::place(src, w, h, dx, dy)
+}
+
 fn file_name(path: &Path) -> String {
     path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned())
 }
@@ -467,6 +593,10 @@ impl Photo {
             adjusting: None,
             clipboard: None,
             new_doc: None,
+            dialog: None,
+            layer_drag: None,
+            last_filter: None,
+            panels: Panels { color: true, properties: true, layers: true },
             cursor: None,
             space_held: false,
             color_tab: 0,
@@ -628,7 +758,26 @@ impl Photo {
                 doc.selection = Some(Selection::all(doc.width, doc.height));
                 true
             }),
-            Message::Deselect => self.edit("Deselect", None, |doc| doc.selection.take().is_some()),
+            Message::Deselect => {
+                if let Some(d) = self.doc_mut()
+                    && d.doc.selection.is_some()
+                {
+                    d.last_selection = d.doc.selection.clone();
+                }
+                self.edit("Deselect", None, |doc| doc.selection.take().is_some());
+            }
+            Message::Reselect => {
+                let last = self.doc().and_then(|d| d.last_selection.clone());
+                if let Some(sel) = last {
+                    self.edit("Reselect", None, |doc| {
+                        let ok = sel.width() == doc.width && sel.height() == doc.height;
+                        if ok {
+                            doc.selection = Some(sel);
+                        }
+                        ok
+                    });
+                }
+            }
             Message::InvertSelection => self.edit("Inverse", None, |doc| {
                 let mut s = doc.selection.take().unwrap_or_else(|| Selection::empty(doc.width, doc.height));
                 s.invert();
@@ -694,21 +843,8 @@ impl Photo {
                     return Task::none();
                 };
                 let Some(doc) = self.document() else { return Task::none() };
-                // Same position as the source when it fits; other documents get it re-cut to size.
-                let pixels = if clip.pixels.width() == doc.width && clip.pixels.height() == doc.height {
-                    clip.pixels.clone()
-                } else {
-                    let mut out = TileGrid::empty(doc.width, doc.height);
-                    let Some([x0, y0, x1, y1]) = jd_raster::transform::content_bounds(&clip.pixels) else {
-                        return Task::none();
-                    };
-                    for y in y0..y1 {
-                        for x in x0..x1 {
-                            out.set_pixel(x - x0, y - y0, clip.pixels.pixel(x, y));
-                        }
-                    }
-                    out
-                };
+                // Same position when the sizes match; centred in a different-size document.
+                let pixels = centred(&clip.pixels, doc.width, doc.height);
                 self.edit("Paste", None, |doc| {
                     let n = doc.layers().len();
                     let id = doc.add_layer(format!("Layer {n}"));
@@ -827,6 +963,9 @@ impl Photo {
             Message::AdjustOk => {
                 let Some(s) = self.adjusting.take() else { return Task::none() };
                 let Some(i) = self.doc_index(s.doc) else { return Task::none() };
+                if matches!(s.op, Op::Filter(_)) {
+                    self.last_filter = Some(s.op.clone());
+                }
                 let pixels = s.result();
                 let d = &mut self.docs[i];
                 d.history.record(s.op.name(), &d.doc, None);
@@ -836,6 +975,205 @@ impl Photo {
             }
             Message::AdjustCancel => self.adjusting = None,
 
+            Message::LayerPress(id) => {
+                let _ = self.update(Message::SelectLayer(id));
+                if let Some(d) = self.doc() {
+                    self.layer_drag = Some(LayerDrag { doc: d.id, layer: id, target: None });
+                }
+            }
+            Message::DragOver(target) => {
+                if let Some(drag) = self.layer_drag.as_mut() {
+                    drag.target = Some(target);
+                    // Hovering a tab while dragging brings that document forward, like Photoshop.
+                    if let DropTarget::Tab(i) = target
+                        && i < self.docs.len()
+                    {
+                        self.active = i;
+                    }
+                }
+            }
+            Message::PointerReleased => {
+                if let Some(drag) = self.layer_drag.take() {
+                    self.drop_layer(drag);
+                }
+            }
+            Message::Place => {
+                if self.doc().is_none() {
+                    return Task::none();
+                }
+                let mut types = jd_io::OPEN_EXTENSIONS.to_vec();
+                types.push(jd_io::jdp::EXTENSION);
+                return Task::perform(
+                    async move {
+                        let file = rfd::AsyncFileDialog::new()
+                            .set_title("Place")
+                            .add_filter("Images and documents", &types)
+                            .pick_file()
+                            .await?;
+                        let path = file.path().to_path_buf();
+                        let loaded = jd_io::open(&path).map(Box::new).map_err(|e| e.to_string());
+                        Some((path, loaded))
+                    },
+                    |picked| match picked {
+                        Some((path, loaded)) => Message::Placed(path, loaded),
+                        None => Message::Noop,
+                    },
+                );
+            }
+            Message::Placed(path, result) => match result {
+                Err(e) => self.error(format!("Couldn't place {}: {e}", file_name(&path))),
+                Ok(placed) => {
+                    let flat = TileGrid::from_rgba8(placed.width, placed.height, &jd_raster::composite::flatten(&placed));
+                    let name = path.file_stem().map_or_else(|| "Placed".to_owned(), |s| s.to_string_lossy().into_owned());
+                    self.edit("Place", None, |doc| {
+                        let pixels = centred(&flat, doc.width, doc.height);
+                        let id = doc.add_layer(name);
+                        doc.layer_mut(id).map(|l| l.pixels = pixels).is_some()
+                    });
+                }
+            },
+            Message::DuplicateImage => {
+                if let Some(d) = self.document() {
+                    let mut copy = d.clone();
+                    let stem = Path::new(&copy.name).file_stem().map_or_else(|| copy.name.clone(), |s| s.to_string_lossy().into_owned());
+                    copy.name = format!("{stem} copy");
+                    self.push_doc(copy, None);
+                    // Never saved: closing it should ask.
+                    if let Some(d) = self.doc_mut() {
+                        d.history = History::default();
+                    }
+                }
+            }
+            Message::CopyMerged => {
+                let Some(doc) = self.document() else { return Task::none() };
+                let flat = TileGrid::from_rgba8(doc.width, doc.height, &jd_raster::composite::flatten(doc));
+                let pixels = match &doc.selection {
+                    Some(sel) => selection::extract(&flat, sel),
+                    None => flat,
+                };
+                self.clipboard = Some(Clip { pixels });
+                self.info("Copied (merged)");
+            }
+            Message::OrientLayer(o) => {
+                if self.begin_transform(transform::Kind::Free)
+                    && let Some(t) = self.transform.as_mut()
+                {
+                    match o {
+                        Orient::FlipH => t.orient(true, false, 0),
+                        Orient::FlipV => t.orient(false, true, 0),
+                        Orient::Rotate90Cw => t.orient(false, false, 1),
+                        Orient::Rotate90Ccw => t.orient(false, false, 3),
+                        Orient::Rotate180 => t.orient(false, false, 2),
+                    }
+                    self.commit_transform();
+                }
+            }
+            Message::AutoTone | Message::AutoContrast => {
+                let tone = matches!(message, Message::AutoTone);
+                if self.check_layer_editable() {
+                    self.edit(if tone { "Auto Tone" } else { "Auto Contrast" }, None, |doc| {
+                        let sel = doc.selection.clone();
+                        let Some(id) = doc.active_id() else { return false };
+                        let Some(l) = doc.layer_mut(id) else { return false };
+                        let adj = if tone {
+                            jd_raster::adjust::auto_tone(&l.pixels, sel.as_ref())
+                        } else {
+                            jd_raster::adjust::auto_contrast(&l.pixels, sel.as_ref())
+                        };
+                        l.pixels = jd_raster::adjust::apply(&l.pixels, &adj, sel.as_ref());
+                        true
+                    });
+                }
+            }
+            Message::RotateCanvas(q) => self.edit("Rotate Canvas", None, |doc| {
+                doc.rotate_canvas(q);
+                true
+            }),
+            Message::FlipCanvas(h) => self.edit(if h { "Flip Canvas Horizontal" } else { "Flip Canvas Vertical" }, None, |doc| {
+                doc.flip_canvas(h);
+                true
+            }),
+            Message::CropToSelection => self.edit("Crop", None, |doc| {
+                let Some(b) = doc.selection.as_ref().and_then(|s| s.bounds()) else { return false };
+                doc.crop(b);
+                true
+            }),
+            Message::Trim => self.edit("Trim", None, |doc| doc.trim()),
+            Message::MergeDown => self.edit("Merge Down", None, |doc| doc.merge_down()),
+            Message::MergeVisible => self.edit("Merge Visible", None, |doc| doc.merge_visible()),
+            Message::Flatten => self.edit("Flatten Image", None, |doc| {
+                doc.flatten();
+                true
+            }),
+            Message::ArrangeEnd(front) => self.edit(if front { "Bring to Front" } else { "Send to Back" }, None, |doc| {
+                let Some(id) = doc.active_id() else { return false };
+                let Some(i) = doc.layers().iter().position(|l| l.id == id) else { return false };
+                let delta = if front { (doc.layers().len() - 1 - i) as isize } else { -(i as isize) };
+                delta != 0 && doc.move_layer(id, delta)
+            }),
+            Message::LastFilter => {
+                if let Some(op) = self.last_filter.clone()
+                    && self.check_layer_editable()
+                {
+                    self.edit(op.name(), None, |doc| {
+                        let sel = doc.selection.clone();
+                        let Some(id) = doc.active_id() else { return false };
+                        doc.layer_mut(id).map(|l| l.pixels = op.run(&l.pixels, sel.as_ref())).is_some()
+                    });
+                }
+            }
+            Message::TogglePanel(p) => {
+                let flag = match p {
+                    Panel::Color => &mut self.panels.color,
+                    Panel::Properties => &mut self.panels.properties,
+                    Panel::Layers => &mut self.panels.layers,
+                };
+                *flag = !*flag;
+            }
+            Message::ShowDialog(kind) => {
+                let Some(doc) = self.document() else { return Task::none() };
+                let needs_selection = matches!(kind, DialogKind::Expand | DialogKind::Contract | DialogKind::Feather | DialogKind::Stroke);
+                if needs_selection && doc.selection.is_none() {
+                    self.error("Make a selection first");
+                    return Task::none();
+                }
+                let (a, b) = match kind {
+                    DialogKind::ImageSize | DialogKind::CanvasSize => (doc.width.to_string(), doc.height.to_string()),
+                    DialogKind::Feather => ("5".into(), String::new()),
+                    _ => ("3".into(), String::new()),
+                };
+                self.dialog = Some(Dialog { kind, a, b, constrain: true, aspect: doc.width as f32 / doc.height as f32, anchor: (1, 1) });
+            }
+            Message::DialogA(ref v) | Message::DialogB(ref v) => {
+                let first = matches!(message, Message::DialogA(_));
+                if let Some(d) = self.dialog.as_mut() {
+                    let digits: String = v.chars().filter(char::is_ascii_digit).take(5).collect();
+                    let linked = d.kind == DialogKind::ImageSize && d.constrain;
+                    if first {
+                        if linked && let Some(w) = Dialog::number(&digits) {
+                            d.b = ((w as f32 / d.aspect).round().max(1.0) as u32).to_string();
+                        }
+                        d.a = digits;
+                    } else {
+                        if linked && let Some(h) = Dialog::number(&digits) {
+                            d.a = ((h as f32 * d.aspect).round().max(1.0) as u32).to_string();
+                        }
+                        d.b = digits;
+                    }
+                }
+            }
+            Message::DialogConstrain => {
+                if let Some(d) = self.dialog.as_mut() {
+                    d.constrain = !d.constrain;
+                }
+            }
+            Message::DialogAnchor(cx, cy) => {
+                if let Some(d) = self.dialog.as_mut() {
+                    d.anchor = (cx.min(2), cy.min(2));
+                }
+            }
+            Message::DialogCancel => self.dialog = None,
+            Message::DialogOk => return self.dialog_ok(),
             Message::NewDocDialog => {
                 let n = self.docs.len() + 1;
                 self.new_doc = Some(NewDocForm {
@@ -1102,7 +1440,12 @@ impl Photo {
                 self.slot_tools[t.slot()] = t;
                 self.popup = None;
             }
-            Message::OpenPopup(kind, at) => self.popup = Some(Popup { kind, at }),
+            Message::OpenPopup(kind, at) => self.popup = Some(Popup { kind, at, sub: None }),
+            Message::PopupSub(sub) => {
+                if let Some(p) = self.popup.as_mut() {
+                    p.sub = sub;
+                }
+            }
             Message::ClosePopup => self.popup = None,
             Message::ToolbarPointer(p) => self.toolbar_pointer = p,
             // The inner (title) mouse area reports before the title bar's, so stash it and
@@ -1111,7 +1454,7 @@ impl Photo {
             Message::MenuTitle(i) => {
                 self.popup = match self.popup {
                     Some(Popup { kind: PopupKind::MenuBar(j), .. }) if j == i => None,
-                    _ => Some(Popup { kind: PopupKind::MenuBar(i), at: Point::new(self.menu_left[i], 30.0) }),
+                    _ => Some(Popup { kind: PopupKind::MenuBar(i), at: Point::new(self.menu_left[i], 30.0), sub: None }),
                 };
             }
             Message::Menu(m) => {
@@ -1289,7 +1632,7 @@ impl Photo {
                     if let Some(Popup { kind: PopupKind::MenuBar(j), .. }) = self.popup
                         && j != i
                     {
-                        self.popup = Some(Popup { kind: PopupKind::MenuBar(i), at: Point::new(self.menu_left[i], 30.0) });
+                        self.popup = Some(Popup { kind: PopupKind::MenuBar(i), at: Point::new(self.menu_left[i], 30.0), sub: None });
                     }
                 }
                 if std::mem::take(&mut self.title_pressed) {
@@ -1339,6 +1682,8 @@ impl Photo {
             // Only fires on X11: winit 0.30 has no Wayland drag-and-drop yet.
             event::listen_with(|event, _status, _id| match event {
                 iced::Event::Window(window::Event::FileDropped(path)) => Some(Message::Open(vec![path])),
+                // Ends layer drags wherever the button is released.
+                iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => Some(Message::PointerReleased),
                 _ => None,
             }),
         ])
@@ -1358,6 +1703,7 @@ impl Photo {
             saving: false,
             last_paint: None,
             ants: Default::default(),
+            last_selection: None,
         });
         self.active = self.docs.len() - 1;
     }
@@ -1436,6 +1782,111 @@ impl Photo {
         )
     }
 
+    /// Finishes a layer drag: reorder within the document, or copy into another one.
+    fn drop_layer(&mut self, drag: LayerDrag) {
+        let Some(src) = self.doc_index(drag.doc) else { return };
+        let into_other = self.active != src;
+        match drag.target {
+            Some(DropTarget::Layer(target)) if !into_other && target != drag.layer => {
+                let doc = &self.docs[src].doc;
+                let (Some(from), Some(to)) = (
+                    doc.layers().iter().position(|l| l.id == drag.layer),
+                    doc.layers().iter().position(|l| l.id == target),
+                ) else {
+                    return;
+                };
+                if doc.layers()[from].locked {
+                    self.error("The layer is locked");
+                    return;
+                }
+                self.edit("Move Layer", None, |doc| doc.move_layer(drag.layer, to as isize - from as isize));
+            }
+            Some(DropTarget::Tab(_) | DropTarget::Canvas | DropTarget::Layer(_)) if into_other => {
+                let Some(layer) = self.docs[src].doc.layer(drag.layer).cloned() else { return };
+                self.edit("Drag Layer", None, |doc| {
+                    let pixels = centred(&layer.pixels, doc.width, doc.height);
+                    let id = doc.add_layer(layer.name.clone());
+                    doc.layer_mut(id)
+                        .map(|l| {
+                            l.pixels = pixels;
+                            l.opacity = layer.opacity;
+                            l.blend = layer.blend;
+                            l.visible = layer.visible;
+                        })
+                        .is_some()
+                });
+                let target = self.docs[self.active].doc.name.clone();
+                self.info(format!("Copied layer \"{}\" into {target}", layer.name));
+            }
+            _ => {}
+        }
+    }
+
+    fn dialog_ok(&mut self) -> Task<Message> {
+        let Some(d) = self.dialog.take() else { return Task::none() };
+        let a = Dialog::number(&d.a);
+        let b = Dialog::number(&d.b);
+        match d.kind {
+            DialogKind::ImageSize | DialogKind::CanvasSize => {
+                let (Some(w), Some(h)) = (a, b) else {
+                    self.error("Width and height must be between 1 and 30000 pixels");
+                    self.dialog = Some(d);
+                    return Task::none();
+                };
+                let bg = self.bg.to_rgba().to_srgb8();
+                let anchor = (d.anchor.0 as f32 / 2.0, d.anchor.1 as f32 / 2.0);
+                let image = d.kind == DialogKind::ImageSize;
+                self.edit(if image { "Image Size" } else { "Canvas Size" }, None, |doc| {
+                    if (w, h) == (doc.width, doc.height) {
+                        return false;
+                    }
+                    if image {
+                        doc.resize_image(w, h)
+                    } else {
+                        doc.canvas_size(w, h, anchor, bg)
+                    }
+                    true
+                });
+            }
+            kind => {
+                let Some(v) = a.filter(|v| *v <= 500) else {
+                    self.error("Enter a value from 1 to 500 pixels");
+                    self.dialog = Some(d);
+                    return Task::none();
+                };
+                if kind == DialogKind::Stroke {
+                    if !self.check_layer_editable() {
+                        return Task::none();
+                    }
+                    let color = self.fg.to_rgba().to_srgb8();
+                    self.edit("Stroke", None, |doc| {
+                        let Some(sel) = doc.selection.clone() else { return false };
+                        let band = sel.border(v);
+                        let Some(id) = doc.active_id() else { return false };
+                        doc.layer_mut(id).map(|l| selection::fill(&mut l.pixels, &band, color)).is_some()
+                    });
+                } else {
+                    let label = match kind {
+                        DialogKind::Expand => "Expand",
+                        DialogKind::Contract => "Contract",
+                        _ => "Feather",
+                    };
+                    self.edit(label, None, |doc| {
+                        let Some(sel) = doc.selection.take() else { return false };
+                        let out = match kind {
+                            DialogKind::Expand => sel.expand(v),
+                            DialogKind::Contract => sel.contract(v),
+                            _ => sel.feather(v as f32),
+                        };
+                        doc.selection = (!out.is_empty()).then_some(out);
+                        true
+                    });
+                }
+            }
+        }
+        Task::none()
+    }
+
     /// Messages that leave an open Move/Free Transform alone (view, input plumbing, its own).
     fn keeps_transform(m: &Message) -> bool {
         matches!(
@@ -1473,6 +1924,9 @@ impl Photo {
                 | Message::ToolbarPointer(_)
                 | Message::MenuPointer(..)
                 | Message::MenuTitle(_)
+                | Message::PopupSub(_)
+                | Message::DragOver(_)
+                | Message::PointerReleased
                 | Message::Maximized(_)
                 | Message::ModeChanged(_)
                 | Message::ResizeWindow(_)
@@ -1756,6 +2210,13 @@ impl Photo {
                 _ => Task::none(),
             };
         }
+        if self.dialog.is_some() {
+            return match key.as_ref() {
+                Key::Named(Named::Escape) => self.update(Message::DialogCancel),
+                Key::Named(Named::Enter) => self.update(Message::DialogOk),
+                _ => Task::none(),
+            };
+        }
         if self.new_doc.is_some() {
             return match key.as_ref() {
                 Key::Named(Named::Escape) => self.update(Message::CancelNewDoc),
@@ -1780,16 +2241,25 @@ impl Photo {
                 "o" => Some(Message::OpenDialog),
                 "n" if !shift => Some(Message::NewDocDialog),
                 "a" => Some(Message::SelectAll),
-                "d" => Some(Message::Deselect),
                 "i" if shift => Some(Message::InvertSelection),
-                "c" => Some(Message::Copy),
                 "x" => Some(Message::Cut),
                 "v" => Some(Message::Paste),
                 "t" => Some(Message::FreeTransform),
+                "l" if shift && alt => Some(Message::AutoContrast),
+                "l" if shift => Some(Message::AutoTone),
                 "l" => Some(Message::OpenOp(OpKind::Levels)),
+                "e" if shift => Some(Message::MergeVisible),
+                "e" => Some(Message::MergeDown),
+                "f" if alt => Some(Message::LastFilter),
+                "c" if alt => Some(Message::ShowDialog(DialogKind::CanvasSize)),
+                "c" if shift => Some(Message::CopyMerged),
+                "d" if shift => Some(Message::Reselect),
+                "d" => Some(Message::Deselect),
+                "c" => Some(Message::Copy),
                 "m" => Some(Message::OpenOp(OpKind::Curves)),
                 "u" if shift => Some(Message::OpenOp(OpKind::Desaturate)),
                 "u" => Some(Message::OpenOp(OpKind::HueSaturation)),
+                "i" if alt => Some(Message::ShowDialog(DialogKind::ImageSize)),
                 "i" if !shift => Some(Message::OpenOp(OpKind::Invert)),
                 "s" if shift => Some(Message::SaveAs),
                 "s" => Some(Message::Save),
@@ -1801,6 +2271,8 @@ impl Photo {
                 "y" => Some(Message::Redo),
                 "j" => Some(Message::LayerVia { cut: shift }),
                 "n" if shift => Some(Message::AddLayer),
+                "]" | "}" if shift => Some(Message::ArrangeEnd(true)),
+                "[" | "{" if shift => Some(Message::ArrangeEnd(false)),
                 "]" => Some(Message::MoveLayer(1)),
                 "[" => Some(Message::MoveLayer(-1)),
                 _ => None,
@@ -1845,6 +2317,7 @@ impl Photo {
                 })
             }
             Key::Named(Named::F11) => Some(Message::ToggleFullscreen),
+            Key::Named(Named::F6) if shift => Some(Message::ShowDialog(DialogKind::Feather)),
             Key::Named(Named::Tab) if modifiers.control() => {
                 (!self.docs.is_empty()).then(|| Message::SelectDoc((self.active + 1) % self.docs.len()))
             }
@@ -2365,6 +2838,93 @@ mod tests {
         assert!(app.adjusting.is_none(), "Invert needs no dialog");
         assert_eq!(px(&app, 3, 3), [0, 0, 0, 255]);
         assert_eq!(app.doc().unwrap().history.labels().0.last(), Some(&"Invert"));
+    }
+
+    #[test]
+    fn dragging_a_layer_reorders_or_copies_into_another_document() {
+        let (mut app, _) = Photo::new();
+        white(&mut app, 40, 40);
+        let _ = app.update(Message::AddLayer);
+        let top = app.document().unwrap().active_id().unwrap();
+        let bottom = app.document().unwrap().layers()[0].id;
+        // Reorder: drag the top layer onto the bottom row (it's unlocked by `white`).
+        let _ = app.update(Message::LayerPress(top));
+        let _ = app.update(Message::DragOver(DropTarget::Layer(bottom)));
+        let _ = app.update(Message::PointerReleased);
+        assert_eq!(app.document().unwrap().layers()[0].id, top);
+        assert!(app.layer_drag.is_none());
+
+        // Copy into another, smaller document: hover its tab, drop on its canvas.
+        app.push_doc(Document::new("small", 10, 10), None);
+        let _ = app.update(Message::SelectDoc(0));
+        let _ = app.update(Message::LayerPress(bottom));
+        let _ = app.update(Message::DragOver(DropTarget::Tab(1)));
+        assert_eq!(app.active, 1, "hovering a tab switches to it");
+        let _ = app.update(Message::DragOver(DropTarget::Canvas));
+        let _ = app.update(Message::PointerReleased);
+        let small = app.document().unwrap();
+        assert_eq!(small.layers().len(), 2);
+        assert_eq!(small.layers()[1].pixels.width(), 10, "re-cut to the target size");
+        assert_eq!(small.layers()[1].pixels.pixel(5, 5), [255, 255, 255, 255], "centred");
+        // A plain click on a row is not a drag.
+        let id = small.layers()[1].id;
+        let _ = app.update(Message::LayerPress(id));
+        let _ = app.update(Message::PointerReleased);
+        assert_eq!(app.document().unwrap().layers().len(), 2);
+    }
+
+    #[test]
+    fn image_and_canvas_size_dialogs() {
+        let (mut app, _) = Photo::new();
+        white(&mut app, 40, 20);
+        let _ = app.update(Message::ShowDialog(DialogKind::ImageSize));
+        let _ = app.update(Message::DialogA("80".into()));
+        assert_eq!(app.dialog.as_ref().unwrap().b, "40", "proportions kept");
+        let _ = app.update(Message::DialogOk);
+        assert_eq!((app.document().unwrap().width, app.document().unwrap().height), (80, 40));
+        let _ = app.update(Message::ShowDialog(DialogKind::CanvasSize));
+        let _ = app.update(Message::DialogA("100".into()));
+        let _ = app.update(Message::DialogAnchor(0, 0));
+        let _ = app.update(Message::DialogOk);
+        let d = app.document().unwrap();
+        assert_eq!((d.width, d.height), (100, 40));
+        assert_eq!(d.layers()[0].pixels.pixel(99, 5)[3], 0, "unlocked layer: new area transparent");
+        let _ = app.update(Message::Undo);
+        assert_eq!(app.document().unwrap().width, 80);
+    }
+
+    #[test]
+    fn stroke_feather_merge_crop_orient_and_last_filter() {
+        let (mut app, _) = Photo::new();
+        white(&mut app, 60, 60);
+        app.fg = Hsv { h: 0.0, s: 0.0, v: 0.0 };
+        let _ = app.update(rect(20.0, 20.0, 40.0, 40.0));
+        let _ = app.update(Message::ShowDialog(DialogKind::Stroke));
+        let _ = app.update(Message::DialogA("4".into()));
+        let _ = app.update(Message::DialogOk);
+        assert_eq!(px(&app, 20, 30), [0, 0, 0, 255]);
+        assert_eq!(px(&app, 30, 30), [255, 255, 255, 255]);
+        let _ = app.update(Message::ShowDialog(DialogKind::Feather));
+        let _ = app.update(Message::DialogOk);
+        let edge = app.document().unwrap().selection.as_ref().unwrap().get(20, 30);
+        assert!(edge > 0 && edge < 255);
+        let _ = app.update(Message::CropToSelection);
+        assert!(app.document().unwrap().width > 20 && app.document().unwrap().width < 60);
+
+        let _ = app.update(Message::AddLayer);
+        let _ = app.update(Message::MergeDown);
+        assert_eq!(app.document().unwrap().layers().len(), 1);
+        let w = app.document().unwrap().width;
+        let _ = app.update(Message::RotateCanvas(1));
+        let _ = app.update(Message::OrientLayer(Orient::FlipH));
+        assert_eq!(app.document().unwrap().height, w);
+
+        assert!(app.last_filter.is_none());
+        let _ = app.update(Message::OpenOp(OpKind::GaussianBlur));
+        let _ = app.update(Message::AdjustOk);
+        let depth = app.doc().unwrap().history.depth();
+        let _ = app.update(Message::LastFilter);
+        assert_eq!(app.doc().unwrap().history.depth(), depth + 1);
     }
 
     #[test]
