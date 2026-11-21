@@ -588,6 +588,7 @@ dependencies = [
  "iced",
  "iced_runtime",
  "jd-media",
+ "jd-timeline",
  "jd-ui",
  "rfd",
 ]

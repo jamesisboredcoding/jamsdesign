@@ -11,3 +11,4 @@ iced.workspace = true
 jd-media.workspace = true
 rfd.workspace = true
 iced_runtime.workspace = true
+jd-timeline.workspace = true

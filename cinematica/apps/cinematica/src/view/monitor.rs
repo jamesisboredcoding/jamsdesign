@@ -8,7 +8,8 @@ use jd_ui::widget::{bold, field_box, hover_tip, icon_button, panel_header, value
 use jd_ui::{Icon, icon, style, tokens::*};
 
 use super::panel;
-use crate::app::{Editor, Message, timecode};
+use crate::app::{Editor, Focus, Message, timecode};
+use jd_timeline::Time;
 use crate::source::GoTo;
 
 pub fn source(app: &Editor) -> Element<'_, Message> {
@@ -31,7 +32,7 @@ pub fn source(app: &Editor) -> Element<'_, Message> {
 
 fn source_body(app: &Editor) -> Element<'_, Message> {
     let s = &app.source;
-    let fps = app.source_item().map_or(app.format.fps, |m| m.fps(app.format.fps));
+    let fps = app.source_item().map_or(app.sequence.rate.timecode_base(), |m| m.fps(app.sequence.rate.timecode_base()));
     let viewer: Element<'_, Message> = match (&s.status.error, &s.image, s.item) {
         (Some(e), _, _) => placeholder_owned(format!("Can't play this clip: {e}")),
         (None, Some(img), _) => image(img.handle().clone()).content_fit(ContentFit::Contain).width(Fill).height(Fill).into(),
@@ -47,7 +48,7 @@ fn source_body(app: &Editor) -> Element<'_, Message> {
         interactive: s.loaded(),
     };
     let on = s.loaded();
-    let msg = |m: Message| on.then_some(m);
+    let msg = |m: Message| on.then(|| Message::OnPanel(Focus::Source, Box::new(m)));
     let play_icon = if s.status.playing { Icon::Pause } else { Icon::Play };
     let buttons = vec![
         Btn(Icon::MarkIn, "Mark In (I)", msg(Message::MarkIn)),
@@ -59,9 +60,8 @@ fn source_body(app: &Editor) -> Element<'_, Message> {
         Btn(Icon::StepForward, "Step Forward 1 Frame (Right)", msg(Message::Step(1))),
         Btn(Icon::GoToOut, "Go to Out (Shift+O)", msg(Message::GoTo(GoTo::Out))),
         Btn::DIVIDER,
-        // Need a sequence to edit into (M2).
-        Btn(Icon::Insert, "Insert (,)", None),
-        Btn(Icon::Overwrite, "Overwrite (.)", None),
+        Btn(Icon::Insert, "Insert (,)", msg(Message::Insert)),
+        Btn(Icon::Overwrite, "Overwrite (.)", msg(Message::Overwrite)),
         Btn(Icon::Camera, "Export Frame", None),
     ];
     let speed = (s.status.playing && s.status.speed != 1.0).then(|| format!("{:+}x", s.status.speed));
@@ -76,30 +76,50 @@ fn source_body(app: &Editor) -> Element<'_, Message> {
 }
 
 pub fn program(app: &Editor) -> Element<'_, Message> {
-    let fps = app.format.fps;
+    let seq = &app.sequence;
+    let msg = |m: Message| Some(Message::OnPanel(Focus::Timeline, Box::new(m)));
     let buttons = vec![
-        Btn(Icon::MarkIn, "Mark In (I)", None),
-        Btn(Icon::MarkOut, "Mark Out (O)", None),
+        Btn(Icon::MarkIn, "Mark In (I)", msg(Message::MarkIn)),
+        Btn(Icon::MarkOut, "Mark Out (O)", msg(Message::MarkOut)),
         Btn::DIVIDER,
-        Btn(Icon::GoToIn, "Go to In (Shift+I)", None),
-        Btn(Icon::StepBack, "Step Back 1 Frame (Left)", None),
-        Btn(Icon::Play, "Play/Stop (Space)", None),
-        Btn(Icon::StepForward, "Step Forward 1 Frame (Right)", None),
-        Btn(Icon::GoToOut, "Go to Out (Shift+O)", None),
+        Btn(Icon::GoToIn, "Go to In (Shift+I)", msg(Message::GoTo(GoTo::In))),
+        Btn(Icon::StepBack, "Step Back 1 Frame (Left)", msg(Message::Step(-1))),
+        Btn(Icon::Play, "Play/Stop (Space)", msg(Message::TogglePlay)),
+        Btn(Icon::StepForward, "Step Forward 1 Frame (Right)", msg(Message::Step(1))),
+        Btn(Icon::GoToOut, "Go to Out (Shift+O)", msg(Message::GoTo(GoTo::Out))),
         Btn::DIVIDER,
-        Btn(Icon::Lift, "Lift (;)", None),
-        Btn(Icon::Extract, "Extract (')", None),
+        Btn(Icon::Lift, "Lift (;)", msg(Message::Lift)),
+        Btn(Icon::Extract, "Extract (')", msg(Message::Extract)),
         Btn(Icon::Camera, "Export Frame", None),
     ];
+    let viewer: Element<'_, Message> = match (&app.program.image, app.program.showing) {
+        (Some(img), true) => image(img.handle().clone()).content_fit(ContentFit::Contain).width(Fill).height(Fill).into(),
+        (_, true) => placeholder(""),
+        (_, false) if seq.duration() == 0 => placeholder("The sequence plays here"),
+        (_, false) => placeholder(""),
+    };
+    let duration = seq.duration();
+    let head = (duration > 0).then(|| (app.playhead as f64 / duration as f64) as f32);
+    let marked = match (app.seq_in, app.seq_out) {
+        (None, None) => duration,
+        (i, o) => o.unwrap_or(duration) - i.unwrap_or(0),
+    };
+    let frac = |t: Time| if duration > 0 { Some(t as f32 / duration as f32) } else { None };
     let body = monitor_body(
-        placeholder("The sequence plays here"),
-        ScrubBar { head: Some(0.0), in_point: None, out_point: None, interactive: false },
-        timecode(app.playhead, fps),
+        viewer,
+        ScrubBar {
+            head: head.or(Some(0.0)),
+            in_point: app.seq_in.and_then(frac),
+            out_point: app.seq_out.and_then(frac),
+            interactive: false,
+        },
+        seq.rate.timecode(app.playhead),
         None,
-        timecode(0.0, fps),
+        seq.rate.timecode(marked.max(0)),
         buttons,
     );
-    panel(column![panel_header(&["Program: Sequence 01"], 0, |_| Message::Noop), body])
+    let tabs = [app.program.title.as_str()];
+    panel(column![panel_header(&tabs, 0, |_| Message::Noop), body])
         .width(Fill)
         .height(Fill)
         .into()

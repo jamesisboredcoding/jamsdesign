@@ -141,7 +141,7 @@ fn duration_label(app: &Editor, m: &MediaItem) -> String {
     match m.kind() {
         Kind::Pending => String::new(),
         Kind::Unreadable => "unreadable".into(),
-        _ => timecode(m.duration(), m.fps(app.format.fps)),
+        _ => timecode(m.duration(), m.fps(app.sequence.rate.timecode_base())),
     }
 }
 

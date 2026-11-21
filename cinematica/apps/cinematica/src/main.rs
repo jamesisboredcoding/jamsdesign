@@ -1,5 +1,7 @@
 mod app;
+mod edit;
 mod media;
+mod program;
 mod source;
 mod tool;
 mod view;

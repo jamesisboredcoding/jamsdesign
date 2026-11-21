@@ -1,50 +1,18 @@
-//! Editor state, messages and keyboard shortcuts (Elm-style, like Gallerion).
+//! Editor state, messages and keyboard shortcuts (Elm-style, like Gallerion). Timeline
+//! edits live in `edit.rs`.
 
 use std::path::PathBuf;
 
 use iced::keyboard::{self, Key, key::Named};
 use iced::{Size, Subscription, Task, event, window};
+use jd_timeline::{ClipId, Edge, FrameRate, History, Sequence, Time, TrackRef};
 use jd_ui::chrome::{self, WindowChrome};
 
 use crate::media::{self, Analysis, MediaId, MediaItem};
+use crate::program::ProgramMonitor;
 use crate::source::{GoTo, Shuttle, SourceMonitor};
 use crate::tool::Tool;
 use crate::view::MENU_COUNT;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TrackKind {
-    Video,
-    Audio,
-}
-
-/// A timeline track's header state. Clips arrive with the timeline model (M2).
-#[derive(Debug, Clone)]
-pub struct Track {
-    pub name: String,
-    pub kind: TrackKind,
-    pub height: f32,
-    pub locked: bool,
-    /// Edits (insert, overwrite...) land on targeted tracks.
-    pub targeted: bool,
-    /// Video: shown. Audio: not muted.
-    pub enabled: bool,
-    pub solo: bool,
-}
-
-impl Track {
-    fn new(kind: TrackKind, n: usize, targeted: bool) -> Self {
-        let prefix = if kind == TrackKind::Video { "V" } else { "A" };
-        Self {
-            name: format!("{prefix}{n}"),
-            kind,
-            height: if n == 1 { 52.0 } else { 38.0 },
-            locked: false,
-            targeted,
-            enabled: true,
-            solo: false,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrackToggle {
@@ -54,13 +22,17 @@ pub enum TrackToggle {
     Solo,
 }
 
-/// Sequence settings (fixed until the Sequence Settings dialog exists).
-#[derive(Debug, Clone, Copy)]
-pub struct SequenceFormat {
-    pub width: u32,
-    pub height: u32,
-    pub fps: u32,
-    pub sample_rate: u32,
+/// Which panel transport keys (Space, J/K/L, arrows, I/O) act on, like Premiere's panel focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Focus {
+    Source,
+    Timeline,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Monitor {
+    Source,
+    Program,
 }
 
 pub struct Editor {
@@ -74,19 +46,26 @@ pub struct Editor {
     pub grid_view: bool,
     pub snap: bool,
     pub linked: bool,
+    pub focus: Focus,
     /// Imported media, in import order.
     pub media: Vec<MediaItem>,
     next_media_id: MediaId,
     pub selected_media: Option<MediaId>,
     pub source: SourceMonitor,
-    /// Video tracks top to bottom (V3, V2, V1), then audio (A1, A2, A3).
-    pub tracks: Vec<Track>,
-    pub format: SequenceFormat,
-    /// Program playhead, in seconds (becomes flicks with the timeline model).
-    pub playhead: f64,
-    /// Timeline zoom.
+    pub program: ProgramMonitor,
+    pub sequence: Sequence,
+    pub history: History<Sequence>,
+    pub selection: Vec<ClipId>,
+    pub playhead: Time,
+    /// Sequence In/Out marks (Program monitor / timeline).
+    pub seq_in: Option<Time>,
+    pub seq_out: Option<Time>,
+    /// Timeline zoom, and the time at the timeline's left edge.
     pub px_per_second: f32,
-    /// Last error, shown in the Project panel until the next import.
+    pub scroll: Time,
+    /// Width of the timeline's lane area (for zoom to fit and keeping the playhead in view).
+    pub timeline_width: f32,
+    /// Last error or hint, shown in the timeline toolbar.
     pub notice: Option<String>,
 }
 
@@ -105,7 +84,9 @@ pub enum Message {
     GridView(bool),
     ToggleSnap,
     ToggleLinked,
-    ToggleTrack(usize, TrackToggle),
+    Focus(Focus),
+    /// A monitor's button: focus that monitor's panel, then run the message.
+    OnPanel(Focus, Box<Message>),
 
     ImportDialog,
     Import(Vec<PathBuf>),
@@ -114,19 +95,47 @@ pub enum Message {
     /// Double-click in the bin: show the clip in the Source monitor.
     OpenInSource(MediaId),
 
-    /// A display frame while the Source player is busy: pick up its newest frame.
+    /// A display frame while a monitor's player is busy: pick up its newest frame.
     Tick,
-    /// A Source frame finished uploading (numbered so late ones are dropped).
-    FrameReady(u64, Option<iced_runtime::image::Allocation>),
+    /// A monitor frame finished uploading (numbered so late ones are dropped).
+    FrameReady(Monitor, u64, Option<iced_runtime::image::Allocation>),
+    // Transport: acts on the focused panel.
     TogglePlay,
     Shuttle(Shuttle),
     Step(i64),
     GoTo(GoTo),
-    /// Scrub bar: fraction of the clip.
-    Scrub(f32),
     MarkIn,
     MarkOut,
     ClearInOut,
+    /// Source scrub bar: fraction of the clip.
+    Scrub(f32),
+    /// Up/Down: previous (-1) or next (+1) edit point.
+    EditPoint(i8),
+
+    // Timeline.
+    TimelineWidth(f32),
+    SetPlayhead(Time),
+    Select { id: ClipId, add: bool },
+    Deselect,
+    SelectAll,
+    /// Track Select Forward: everything from `at` on `track` (all tracks for `None`).
+    SelectForward { at: Time, track: Option<TrackRef> },
+    MoveClips { ids: Vec<ClipId>, delta: Time, video_tracks: isize, audio_tracks: isize },
+    TrimClips { ids: Vec<ClipId>, edge: Edge, delta: Time, ripple: bool },
+    SlipClips { ids: Vec<ClipId>, delta: Time },
+    Razor { at: Time, tracks: Vec<TrackRef> },
+    ScrollTimeline(f32),
+    ZoomTimeline { factor: f32, anchor_x: f32 },
+    ZoomToFit,
+    Insert,
+    Overwrite,
+    Lift,
+    Extract,
+    AddEdit { all: bool },
+    DeleteSelection { ripple: bool },
+    Undo,
+    Redo,
+    ToggleTrack(TrackRef, TrackToggle),
 
     Key(keyboard::Event),
     Noop,
@@ -135,8 +144,6 @@ pub enum Message {
 impl Editor {
     pub fn new() -> (Self, Task<Message>) {
         let (chrome, task) = WindowChrome::new(MENU_COUNT, Size::new(1600.0, 960.0));
-        let mut tracks: Vec<Track> = (1..=3).rev().map(|n| Track::new(TrackKind::Video, n, n == 1)).collect();
-        tracks.extend((1..=3).map(|n| Track::new(TrackKind::Audio, n, n == 1)));
         let app = Self {
             chrome,
             project_name: "Untitled".into(),
@@ -148,14 +155,21 @@ impl Editor {
             grid_view: true,
             snap: true,
             linked: true,
+            focus: Focus::Timeline,
             media: Vec::new(),
             next_media_id: 1,
             selected_media: None,
             source: SourceMonitor::new(),
-            tracks,
-            format: SequenceFormat { width: 1920, height: 1080, fps: 25, sample_rate: 48_000 },
-            playhead: 0.0,
+            program: ProgramMonitor::new("Sequence 01"),
+            sequence: Sequence::new("Sequence 01", FrameRate::new(25, 1), (1920, 1080), 3, 3),
+            history: History::default(),
+            selection: Vec::new(),
+            playhead: 0,
+            seq_in: None,
+            seq_out: None,
             px_per_second: 24.0,
+            scroll: 0,
+            timeline_width: 900.0,
             notice: None,
         };
         (app, task.map(Message::Chrome))
@@ -196,15 +210,10 @@ impl Editor {
             Message::GridView(on) => self.grid_view = on,
             Message::ToggleSnap => self.snap = !self.snap,
             Message::ToggleLinked => self.linked = !self.linked,
-            Message::ToggleTrack(i, what) => {
-                if let Some(t) = self.tracks.get_mut(i) {
-                    match what {
-                        TrackToggle::Lock => t.locked = !t.locked,
-                        TrackToggle::Target => t.targeted = !t.targeted,
-                        TrackToggle::Enabled => t.enabled = !t.enabled,
-                        TrackToggle::Solo => t.solo = !t.solo,
-                    }
-                }
+            Message::Focus(f) => self.focus = f,
+            Message::OnPanel(f, m) => {
+                self.focus = f;
+                return self.update(*m);
             }
 
             Message::ImportDialog => {
@@ -264,34 +273,103 @@ impl Editor {
                         let (name, path) = (item.name.clone(), item.path.clone());
                         self.source.load(id, &name, path);
                         self.source_tab = 0;
+                        self.focus = Focus::Source;
                     }
                     // Audio clips show a waveform in the Source monitor (M3, with audio).
-                    media::Kind::Audio => self.notice = Some("Audio clips open in the Source monitor once audio playback lands".into()),
+                    // Until then, `,` and `.` edit the whole selected audio file in.
+                    media::Kind::Audio => {
+                        self.notice = Some("Audio opens in the Source monitor with audio playback; , and . edit the whole file in".into())
+                    }
                     media::Kind::Pending | media::Kind::Unreadable => {}
                 }
             }
 
             Message::Tick => {
+                let mut tasks = Vec::new();
                 if let Some((n, handle)) = self.source.poll() {
-                    return iced_runtime::image::allocate(handle).map(move |r| Message::FrameReady(n, r.ok()));
+                    tasks.push(iced_runtime::image::allocate(handle).map(move |r| Message::FrameReady(Monitor::Source, n, r.ok())));
                 }
-            }
-            Message::FrameReady(n, frame) => {
-                if let Some(frame) = frame {
-                    self.source.present(n, frame);
+                if let Some((n, handle)) = self.program.poll() {
+                    tasks.push(iced_runtime::image::allocate(handle).map(move |r| Message::FrameReady(Monitor::Program, n, r.ok())));
                 }
+                return Task::batch(tasks);
             }
-            Message::TogglePlay => self.source.toggle_play(),
-            Message::Shuttle(s) => self.source.shuttle(s),
-            Message::Step(n) => self.source.step(n),
-            Message::GoTo(g) => self.source.go_to(g),
+            Message::FrameReady(monitor, n, frame) => match (monitor, frame) {
+                (Monitor::Source, Some(f)) => self.source.present(n, f),
+                (Monitor::Program, Some(f)) => self.program.present(n, f),
+                (_, None) => {}
+            },
             Message::Scrub(f) => self.source.scrub(f as f64),
-            Message::MarkIn => self.source.mark_in(),
-            Message::MarkOut => self.source.mark_out(),
-            Message::ClearInOut => self.source.clear_in_out(),
+
+            Message::TogglePlay
+            | Message::Shuttle(_)
+            | Message::Step(_)
+            | Message::GoTo(_)
+            | Message::MarkIn
+            | Message::MarkOut
+            | Message::ClearInOut
+            | Message::EditPoint(_)
+                if self.focus == Focus::Source =>
+            {
+                match message {
+                    Message::TogglePlay => self.source.toggle_play(),
+                    Message::Shuttle(s) => self.source.shuttle(s),
+                    Message::Step(n) => self.source.step(n),
+                    Message::GoTo(g) => self.source.go_to(g),
+                    Message::MarkIn => self.source.mark_in(),
+                    Message::MarkOut => self.source.mark_out(),
+                    Message::ClearInOut => self.source.clear_in_out(),
+                    _ => {}
+                }
+            }
+            Message::TogglePlay | Message::Shuttle(_) => {
+                self.notice = Some("Sequence playback arrives with the compositor and audio (M3); scrub the timeline for now".into());
+            }
+            Message::Step(n) => self.set_playhead(self.playhead + self.sequence.rate.from_frames(n)),
+            Message::GoTo(g) => {
+                let t = match g {
+                    GoTo::Start => Some(0),
+                    GoTo::End => Some(self.sequence.duration()),
+                    GoTo::In => self.seq_in,
+                    GoTo::Out => self.seq_out,
+                };
+                if let Some(t) = t {
+                    self.set_playhead(t);
+                }
+            }
+            Message::MarkIn => {
+                self.seq_in = Some(self.playhead);
+                if self.seq_out.is_some_and(|o| o <= self.playhead) {
+                    self.seq_out = None;
+                }
+            }
+            Message::MarkOut => {
+                // The Out mark sits after the frame under the playhead, so it's included.
+                let out = self.playhead + self.sequence.rate.frame();
+                self.seq_out = Some(out);
+                if self.seq_in.is_some_and(|i| i >= out) {
+                    self.seq_in = None;
+                }
+            }
+            Message::ClearInOut => {
+                self.seq_in = None;
+                self.seq_out = None;
+            }
+            Message::EditPoint(dir) => {
+                let pts = self.sequence.edit_points();
+                let t = if dir < 0 {
+                    pts.iter().rev().find(|&&p| p < self.playhead).copied()
+                } else {
+                    pts.iter().find(|&&p| p > self.playhead).copied()
+                };
+                if let Some(t) = t {
+                    self.set_playhead(t);
+                }
+            }
 
             Message::Key(event) => return self.on_key(event),
             Message::Noop => {}
+            timeline => self.timeline_message(timeline),
         }
         Task::none()
     }
@@ -301,7 +379,11 @@ impl Editor {
             keyboard::listen().map(Message::Key),
             WindowChrome::subscription().map(Message::Chrome),
             window::close_requests().map(|_| Message::Quit),
-            if self.source.busy() { window::frames().map(|_| Message::Tick) } else { Subscription::none() },
+            if self.source.busy() || self.program.busy() {
+                window::frames().map(|_| Message::Tick)
+            } else {
+                Subscription::none()
+            },
             // Only fires on X11: winit has no Wayland drag-and-drop yet.
             event::listen_with(|event, _status, _id| match event {
                 iced::Event::Window(window::Event::FileDropped(path)) => Some(Message::Import(vec![path])),
@@ -323,14 +405,23 @@ impl Editor {
             Key::Named(Named::Space) if plain => Some(Message::TogglePlay),
             Key::Named(Named::ArrowLeft) if plain => Some(Message::Step(if shift { -5 } else { -1 })),
             Key::Named(Named::ArrowRight) if plain => Some(Message::Step(if shift { 5 } else { 1 })),
+            Key::Named(Named::ArrowUp) if plain => Some(Message::EditPoint(-1)),
+            Key::Named(Named::ArrowDown) if plain => Some(Message::EditPoint(1)),
             Key::Named(Named::Home) => Some(Message::GoTo(GoTo::Start)),
             Key::Named(Named::End) => Some(Message::GoTo(GoTo::End)),
+            Key::Named(Named::Delete | Named::Backspace) if !cmd => Some(Message::DeleteSelection { ripple: shift }),
             Key::Character(c) => {
                 let c = c.to_lowercase();
                 match c.as_str() {
                     "q" if cmd => Some(Message::Quit),
                     "i" if cmd => Some(Message::ImportDialog),
                     "x" if cmd && shift => Some(Message::ClearInOut),
+                    "z" if cmd && shift => Some(Message::Redo),
+                    "z" if cmd => Some(Message::Undo),
+                    "y" if cmd => Some(Message::Redo),
+                    "k" if cmd => Some(Message::AddEdit { all: shift }),
+                    "a" if cmd && shift => Some(Message::Deselect),
+                    "a" if cmd => Some(Message::SelectAll),
                     _ if !plain => None,
                     "i" if shift => Some(Message::GoTo(GoTo::In)),
                     "o" if shift => Some(Message::GoTo(GoTo::Out)),
@@ -341,6 +432,13 @@ impl Editor {
                     "k" => Some(Message::Shuttle(Shuttle::Stop)),
                     "l" => Some(Message::Shuttle(Shuttle::Forward)),
                     "s" => Some(Message::ToggleSnap),
+                    "," => Some(Message::Insert),
+                    "." => Some(Message::Overwrite),
+                    ";" => Some(Message::Lift),
+                    "'" => Some(Message::Extract),
+                    "=" | "+" => Some(Message::ZoomTimeline { factor: 1.5, anchor_x: f32::NAN }),
+                    "-" => Some(Message::ZoomTimeline { factor: 1.0 / 1.5, anchor_x: f32::NAN }),
+                    "\\" => Some(Message::ZoomToFit),
                     c => Tool::from_key(c).map(Message::SelectTool),
                 }
             }
@@ -350,7 +448,7 @@ impl Editor {
     }
 }
 
-/// `HH:MM:SS:FF` at a whole-number frame rate.
+/// `HH:MM:SS:FF` at a whole-number frame rate, from seconds (media times).
 pub fn timecode(seconds: f64, fps: u32) -> String {
     let frames = (seconds * fps as f64).round().max(0.0) as u64;
     let fps = fps.max(1) as u64;
@@ -359,10 +457,10 @@ pub fn timecode(seconds: f64, fps: u32) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn key_with(c: &str, modifiers: keyboard::Modifiers) -> Message {
+    pub fn key_with(c: &str, modifiers: keyboard::Modifiers) -> Message {
         Message::Key(keyboard::Event::KeyPressed {
             key: Key::Character(c.into()),
             modified_key: Key::Character(c.into()),
@@ -374,7 +472,7 @@ mod tests {
         })
     }
 
-    fn key(c: &str) -> Message {
+    pub fn key(c: &str) -> Message {
         key_with(c, keyboard::Modifiers::empty())
     }
 
@@ -406,16 +504,6 @@ mod tests {
     }
 
     #[test]
-    fn tracks_are_v3_to_v1_then_a1_to_a3_with_v1_a1_targeted() {
-        let (app, _) = Editor::new();
-        let names: Vec<_> = app.tracks.iter().map(|t| (t.name.as_str(), t.targeted)).collect();
-        assert_eq!(
-            names,
-            [("V3", false), ("V2", false), ("V1", true), ("A1", true), ("A2", false), ("A3", false)]
-        );
-    }
-
-    #[test]
     fn importing_adds_pending_items_and_skips_duplicates() {
         let (mut app, _) = Editor::new();
         let _ = app.update(Message::Import(vec!["/a/one.mp4".into(), "/a/two.wav".into()]));
@@ -428,18 +516,26 @@ mod tests {
         assert!(app.notice.as_deref().unwrap().contains("two.wav"));
     }
 
-    /// A 2 s, 25 fps test clip made with the ffmpeg CLI (None, and the test skips, without it).
-    fn fixture() -> Option<PathBuf> {
+    /// A 2 s, 25 fps test clip with audio, made with the ffmpeg CLI (None, and the test
+    /// skips, without it).
+    pub fn fixture() -> Option<PathBuf> {
+        // Tests run in parallel threads of one process: make the file once.
+        static FIXTURE: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+        FIXTURE.get_or_init(make_fixture).clone()
+    }
+
+    fn make_fixture() -> Option<PathBuf> {
         let dir = std::env::temp_dir().join("cinematica-tests");
         std::fs::create_dir_all(&dir).ok()?;
-        let path = dir.join("testsrc_2s.mp4");
+        let path = dir.join("testsrc_2s_av.mp4");
         if path.exists() {
             return Some(path);
         }
         let tmp = dir.join(format!("tmp-{}.mp4", std::process::id()));
         let ok = std::process::Command::new("ffmpeg")
             .args(["-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=duration=2:size=320x240:rate=25"])
-            .args(["-c:v", "libx264", "-g", "25", "-pix_fmt", "yuv420p"])
+            .args(["-f", "lavfi", "-i", "sine=frequency=440:duration=2:sample_rate=48000"])
+            .args(["-c:v", "libx264", "-g", "25", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest"])
             .arg(&tmp)
             .status()
             .is_ok_and(|s| s.success());
@@ -451,12 +547,12 @@ mod tests {
         Some(path)
     }
 
-    /// Polls the Source monitor like the UI's frame subscription does.
-    fn settle(app: &mut Editor, what: &str, done: impl Fn(&Editor) -> bool) {
+    /// Polls the monitors like the UI's frame subscription does.
+    pub fn settle(app: &mut Editor, what: &str, done: impl Fn(&Editor) -> bool) {
         let start = std::time::Instant::now();
         loop {
             let _ = app.update(Message::Tick);
-            if !app.source.busy() && done(app) {
+            if !app.source.busy() && !app.program.busy() && done(app) {
                 return;
             }
             assert!(start.elapsed().as_secs() < 10, "timed out waiting for {what}: {:?}", app.source.status);
@@ -464,21 +560,25 @@ mod tests {
         }
     }
 
-    #[test]
-    fn imported_clip_plays_in_the_source_monitor() {
-        let Some(path) = fixture() else { return };
+    /// The fixture imported, analysed and open in the Source monitor.
+    pub fn with_clip() -> Option<(Editor, MediaId)> {
+        let path = fixture()?;
         let (mut app, _) = Editor::new();
         let _ = app.update(Message::Import(vec![path.clone()]));
         let id = app.media[0].id;
-        let analysis = media::analyse(&path).unwrap();
-        assert!(analysis.thumb.is_some(), "videos get a thumbnail");
-        let _ = app.update(Message::Analysed(id, Box::new(Ok(analysis))));
-        assert_eq!(app.media[0].kind(), media::Kind::Video);
-        assert_eq!(timecode(app.media[0].duration(), app.media[0].fps(25)), "00:00:02:00");
-
+        let _ = app.update(Message::Analysed(id, Box::new(media::analyse(&path))));
         let _ = app.update(Message::OpenInSource(id));
-        assert_eq!(app.source.title, "Source: testsrc_2s.mp4");
         settle(&mut app, "load", |a| a.source.status.duration > 0.0);
+        Some((app, id))
+    }
+
+    #[test]
+    fn imported_clip_plays_in_the_source_monitor() {
+        let Some((mut app, id)) = with_clip() else { return };
+        assert_eq!(app.media_item(id).unwrap().kind(), media::Kind::Video);
+        assert!(app.media_item(id).unwrap().thumb.is_some(), "videos get a thumbnail");
+        assert_eq!(app.source.title, "Source: testsrc_2s_av.mp4");
+        assert_eq!(app.focus, Focus::Source);
 
         // Right arrow x3, mark In; End, mark Out.
         for _ in 0..3 {
@@ -499,14 +599,14 @@ mod tests {
         settle(&mut app, "playback", |a| !a.source.status.playing);
         assert_eq!((app.source.status.position * 25.0).round(), 49.0);
 
-        // Scrub to the middle.
         let _ = app.update(Message::Scrub(0.5));
-        settle(&mut app, "scrub", |a| (a.source.status.position * 25.0).round() == 24.0 || (a.source.status.position * 25.0).round() == 25.0);
+        settle(&mut app, "scrub", |a| matches!((a.source.status.position * 25.0).round() as i64, 24 | 25));
     }
 
     #[test]
     fn transport_keys_without_a_clip_do_nothing() {
         let (mut app, _) = Editor::new();
+        app.focus = Focus::Source;
         for k in ["l", "j", "k", "i", "o"] {
             let _ = app.update(key(k));
         }
