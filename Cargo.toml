@@ -29,6 +29,9 @@ rayon = "1"
 octotablet = { git = "https://github.com/Fuzzyzilla/octotablet", rev = "1b0a14e17f23e501cfa3be9a7f8872f8357cc9e0" }
 raw-window-handle = "0.6"
 iced_winit = "0.14"
+# Cinematica (video). ffmpeg-next links the system FFmpeg (8.x); bindgen needs clang-devel.
+jd-media = { path = "crates/jd-media" }
+ffmpeg-next = "9.1"
 
 # Patched to accept synthetic pointer input (pen tablets on Wayland). See
 # vendor/iced_winit/src/synthetic.rs; every change is marked "JAMSDESIGN PATCH".
@@ -46,4 +49,7 @@ opt-level = 3
 opt-level = 3
 
 [profile.dev.package.jd-io]
+opt-level = 3
+
+[profile.dev.package.jd-media]
 opt-level = 3
