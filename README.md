@@ -107,8 +107,9 @@ Try it: `cargo run -p jd-io --example demo_doc -- demo.jdp base.jpg top.jpg`
   and re-apply the patch when upgrading iced. `GALLERION_PEN=0` turns all of this off.
 - Pressure reaches the brush-engine tools (Brush, Eraser, Clone Stamp, Healing, Dodge/Burn);
   every other tool uses the pen as a plain pointer.
-- Off-canvas content survives moves, transforms, paste, Place and saving, but canvas
-  rotate/flip, merges, flatten, crop and filters only see the canvas and drop it. Shapes are
+- Off-canvas content survives moves, transforms, paste, Place, Crop, Canvas Size and saving
+  (Crop works like Photoshop with "Delete Cropped Pixels" off), but canvas rotate/flip,
+  Image Size, merges and flatten only see the canvas and drop it. Shapes are
   raster (not editable vector layers). Healing is an approximation (source texture plus the
   destination's blurred tone), not Photoshop's solver. Pasting into a document of a different size lands at the top-left
   (Photoshop centres it). Move and Ctrl+T refuse on a locked layer (unlock it first).
