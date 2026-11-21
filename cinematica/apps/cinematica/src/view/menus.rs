@@ -5,7 +5,7 @@ use iced::Element;
 use jd_ui::chrome;
 use jd_ui::widget::MenuEntry;
 
-use crate::app::{Editor, Message};
+use crate::app::{Editor, Focus, Message};
 use crate::source::GoTo;
 
 pub const MENUS: &[&str] = &["File", "Edit", "Clip", "Sequence", "Markers", "Graphics", "View", "Window", "Help"];
@@ -29,8 +29,9 @@ fn todo<'a>(label: &'a str, shortcut: &'a str) -> MenuEntry<'a, Message> {
 
 fn entries(app: &Editor, menu: usize) -> Vec<MenuEntry<'_, Message>> {
     use MenuEntry::Separator;
-    // Marks apply to the Source monitor until the Program monitor plays sequences (M3).
-    let source = app.source.loaded();
+    // Marks apply to the focused panel (Source monitor or timeline).
+    let source = app.focus == Focus::Timeline || app.source.loaded();
+    let sel = !app.selection.is_empty();
     match MENUS[menu] {
         "File" => vec![
             todo("New Project...", "Ctrl+Alt+N"),
@@ -44,17 +45,17 @@ fn entries(app: &Editor, menu: usize) -> Vec<MenuEntry<'_, Message>> {
             item("Quit", "Ctrl+Q", Some(Message::Quit)),
         ],
         "Edit" => vec![
-            todo("Undo", "Ctrl+Z"),
-            todo("Redo", "Ctrl+Shift+Z"),
+            item("Undo", "Ctrl+Z", app.history.undo_label().map(|_| Message::Undo)),
+            item("Redo", "Ctrl+Shift+Z", app.history.redo_label().map(|_| Message::Redo)),
             Separator,
             todo("Cut", "Ctrl+X"),
             todo("Copy", "Ctrl+C"),
             todo("Paste", "Ctrl+V"),
-            todo("Clear", "Delete"),
-            todo("Ripple Delete", "Shift+Delete"),
+            item("Clear", "Delete", sel.then_some(Message::DeleteSelection { ripple: false })),
+            item("Ripple Delete", "Shift+Delete", sel.then_some(Message::DeleteSelection { ripple: true })),
             Separator,
-            todo("Select All", "Ctrl+A"),
-            todo("Deselect All", "Ctrl+Shift+A"),
+            item("Select All", "Ctrl+A", Some(Message::SelectAll)),
+            item("Deselect All", "Ctrl+Shift+A", sel.then_some(Message::Deselect)),
         ],
         "Clip" => vec![
             todo("Speed/Duration...", "Ctrl+R"),
@@ -66,9 +67,12 @@ fn entries(app: &Editor, menu: usize) -> Vec<MenuEntry<'_, Message>> {
         "Sequence" => vec![
             todo("Sequence Settings...", ""),
             Separator,
-            todo("Add Edit", "Ctrl+K"),
-            todo("Lift", ";"),
-            todo("Extract", "'"),
+            item("Insert", ",", Some(Message::Insert)),
+            item("Overwrite", ".", Some(Message::Overwrite)),
+            item("Add Edit", "Ctrl+K", Some(Message::AddEdit { all: false })),
+            item("Add Edit to All Tracks", "Ctrl+Shift+K", Some(Message::AddEdit { all: true })),
+            item("Lift", ";", Some(Message::Lift)),
+            item("Extract", "'", Some(Message::Extract)),
             Separator,
             item(if app.snap { "Snap in Timeline: On" } else { "Snap in Timeline: Off" }, "S", Some(Message::ToggleSnap)),
             item(
@@ -89,8 +93,9 @@ fn entries(app: &Editor, menu: usize) -> Vec<MenuEntry<'_, Message>> {
         ],
         "Graphics" => vec![todo("New Layer: Text", "Ctrl+T")],
         "View" => vec![
-            todo("Zoom In", "="),
-            todo("Zoom Out", "-"),
+            item("Zoom In", "=", Some(Message::ZoomTimeline { factor: 1.5, anchor_x: f32::NAN })),
+            item("Zoom Out", "-", Some(Message::ZoomTimeline { factor: 1.0 / 1.5, anchor_x: f32::NAN })),
+            item("Zoom to Sequence", "\\", Some(Message::ZoomToFit)),
             Separator,
             item(
                 if app.chrome.fullscreen { "Exit Fullscreen" } else { "Fullscreen" },
