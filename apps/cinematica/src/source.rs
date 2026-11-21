@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 use iced::widget::image;
+use iced_runtime::image::Allocation;
 use jd_media::{Player, Status};
 
 use crate::media::{MediaId, to_handle};
@@ -53,7 +54,12 @@ pub struct SourceMonitor {
     pub item: Option<MediaId>,
     /// Panel tab label: "Source: <clip name>".
     pub title: String,
-    pub image: Option<image::Handle>,
+    /// The frame on screen. Frames are allocated (uploaded) before they replace it, so
+    /// the monitor never draws an empty frame while a texture uploads.
+    pub image: Option<Allocation>,
+    /// Frames handed out for allocation; stale allocations arriving late are dropped.
+    frames_sent: u64,
+    frame_shown: u64,
     pub status: Status,
     pub in_point: Option<f64>,
     pub out_point: Option<f64>,
@@ -61,7 +67,7 @@ pub struct SourceMonitor {
 
 impl SourceMonitor {
     pub fn new() -> Self {
-        Self { player: Player::new(MONITOR_SIZE), item: None, title: NO_CLIP.into(), image: None, status: Status::default(), in_point: None, out_point: None }
+        Self { player: Player::new(MONITOR_SIZE), item: None, title: NO_CLIP.into(), image: None, frames_sent: 0, frame_shown: 0, status: Status::default(), in_point: None, out_point: None }
     }
 
     pub fn load(&mut self, id: MediaId, name: &str, path: PathBuf) {
@@ -76,19 +82,27 @@ impl SourceMonitor {
 
     #[cfg(test)]
     fn new_empty() -> Self {
-        Self { player: Player::new((1, 1)), item: None, title: NO_CLIP.into(), image: None, status: Status::default(), in_point: None, out_point: None }
+        Self { player: Player::new((1, 1)), item: None, title: NO_CLIP.into(), image: None, frames_sent: 0, frame_shown: 0, status: Status::default(), in_point: None, out_point: None }
     }
 
     pub fn loaded(&self) -> bool {
         self.item.is_some() && self.status.error.is_none()
     }
 
-    /// Picks up the newest frame and status from the player thread.
-    pub fn poll(&mut self) {
-        if let Some(frame) = self.player.take_frame() {
-            self.image = Some(to_handle(frame));
-        }
+    /// Picks up the newest status, and the newest frame (to allocate, then [`Self::present`]).
+    pub fn poll(&mut self) -> Option<(u64, image::Handle)> {
         self.status = self.player.status();
+        let frame = self.player.take_frame()?;
+        self.frames_sent += 1;
+        Some((self.frames_sent, to_handle(frame)))
+    }
+
+    /// Shows an allocated frame, unless a newer one is already up.
+    pub fn present(&mut self, number: u64, frame: Allocation) {
+        if number > self.frame_shown {
+            self.frame_shown = number;
+            self.image = Some(frame);
+        }
     }
 
     /// Keep polling (playing, or a command still being decoded).

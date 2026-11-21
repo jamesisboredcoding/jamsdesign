@@ -116,6 +116,8 @@ pub enum Message {
 
     /// A display frame while the Source player is busy: pick up its newest frame.
     Tick,
+    /// A Source frame finished uploading (numbered so late ones are dropped).
+    FrameReady(u64, Option<iced_runtime::image::Allocation>),
     TogglePlay,
     Shuttle(Shuttle),
     Step(i64),
@@ -269,7 +271,16 @@ impl Editor {
                 }
             }
 
-            Message::Tick => self.source.poll(),
+            Message::Tick => {
+                if let Some((n, handle)) = self.source.poll() {
+                    return iced_runtime::image::allocate(handle).map(move |r| Message::FrameReady(n, r.ok()));
+                }
+            }
+            Message::FrameReady(n, frame) => {
+                if let Some(frame) = frame {
+                    self.source.present(n, frame);
+                }
+            }
             Message::TogglePlay => self.source.toggle_play(),
             Message::Shuttle(s) => self.source.shuttle(s),
             Message::Step(n) => self.source.step(n),
@@ -467,7 +478,7 @@ mod tests {
 
         let _ = app.update(Message::OpenInSource(id));
         assert_eq!(app.source.title, "Source: testsrc_2s.mp4");
-        settle(&mut app, "first frame", |a| a.source.image.is_some());
+        settle(&mut app, "load", |a| a.source.status.duration > 0.0);
 
         // Right arrow x3, mark In; End, mark Out.
         for _ in 0..3 {

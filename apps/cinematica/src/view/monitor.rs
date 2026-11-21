@@ -34,7 +34,7 @@ fn source_body(app: &Editor) -> Element<'_, Message> {
     let fps = app.source_item().map_or(app.format.fps, |m| m.fps(app.format.fps));
     let viewer: Element<'_, Message> = match (&s.status.error, &s.image, s.item) {
         (Some(e), _, _) => placeholder_owned(format!("Can't play this clip: {e}")),
-        (None, Some(img), _) => image(img.clone()).content_fit(ContentFit::Contain).width(Fill).height(Fill).into(),
+        (None, Some(img), _) => image(img.handle().clone()).content_fit(ContentFit::Contain).width(Fill).height(Fill).into(),
         (None, None, Some(_)) => placeholder("Loading..."),
         (None, None, None) => placeholder("Double-click a clip in the Project panel to view it here"),
     };
