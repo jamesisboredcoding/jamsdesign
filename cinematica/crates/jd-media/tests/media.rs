@@ -184,3 +184,56 @@ fn waveform_has_levels_per_bucket() {
     assert!(w.iter().all(|&p| (0.0..=1.0).contains(&p)));
     assert!(w[5] > 0.05, "the tone is audible");
 }
+
+/// Runs the ffmpeg CLI into `dir/name` once; None if that fails.
+fn make(name: &str, args: &[&str]) -> Option<PathBuf> {
+    let dir = std::env::temp_dir().join("jd-media-tests");
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join(name);
+    if path.exists() {
+        return Some(path);
+    }
+    let tmp = dir.join(format!("tmp-{}-{name}", std::process::id()));
+    let ok = Command::new("ffmpeg").args(["-y", "-loglevel", "error"]).args(args).arg(&tmp).status().is_ok_and(|s| s.success());
+    if !ok {
+        eprintln!("skipping: ffmpeg couldn't make {name}");
+        return None;
+    }
+    std::fs::rename(&tmp, &path).ok()?;
+    Some(path)
+}
+
+#[test]
+fn portrait_phone_video_is_shown_upright() {
+    let Some(src) = fixture() else { return };
+    // Like a phone: stored landscape, with a display matrix saying "turn it 90°".
+    let Some(path) = make("rotated.mp4", &["-display_rotation", "90", "-i", src.to_str().unwrap(), "-c", "copy"]) else { return };
+    let v = probe(&path).unwrap().video.unwrap();
+    assert_eq!((v.width, v.height), (240, 320), "probe reports the upright size");
+    let f = thumbnail(&path, 1.0, (160, 160)).unwrap();
+    assert_eq!((f.width, f.height), (120, 160));
+}
+
+#[test]
+fn hd_colours_use_the_bt709_matrix() {
+    // A flat colour encoded as BT.709 (what HD cameras and phones write).
+    let Some(path) = make(
+        "bt709_red.mp4",
+        &[
+            "-f", "lavfi", "-i", "color=c=0xC04040:s=1280x720:d=1",
+            "-vf", "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p",
+            "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
+            "-c:v", "libx264", "-qp", "0",
+        ],
+    ) else {
+        return;
+    };
+    let f = thumbnail(&path, 0.5, (64, 64)).unwrap();
+    let p = &f.rgba[(f.rgba.len() / 2) & !3..][..3];
+    // FFmpeg's own BT.709 decode of this file is (189, 61, 61); read as BT.601 (the old
+    // default) it would be (178, 48, 62).
+    for (got, want) in p.iter().zip([189, 61, 61]) {
+        assert!((*got as i32 - want).abs() <= 5, "got {p:?}, want about (189, 61, 61)");
+    }
+    assert!(p[0] > 183 && p[1] > 54, "looks like BT.601: {p:?}");
+}

@@ -65,6 +65,25 @@ pub(crate) fn seconds(ts: i64, tb: ff::Rational) -> f64 {
     ts as f64 * tb.numerator() as f64 / tb.denominator().max(1) as f64
 }
 
+/// Clockwise quarter turns that display a stream upright, from its display matrix.
+pub(crate) fn quarter_turns(stream: &ff::format::stream::Stream) -> u8 {
+    use ff::ffi;
+    let degrees = unsafe {
+        let par = stream.parameters();
+        let par = par.as_ptr();
+        let sd = ffi::av_packet_side_data_get((*par).coded_side_data, (*par).nb_coded_side_data, ffi::AVPacketSideDataType::AV_PKT_DATA_DISPLAYMATRIX);
+        if sd.is_null() || (*sd).size < 36 {
+            return 0;
+        }
+        // The matrix's rotation is anticlockwise; displaying upright needs the opposite.
+        -ffi::av_display_rotation_get((*sd).data as *const i32)
+    };
+    if !degrees.is_finite() {
+        return 0;
+    }
+    ((degrees / 90.0).round() as i64).rem_euclid(4) as u8
+}
+
 pub fn probe(path: &Path) -> Result<MediaInfo> {
     crate::init();
     let input = ff::format::input(path)?;
@@ -78,7 +97,9 @@ pub fn probe(path: &Path) -> Result<MediaInfo> {
         let still = format.contains("image2")
             || format.ends_with("_pipe")
             || s.disposition().contains(ff::format::stream::Disposition::ATTACHED_PIC);
-        Ok(VideoInfo { width: v.width(), height: v.height(), rate: rate_of(&s), codec, still })
+        // Report the upright size (a portrait phone clip is taller than wide).
+        let (width, height) = if quarter_turns(&s) % 2 == 1 { (v.height(), v.width()) } else { (v.width(), v.height()) };
+        Ok(VideoInfo { width, height, rate: rate_of(&s), codec, still })
     });
     let video = video.transpose()?;
 

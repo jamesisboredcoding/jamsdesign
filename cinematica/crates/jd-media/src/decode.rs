@@ -44,6 +44,9 @@ pub struct VideoDecoder {
     rate: Rate,
     duration: f64,
     still: bool,
+    /// Clockwise quarter turns that make the picture upright (phones record portrait video
+    /// as landscape plus a display matrix).
+    turns: u8,
     /// End of file sent to the decoder.
     drained: bool,
 }
@@ -54,10 +57,11 @@ impl VideoDecoder {
         let input = ff::format::input(path)?;
         let info = crate::probe(path)?;
         let still = info.video.as_ref().is_some_and(|v| v.still);
-        let (stream, time_base, start, rate, params) = {
+        let (stream, time_base, start, rate, params, turns) = {
             let s = input.streams().best(Type::Video).ok_or(Error::NoVideo)?;
+            let turns = crate::probe::quarter_turns(&s);
             let start = if s.start_time() == ff::ffi::AV_NOPTS_VALUE { 0.0 } else { seconds(s.start_time(), s.time_base()) };
-            (s.index(), s.time_base(), start, rate_of(&s), s.parameters())
+            (s.index(), s.time_base(), start, rate_of(&s), s.parameters(), turns)
         };
         let mut ctx = ff::codec::context::Context::from_parameters(params)?;
         ctx.set_threading(ff::codec::threading::Config { kind: ff::codec::threading::Type::Frame, count: 0 });
@@ -76,6 +80,7 @@ impl VideoDecoder {
             rate,
             duration: info.duration,
             still,
+            turns,
             drained: false,
         })
     }
@@ -175,10 +180,18 @@ impl VideoDecoder {
     pub fn frame(&mut self) -> Result<Option<Frame>> {
         let Some(time) = self.raw_time else { return Ok(None) };
         let (sw, sh, format) = (self.raw.width(), self.raw.height(), self.raw.format());
-        let (w, h) = fit((sw, sh), self.max_size);
+        // Fit the upright picture, then scale to the stored (unrotated) shape.
+        let sideways = self.turns % 2 == 1;
+        let (w, h) = if sideways {
+            let (uw, uh) = fit((sh, sw), self.max_size);
+            (uh, uw)
+        } else {
+            fit((sw, sh), self.max_size)
+        };
         let stale = !matches!(&self.scaler, Some((f, a, b, c, d, _)) if (*f, *a, *b, *c, *d) == (format, sw, sh, w, h));
         if stale {
-            let ctx = scaling::Context::get(format, sw, sh, Pixel::RGBA, w, h, scaling::Flags::BILINEAR)?;
+            let mut ctx = scaling::Context::get(format, sw, sh, Pixel::RGBA, w, h, scaling::Flags::BILINEAR)?;
+            set_colorspace(&mut ctx, &self.raw);
             self.scaler = Some((format, sw, sh, w, h, ctx));
         }
         let (.., scaler) = self.scaler.as_mut().expect("scaler just set");
@@ -191,7 +204,62 @@ impl VideoDecoder {
         for y in 0..h as usize {
             rgba.extend_from_slice(&data[y * stride..y * stride + row]);
         }
+        let (rgba, w, h) = rotate(rgba, w, h, self.turns);
         Ok(Some(Frame { time, width: w, height: h, rgba }))
+    }
+}
+
+/// Tells the scaler which YUV matrix and range the video uses, so colours come out right:
+/// FFmpeg otherwise assumes BT.601 (standard definition) for everything.
+fn set_colorspace(ctx: &mut scaling::Context, frame: &ff::frame::Video) {
+    use ff::color::{Range, Space};
+    use ff::ffi;
+    let space = match frame.color_space() {
+        Space::BT709 => ffi::SWS_CS_ITU709,
+        Space::BT2020NCL | Space::BT2020CL => ffi::SWS_CS_BT2020,
+        Space::BT470BG | Space::SMPTE170M => ffi::SWS_CS_ITU601,
+        Space::SMPTE240M => ffi::SWS_CS_SMPTE240M,
+        // Untagged: HD and up is almost always BT.709.
+        _ if frame.height() >= 720 => ffi::SWS_CS_ITU709,
+        _ => ffi::SWS_CS_ITU601,
+    } as i32;
+    let full_range = i32::from(frame.color_range() == Range::JPEG);
+    // RGB formats ignore these; only YUV sources need them.
+    unsafe {
+        let src = ffi::sws_getCoefficients(space);
+        let dst = ffi::sws_getCoefficients(ffi::SWS_CS_DEFAULT as i32);
+        ffi::sws_setColorspaceDetails(ctx.as_mut_ptr(), src, full_range, dst, 1, 0, 1 << 16, 1 << 16);
+    }
+}
+
+/// Rotates a packed RGBA8 picture by `turns` clockwise quarter turns.
+fn rotate(rgba: Vec<u8>, w: u32, h: u32, turns: u8) -> (Vec<u8>, u32, u32) {
+    let (w, h) = (w as usize, h as usize);
+    let px = |x: usize, y: usize| (y * w + x) * 4;
+    match turns % 4 {
+        0 => (rgba, w as u32, h as u32),
+        2 => {
+            let mut out = vec![0u8; rgba.len()];
+            for y in 0..h {
+                for x in 0..w {
+                    let d = px(w - 1 - x, h - 1 - y);
+                    out[d..d + 4].copy_from_slice(&rgba[px(x, y)..px(x, y) + 4]);
+                }
+            }
+            (out, w as u32, h as u32)
+        }
+        t => {
+            // Quarter turn: the output is h wide and w tall.
+            let mut out = vec![0u8; rgba.len()];
+            for y in 0..h {
+                for x in 0..w {
+                    let (nx, ny) = if t == 1 { (h - 1 - y, x) } else { (y, w - 1 - x) };
+                    let d = (ny * h + nx) * 4;
+                    out[d..d + 4].copy_from_slice(&rgba[px(x, y)..px(x, y) + 4]);
+                }
+            }
+            (out, h as u32, w as u32)
+        }
     }
 }
 
@@ -213,6 +281,19 @@ pub fn thumbnail(path: &Path, time: f64, max_size: (u32, u32)) -> Result<Frame> 
 #[cfg(test)]
 mod tests {
     use super::fit;
+
+    #[test]
+    fn quarter_turns_rotate_clockwise() {
+        // 2×1: red, green.
+        let img = vec![255, 0, 0, 255, 0, 255, 0, 255];
+        let (out, w, h) = super::rotate(img.clone(), 2, 1, 1);
+        assert_eq!((w, h), (1, 2));
+        assert_eq!(out, img, "clockwise: red on top, green below");
+        let (out, ..) = super::rotate(img.clone(), 2, 1, 3);
+        assert_eq!(out, [0, 255, 0, 255, 255, 0, 0, 255], "anticlockwise: green on top");
+        let (out, w, h) = super::rotate(img, 2, 1, 2);
+        assert_eq!((w, h, out), (2, 1, vec![0, 255, 0, 255, 255, 0, 0, 255]));
+    }
 
     #[test]
     fn fit_keeps_aspect_and_never_upscales() {
