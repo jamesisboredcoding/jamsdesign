@@ -586,7 +586,9 @@ name = "cinematica"
 version = "0.1.0"
 dependencies = [
  "iced",
+ "jd-media",
  "jd-ui",
+ "rfd",
 ]
 
 [[package]]

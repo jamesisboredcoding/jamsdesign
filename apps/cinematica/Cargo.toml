@@ -8,3 +8,5 @@ publish.workspace = true
 [dependencies]
 jd-ui.workspace = true
 iced.workspace = true
+jd-media.workspace = true
+rfd.workspace = true

@@ -6,6 +6,7 @@ use jd_ui::chrome;
 use jd_ui::widget::MenuEntry;
 
 use crate::app::{Editor, Message};
+use crate::source::GoTo;
 
 pub const MENUS: &[&str] = &["File", "Edit", "Clip", "Sequence", "Markers", "Graphics", "View", "Window", "Help"];
 pub const MENU_COUNT: usize = MENUS.len();
@@ -28,6 +29,8 @@ fn todo<'a>(label: &'a str, shortcut: &'a str) -> MenuEntry<'a, Message> {
 
 fn entries(app: &Editor, menu: usize) -> Vec<MenuEntry<'_, Message>> {
     use MenuEntry::Separator;
+    // Marks apply to the Source monitor until the Program monitor plays sequences (M3).
+    let source = app.source.loaded();
     match MENUS[menu] {
         "File" => vec![
             todo("New Project...", "Ctrl+Alt+N"),
@@ -35,7 +38,7 @@ fn entries(app: &Editor, menu: usize) -> Vec<MenuEntry<'_, Message>> {
             todo("Save", "Ctrl+S"),
             todo("Save As...", "Ctrl+Shift+S"),
             Separator,
-            todo("Import...", "Ctrl+I"),
+            item("Import...", "Ctrl+I", Some(Message::ImportDialog)),
             todo("Export Media...", "Ctrl+M"),
             Separator,
             item("Quit", "Ctrl+Q", Some(Message::Quit)),
@@ -75,9 +78,11 @@ fn entries(app: &Editor, menu: usize) -> Vec<MenuEntry<'_, Message>> {
             ),
         ],
         "Markers" => vec![
-            todo("Mark In", "I"),
-            todo("Mark Out", "O"),
-            todo("Clear In and Out", "Ctrl+Shift+X"),
+            item("Mark In", "I", source.then_some(Message::MarkIn)),
+            item("Mark Out", "O", source.then_some(Message::MarkOut)),
+            item("Go to In", "Shift+I", source.then_some(Message::GoTo(GoTo::In))),
+            item("Go to Out", "Shift+O", source.then_some(Message::GoTo(GoTo::Out))),
+            item("Clear In and Out", "Ctrl+Shift+X", source.then_some(Message::ClearInOut)),
             Separator,
             todo("Add Marker", "M"),
             todo("Go to Next Marker", "Shift+M"),

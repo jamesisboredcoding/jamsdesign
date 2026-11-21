@@ -1,4 +1,6 @@
 mod app;
+mod media;
+mod source;
 mod tool;
 mod view;
 
@@ -6,7 +8,7 @@ mod view;
 pub const APP_NAME: &str = "Cinematica";
 
 fn main() -> iced::Result {
-    iced::application(app::Editor::new, app::Editor::update, view::view)
+    iced::application(app::Editor::boot, app::Editor::update, view::view)
         .title(|app: &app::Editor| format!("{} - {APP_NAME}", app.project_name))
         .theme(|_: &app::Editor| jd_ui::theme())
         .subscription(app::Editor::subscription)
