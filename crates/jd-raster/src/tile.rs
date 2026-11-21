@@ -8,6 +8,7 @@
 //! Format for now: RGBA8, sRGB-encoded, straight (non-premultiplied) alpha, the same as the
 //! files we load. Higher bit depths come with milestone 2.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -71,6 +72,12 @@ impl Clone for Tile {
 }
 
 /// A layer's pixels. `None` tiles are fully transparent and cost nothing.
+///
+/// Tiles covering the canvas live in a dense vector (fast, `u32` coordinates). Content can
+/// also extend past the canvas (moved or pasted partly off it, like Photoshop keeps it): those
+/// tiles live in `outside`, keyed by signed tile coordinates. Canvas operations (`pixel`,
+/// `set_pixel`, `write_region`, `iter`) only see the canvas; the `*_at` / `iter_all` variants
+/// see everything.
 #[derive(Debug, Clone)]
 pub struct TileGrid {
     width: u32,
@@ -78,6 +85,7 @@ pub struct TileGrid {
     cols: u32,
     rows: u32,
     tiles: Vec<Option<Arc<Tile>>>,
+    outside: BTreeMap<(i32, i32), Arc<Tile>>,
 }
 
 impl TileGrid {
@@ -90,6 +98,7 @@ impl TileGrid {
             cols,
             rows,
             tiles: vec![None; (cols * rows) as usize],
+            outside: BTreeMap::new(),
         }
     }
 
@@ -213,6 +222,106 @@ impl TileGrid {
         })
     }
 
+    fn in_grid(&self, tx: i32, ty: i32) -> bool {
+        tx >= 0 && ty >= 0 && (tx as u32) < self.cols && (ty as u32) < self.rows
+    }
+
+    /// Tile at signed tile coordinates, on or off the canvas.
+    pub fn tile_at(&self, tx: i32, ty: i32) -> Option<&Arc<Tile>> {
+        if self.in_grid(tx, ty) { self.tile(tx as u32, ty as u32) } else { self.outside.get(&(tx, ty)) }
+    }
+
+    /// Writable tile at signed coordinates (created, copy-on-write, new id), on or off canvas.
+    pub fn tile_at_mut(&mut self, tx: i32, ty: i32) -> &mut Tile {
+        if self.in_grid(tx, ty) {
+            return self.tile_mut(tx as u32, ty as u32).expect("in grid");
+        }
+        let tile = Arc::make_mut(self.outside.entry((tx, ty)).or_insert_with(|| Arc::new(Tile::transparent())));
+        tile.data_mut();
+        tile
+    }
+
+    /// Places (or clears) a tile at signed coordinates.
+    pub fn set_tile_at(&mut self, tx: i32, ty: i32, tile: Option<Arc<Tile>>) {
+        if self.in_grid(tx, ty) {
+            self.set_tile(tx as u32, ty as u32, tile);
+        } else {
+            match tile {
+                Some(t) => {
+                    self.outside.insert((tx, ty), t);
+                }
+                None => {
+                    self.outside.remove(&(tx, ty));
+                }
+            }
+        }
+    }
+
+    /// Every non-empty tile, including off-canvas ones, with signed tile coordinates.
+    pub fn iter_all(&self) -> impl Iterator<Item = (i32, i32, &Arc<Tile>)> {
+        self.iter()
+            .map(|(x, y, t)| (x as i32, y as i32, t))
+            .chain(self.outside.iter().map(|(&(x, y), t)| (x, y, t)))
+    }
+
+    /// Whether any content lies outside the canvas.
+    pub fn has_outside(&self) -> bool {
+        !self.outside.is_empty()
+    }
+
+    /// Reads a pixel anywhere (on or off the canvas).
+    pub fn pixel_at(&self, x: i64, y: i64) -> [u8; 4] {
+        let ts = TILE_SIZE as i64;
+        let (tx, ty) = (x.div_euclid(ts) as i32, y.div_euclid(ts) as i32);
+        match self.tile_at(tx, ty) {
+            Some(tile) => {
+                let i = ((y.rem_euclid(ts) * ts + x.rem_euclid(ts)) * 4) as usize;
+                tile.data()[i..i + 4].try_into().expect("4 bytes")
+            }
+            None => [0; 4],
+        }
+    }
+
+    /// Writes a pixel anywhere (on or off the canvas).
+    pub fn set_pixel_at(&mut self, x: i64, y: i64, px: [u8; 4]) {
+        let ts = TILE_SIZE as i64;
+        let (tx, ty) = (x.div_euclid(ts) as i32, y.div_euclid(ts) as i32);
+        if px[3] == 0 && self.tile_at(tx, ty).is_none() {
+            return;
+        }
+        let i = ((y.rem_euclid(ts) * ts + x.rem_euclid(ts)) * 4) as usize;
+        self.tile_at_mut(tx, ty).data_mut()[i..i + 4].copy_from_slice(&px);
+    }
+
+    /// Writes a tightly packed RGBA8 block at (x0, y0), on or off the canvas (not clipped).
+    pub fn write_region_at(&mut self, x0: i64, y0: i64, w: u32, h: u32, rgba: &[u8]) {
+        let ts = TILE_SIZE as i64;
+        let (x1, y1) = (x0 + w as i64, y0 + h as i64);
+        if w == 0 || h == 0 {
+            return;
+        }
+        for ty in y0.div_euclid(ts)..=(y1 - 1).div_euclid(ts) {
+            for tx in x0.div_euclid(ts)..=(x1 - 1).div_euclid(ts) {
+                let (lx0, ly0) = (x0.max(tx * ts), y0.max(ty * ts));
+                let (lx1, ly1) = (x1.min((tx + 1) * ts), y1.min((ty + 1) * ts));
+                let row_bytes = ((lx1 - lx0) * 4) as usize;
+                let any = (ly0..ly1).any(|y| {
+                    let r = (((y - y0) * w as i64 + (lx0 - x0)) * 4) as usize;
+                    rgba[r..r + row_bytes].chunks_exact(4).any(|p| p[3] != 0)
+                });
+                if !any && self.tile_at(tx as i32, ty as i32).is_none() {
+                    continue;
+                }
+                let data = self.tile_at_mut(tx as i32, ty as i32).data_mut();
+                for y in ly0..ly1 {
+                    let src = (((y - y0) * w as i64 + (lx0 - x0)) * 4) as usize;
+                    let dst = ((y.rem_euclid(ts) * ts + lx0.rem_euclid(ts)) * 4) as usize;
+                    data[dst..dst + row_bytes].copy_from_slice(&rgba[src..src + row_bytes]);
+                }
+            }
+        }
+    }
+
     /// Reads one pixel (RGBA8 sRGB, straight alpha). Out of bounds or empty → transparent.
     pub fn pixel(&self, x: u32, y: u32) -> [u8; 4] {
         if x >= self.width || y >= self.height {
@@ -265,6 +374,24 @@ mod tests {
         let coords: Vec<_> = grid.iter().map(|(x, y, _)| (x, y)).collect();
         assert_eq!(coords, [(0, 0)]);
         assert_eq!(grid.pixel(300, 10), [0; 4]);
+    }
+
+    #[test]
+    fn content_can_live_off_canvas() {
+        let mut g = TileGrid::empty(300, 100);
+        g.set_pixel_at(-5, 10, [1, 2, 3, 255]);
+        g.set_pixel_at(400, -300, [4, 5, 6, 255]);
+        g.set_pixel_at(299, 99, [7, 8, 9, 255]);
+        assert_eq!(g.pixel_at(-5, 10), [1, 2, 3, 255]);
+        assert_eq!(g.pixel_at(400, -300), [4, 5, 6, 255]);
+        assert_eq!(g.pixel(299, 99), [7, 8, 9, 255]);
+        assert_eq!(g.pixel(0, 10), [0; 4], "canvas reads don't see off-canvas content");
+        assert!(g.has_outside());
+        assert_eq!(g.iter().count(), 1);
+        assert_eq!(g.iter_all().count(), 3);
+        let px = [9u8, 9, 9, 255].repeat(6);
+        g.write_region_at(-2, -1, 3, 2, &px);
+        assert_eq!((g.pixel_at(-2, -1), g.pixel_at(0, 0)), ([9, 9, 9, 255], [9, 9, 9, 255]));
     }
 
     #[test]

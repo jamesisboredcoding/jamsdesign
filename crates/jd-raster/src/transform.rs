@@ -110,51 +110,63 @@ fn mapped_box(bounds: [u32; 4], m: &Affine, w: u32, h: u32) -> Option<[u32; 4]> 
     (minx < maxx && miny < maxy).then_some([minx, miny, maxx, maxy])
 }
 
-/// Resamples `src` through `m` into a new grid of the same size (content outside is cropped).
+/// Tight bounds of all non-transparent pixels, including any off the canvas (x0, y0, x1, y1).
+pub fn content_bounds_all(grid: &TileGrid) -> Option<[i64; 4]> {
+    let ts = TILE_SIZE as i64;
+    let mut b: Option<[i64; 4]> = None;
+    for (tx, ty, tile) in grid.iter_all() {
+        let data = tile.data();
+        for ly in 0..ts {
+            for lx in 0..ts {
+                if data[((ly * ts + lx) * 4 + 3) as usize] == 0 {
+                    continue;
+                }
+                let (x, y) = (tx as i64 * ts + lx, ty as i64 * ts + ly);
+                b = Some(match b {
+                    None => [x, y, x + 1, y + 1],
+                    Some([a, c, d, e]) => [a.min(x), c.min(y), d.max(x + 1), e.max(y + 1)],
+                });
+            }
+        }
+    }
+    b
+}
+
+/// Resamples `src` through `m`. Nothing is cropped: content that lands off the canvas is
+/// kept there (like Photoshop), so moving it back later restores it.
 pub fn transform_grid(src: &TileGrid, m: &Affine) -> TileGrid {
-    let (w, h) = (src.width(), src.height());
-    let mut out = TileGrid::empty(w, h);
-    let Some(bounds) = content_bounds(src) else { return out };
+    let mut out = TileGrid::empty(src.width(), src.height());
+    let Some([x0, y0, x1, y1]) = content_bounds_all(src) else { return out };
+    let rw = (x1 - x0) as usize;
     if let Some((dx, dy)) = m.integer_translation() {
         // Exact copy, row by row.
-        let [x0, y0, x1, y1] = bounds;
-        let rw = x1 - x0;
-        let mut row = vec![0u8; rw as usize * 4];
-        for y in y0..y1 {
-            let ny = y as i64 + dy as i64;
-            if ny < 0 || ny >= h as i64 {
-                continue;
-            }
-            for (i, x) in (x0..x1).enumerate() {
-                row[i * 4..i * 4 + 4].copy_from_slice(&src.pixel(x, y));
-            }
-            // Clip on the left by skipping source pixels that land at x < 0.
-            let nx = x0 as i64 + dx as i64;
-            let skip = (-nx).max(0) as usize;
-            if skip >= rw as usize {
-                continue;
-            }
-            let start = (nx.max(0)) as u32;
-            out.write_region(start, ny as u32, rw - skip as u32, 1, &row[skip * 4..]);
-        }
+        let rows: Vec<Vec<u8>> = (y0..y1)
+            .into_par_iter()
+            .map(|y| (x0..x1).flat_map(|x| src.pixel_at(x, y)).collect())
+            .collect();
+        out.write_region_at(x0 + dx as i64, y0 + dy as i64, rw as u32, (y1 - y0) as u32, &rows.concat());
         return out;
     }
     let Some(inv) = m.inverse() else { return out };
-    let Some([ox0, oy0, ox1, oy1]) = mapped_box(bounds, m, w, h) else { return out };
-    let ow = (ox1 - ox0) as usize;
+    let [fx0, fy0, fx1, fy1] = [x0, y0, x1, y1].map(|v| v as f32);
+    let pts = [m.apply(fx0, fy0), m.apply(fx1, fy0), m.apply(fx0, fy1), m.apply(fx1, fy1)];
+    let ox0 = pts.iter().map(|p| p.0).fold(f32::MAX, f32::min).floor() as i64;
+    let oy0 = pts.iter().map(|p| p.1).fold(f32::MAX, f32::min).floor() as i64;
+    let ox1 = pts.iter().map(|p| p.0).fold(f32::MIN, f32::max).ceil() as i64;
+    let oy1 = pts.iter().map(|p| p.1).fold(f32::MIN, f32::max).ceil() as i64;
+    let ow = (ox1 - ox0).max(0) as usize;
 
     // Premultiplied bilinear sample at continuous source position (pixel centres at +0.5).
     let sample = |sx: f32, sy: f32| -> [f32; 4] {
         let (fx, fy) = (sx - 0.5, sy - 0.5);
-        let (x0, y0) = (fx.floor(), fy.floor());
-        let (tx, ty) = (fx - x0, fy - y0);
+        let (bx, by) = (fx.floor(), fy.floor());
+        let (tx, ty) = (fx - bx, fy - by);
         let mut acc = [0f32; 4];
         for (dx, dy, wgt) in [(0, 0, (1.0 - tx) * (1.0 - ty)), (1, 0, tx * (1.0 - ty)), (0, 1, (1.0 - tx) * ty), (1, 1, tx * ty)] {
-            let (x, y) = (x0 as i64 + dx, y0 as i64 + dy);
-            if x < 0 || y < 0 || wgt <= 0.0 {
+            if wgt <= 0.0 {
                 continue;
             }
-            let p = src.pixel(x as u32, y as u32);
+            let p = src.pixel_at(bx as i64 + dx, by as i64 + dy);
             let a = p[3] as f32 / 255.0 * wgt;
             acc[0] += p[0] as f32 * a;
             acc[1] += p[1] as f32 * a;
@@ -181,8 +193,7 @@ pub fn transform_grid(src: &TileGrid, m: &Affine) -> TileGrid {
             row
         })
         .collect();
-    let flat: Vec<u8> = rows.concat();
-    out.write_region(ox0, oy0, ow as u32, oy1 - oy0, &flat);
+    out.write_region_at(ox0, oy0, ow as u32, (oy1 - oy0).max(0) as u32, &rows.concat());
     out
 }
 
@@ -216,17 +227,18 @@ pub fn transform_selection(sel: &Selection, m: &Affine) -> Selection {
     out
 }
 
-/// Composites `src` onto `dst` with normal blending (used to drop a floating selection).
+/// Composites `src` onto `dst` with normal blending (used to drop a floating selection),
+/// including content off the canvas.
 pub fn composite_over(dst: &mut TileGrid, src: &TileGrid) {
-    let Some([x0, y0, x1, y1]) = content_bounds(src) else { return };
+    let Some([x0, y0, x1, y1]) = content_bounds_all(src) else { return };
     for y in y0..y1 {
         for x in x0..x1 {
-            let s = src.pixel(x, y);
+            let s = src.pixel_at(x, y);
             if s[3] == 0 {
                 continue;
             }
-            let d = dst.pixel(x, y);
-            dst.set_pixel(x, y, over_srgb8(d, s));
+            let d = dst.pixel_at(x, y);
+            dst.set_pixel_at(x, y, over_srgb8(d, s));
         }
     }
 }
@@ -251,13 +263,19 @@ mod tests {
     }
 
     #[test]
-    fn integer_move_is_exact_and_clips() {
+    fn integer_move_is_exact_and_keeps_off_canvas_content() {
         let src = checker(300, 20);
         let out = transform_grid(&src, &Affine::translate(-5.0, 3.0));
         assert_eq!(out.pixel(0, 3), src.pixel(5, 0));
-        assert_eq!(out.pixel(290, 22 - 3), src.pixel(295, 16));
+        assert_eq!(out.pixel(290, 19), src.pixel(295, 16));
         assert_eq!(out.pixel(299, 0), [0; 4]);
-        assert_eq!(content_bounds(&out), Some([0, 3, 295, 20]));
+        assert_eq!(content_bounds(&out), Some([0, 3, 295, 20]), "canvas view");
+        assert_eq!(content_bounds_all(&out), Some([-5, 3, 295, 23]), "nothing was cut off");
+        // Moving back restores everything.
+        let back = transform_grid(&out, &Affine::translate(5.0, -3.0));
+        for (x, y) in [(0, 0), (4, 7), (299, 19)] {
+            assert_eq!(back.pixel(x, y), src.pixel(x, y));
+        }
     }
 
     #[test]
@@ -306,32 +324,21 @@ mod tests {
     }
 }
 
-/// Copies `src`'s content into a new `w`×`h` grid, shifted by (dx, dy). Used to move layers
-/// between documents and for crop / canvas size. Same size and no shift shares the tiles.
+/// Copies `src`'s content into a new `w` x `h` grid, shifted by (dx, dy). Used to move layers
+/// between documents and for crop / canvas size. Content past the new canvas is kept
+/// off-canvas (not deleted). Same size and no shift shares the tiles.
 pub fn place(src: &TileGrid, w: u32, h: u32, dx: i64, dy: i64) -> TileGrid {
     if dx == 0 && dy == 0 && src.width() == w && src.height() == h {
         return src.clone();
     }
     let mut out = TileGrid::empty(w, h);
-    let Some([x0, y0, x1, y1]) = content_bounds(src) else { return out };
-    // Visible part in destination coordinates.
-    let (ox0, oy0) = ((x0 as i64 + dx).max(0), (y0 as i64 + dy).max(0));
-    let (ox1, oy1) = ((x1 as i64 + dx).min(w as i64), (y1 as i64 + dy).min(h as i64));
-    if ox0 >= ox1 || oy0 >= oy1 {
-        return out;
-    }
-    let ow = (ox1 - ox0) as usize;
-    let rows: Vec<Vec<u8>> = (oy0..oy1)
+    let Some([x0, y0, x1, y1]) = content_bounds_all(src) else { return out };
+    let rw = (x1 - x0) as usize;
+    let rows: Vec<Vec<u8>> = (y0..y1)
         .into_par_iter()
-        .map(|y| {
-            let mut row = vec![0u8; ow * 4];
-            for (i, x) in (ox0..ox1).enumerate() {
-                row[i * 4..i * 4 + 4].copy_from_slice(&src.pixel((x - dx) as u32, (y - dy) as u32));
-            }
-            row
-        })
+        .map(|y| (x0..x1).flat_map(|x| src.pixel_at(x, y)).collect())
         .collect();
-    out.write_region(ox0 as u32, oy0 as u32, ow as u32, (oy1 - oy0) as u32, &rows.concat());
+    out.write_region_at(x0 + dx, y0 + dy, rw as u32, (y1 - y0) as u32, &rows.concat());
     out
 }
 
@@ -446,7 +453,8 @@ mod place_tests {
         let out = place(&g, 100, 50, -5, 10);
         assert_eq!(out.pixel(5, 15), [1, 2, 3, 255]);
         assert_eq!((out.width(), out.height()), (100, 50));
-        assert_eq!(content_bounds(&out), Some([5, 15, 6, 16]), "the far pixel is clipped off");
+        assert_eq!(content_bounds(&out), Some([5, 15, 6, 16]), "only one pixel is on the canvas");
+        assert_eq!(out.pixel_at(285, 15), [4, 5, 6, 255], "the far pixel is kept off-canvas");
         let same = place(&g, 300, 20, 0, 0);
         assert_eq!(same.tile(0, 0).unwrap().id(), g.tile(0, 0).unwrap().id());
     }

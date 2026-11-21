@@ -5,7 +5,7 @@
 
 use iced::Point;
 use jd_raster::selection::{self, Selection};
-use jd_raster::transform::{Affine, content_bounds};
+use jd_raster::transform::Affine;
 use jd_raster::{Document, LayerId, TileGrid};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,7 +75,8 @@ impl Session {
             }
             None => (None, layer.pixels.clone()),
         };
-        let [x0, y0, x1, y1] = content_bounds(&content).ok_or("Nothing to transform here")?;
+        // Includes content off the canvas, so it can be moved back into view.
+        let [x0, y0, x1, y1] = jd_raster::transform::content_bounds_all(&content).ok_or("Nothing to transform here")?;
         let bounds = [x0 as f32, y0 as f32, x1 as f32, y1 as f32];
         Ok(Self {
             doc: doc_id,
