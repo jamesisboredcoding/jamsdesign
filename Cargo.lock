@@ -1910,6 +1910,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "jd-timeline"
+version = "0.1.0"
+
+[[package]]
 name = "jd-ui"
 version = "0.1.0"
 dependencies = [
