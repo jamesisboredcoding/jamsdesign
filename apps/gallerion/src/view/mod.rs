@@ -18,6 +18,10 @@ use jd_ui::{
 };
 
 pub use canvas::Ants;
+pub use chrome::TOOLBAR_TOP;
+
+/// Id of the command-search text field.
+pub const PALETTE_INPUT: &str = "command-palette";
 
 /// Number of title-bar menus (the app keeps one measured position per menu).
 pub const MENU_COUNT: usize = chrome::MENUS.len();
@@ -56,6 +60,9 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
     }
     if let Some(dialog) = adjust_dialog::view(app) {
         layers = layers.push(dialog);
+    }
+    if let Some(palette) = menus::palette(app) {
+        layers = layers.push(palette);
     }
     if let Some(popup) = menus::popup(app) {
         layers = layers.push(popup);

@@ -174,12 +174,14 @@ pub fn layer_row<'a, M: Clone + 'a>(
     on_select: M,
     on_toggle_visible: M,
     on_toggle_lock: M,
+    on_context: M,
 ) -> Element<'a, M> {
+    // Hidden layers show a crossed-out eye (dimmed), not an empty slot.
     let eye = button(
         container(if visible {
-            Element::from(icon(Icon::Eye, 16.0, ICON))
+            icon(Icon::Eye, 16.0, ICON)
         } else {
-            space().width(16).height(16).into()
+            icon(Icon::EyeOff, 16.0, TEXT_MUTED)
         })
         .center(Length::Shrink),
     )
@@ -213,12 +215,12 @@ pub fn layer_row<'a, M: Clone + 'a>(
             tooltip::Position::Left,
         ));
     }
-    let body = button(body)
-        .width(Fill)
-        .height(Fill)
-        .padding(Padding::from([0, 10]).left(4))
-        .style(style::row(selected))
-        .on_press(on_select);
+    // A mouse area rather than a button: buttons only fire on release, and the press has to
+    // be seen immediately so the app can start a layer drag.
+    let body = mouse_area(container(body).width(Fill).height(Fill).padding(Padding::from([0, 10]).left(4)))
+        .on_press(on_select)
+        .on_right_press(on_context)
+        .interaction(iced::mouse::Interaction::Pointer);
 
     column![
         container(row![eye, body].spacing(4).align_y(Vertical::Center).height(40))

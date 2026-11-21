@@ -108,7 +108,8 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
             || app.adjusting.is_some()
             || app.new_doc.is_some()
             || app.confirm.is_some()
-            || app.dialog.is_some(),
+            || app.dialog.is_some()
+            || app.palette.is_some(),
     })
     .width(Fill)
     .height(Fill);

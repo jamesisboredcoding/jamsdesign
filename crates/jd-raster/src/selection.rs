@@ -635,6 +635,19 @@ impl Selection {
         s
     }
 
+    /// Selects a layer's pixels by their opacity (Photoshop's Ctrl+click on a layer thumbnail).
+    pub fn from_alpha(grid: &TileGrid) -> Self {
+        let mut s = Self::empty(grid.width(), grid.height());
+        for (tx, ty, tile) in grid.iter() {
+            for (i, p) in tile.data().chunks_exact(4).enumerate() {
+                if p[3] != 0 {
+                    s.set(tx * TILE_SIZE + i as u32 % TILE_SIZE, ty * TILE_SIZE + i as u32 / TILE_SIZE, p[3]);
+                }
+            }
+        }
+        s
+    }
+
     /// Grows the selection by `r` pixels (square, like Photoshop's Expand).
     pub fn expand(&self, r: u32) -> Self {
         self.morph(r, true)
@@ -742,6 +755,15 @@ mod modify_tests {
         assert!(edge > 60 && edge < 200, "{edge}");
         assert!(f.get(50, 50) >= 250, "centre stays selected");
         assert!(f.get(33, 50) > 0, "softness spreads outside");
+    }
+
+    #[test]
+    fn from_alpha_follows_opacity() {
+        let mut g = TileGrid::empty(300, 10);
+        g.set_pixel(5, 5, [1, 2, 3, 255]);
+        g.set_pixel(280, 5, [1, 2, 3, 100]);
+        let s = Selection::from_alpha(&g);
+        assert_eq!((s.get(5, 5), s.get(280, 5), s.get(6, 5)), (255, 100, 0));
     }
 
     #[test]

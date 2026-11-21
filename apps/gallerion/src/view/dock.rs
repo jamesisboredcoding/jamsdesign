@@ -23,11 +23,14 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
     if app.panels.layers {
         col = col.push(layers_panel(app));
     }
-    container(col)
-    .width(300)
-    .height(Fill)
-    .style(style::fill(BG_PANEL))
-    .into()
+    if !(app.panels.color || app.panels.properties || app.panels.layers) {
+        // Minimal workspace: no dock at all.
+        return space().into();
+    }
+    // Tracks the pointer so the layer right-click menu opens where you clicked.
+    mouse_area(container(col).width(300).height(Fill).style(style::fill(BG_PANEL)))
+        .on_move(Message::DockPointer)
+        .into()
 }
 
 fn color_panel(app: &Photo) -> Element<'_, Message> {
@@ -206,6 +209,7 @@ fn layers_panel(app: &Photo) -> Element<'_, Message> {
             Message::LayerPress(layer.id),
             Message::ToggleVisible(layer.id),
             Message::ToggleLockOf(layer.id),
+            Message::OpenLayerMenu(layer.id),
         );
         // Drop indicator: accent line above the row the dragged layer would land on.
         let target = app.layer_drag.is_some_and(|d| d.layer != layer.id && d.target == Some(DropTarget::Layer(layer.id)));

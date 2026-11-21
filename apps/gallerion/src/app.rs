@@ -202,6 +202,36 @@ pub enum PopupKind {
     ToolSlot(usize),
     /// A title-bar menu (index into the menu titles).
     MenuBar(usize),
+    /// Right-click on a row in the Layers panel.
+    Layer(LayerId),
+    /// The workspace switcher in the title bar.
+    Workspace,
+}
+
+/// Panel arrangements from the title bar's workspace switcher.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Workspace {
+    /// Every panel.
+    Essentials,
+    /// Layers and Properties, History open (editing photos).
+    Photography,
+    /// Color and Layers (painting).
+    Painting,
+    /// No panels: the most room for the image.
+    Minimal,
+}
+
+impl Workspace {
+    pub const ALL: [Workspace; 4] = [Workspace::Essentials, Workspace::Photography, Workspace::Painting, Workspace::Minimal];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Workspace::Essentials => "Essentials",
+            Workspace::Photography => "Photography",
+            Workspace::Painting => "Painting",
+            Workspace::Minimal => "Minimal",
+        }
+    }
 }
 
 pub struct Clip {
@@ -315,6 +345,11 @@ pub struct Photo {
     /// The last filter applied, for Filter > Last Filter (Alt+Ctrl+F).
     pub last_filter: Option<Op>,
     pub panels: Panels,
+    pub workspace: Workspace,
+    /// Command search (search icon / Ctrl+F): the query, while open.
+    pub palette: Option<String>,
+    /// Pointer over the dock, to place the layer right-click menu.
+    pub dock_pointer: Point,
     /// Cursor position in document pixels, when over the canvas.
     pub cursor: Option<Point>,
     /// Space bar held: temporary Hand tool, like Photoshop.
@@ -400,6 +435,19 @@ pub enum Message {
     AdjustReset,
     AdjustOk,
     AdjustCancel,
+
+    // Layers panel right-click menu
+    OpenLayerMenu(LayerId),
+    DockPointer(Point),
+    SelectPixels,
+    DuplicateInto(usize),
+    About,
+
+    // Command search and workspaces
+    OpenPalette,
+    PaletteInput(String),
+    ClosePalette,
+    SetWorkspace(Workspace),
 
     // Layer dragging
     LayerPress(LayerId),
@@ -597,6 +645,9 @@ impl Photo {
             layer_drag: None,
             last_filter: None,
             panels: Panels { color: true, properties: true, layers: true },
+            workspace: Workspace::Essentials,
+            palette: None,
+            dock_pointer: Point::ORIGIN,
             cursor: None,
             space_held: false,
             color_tab: 0,
@@ -1459,7 +1510,54 @@ impl Photo {
             }
             Message::Menu(m) => {
                 self.popup = None;
+                self.palette = None;
                 return self.update(*m);
+            }
+            Message::DockPointer(p) => self.dock_pointer = p,
+            Message::OpenLayerMenu(id) => {
+                let _ = self.update(Message::SelectLayer(id));
+                // The dock is the rightmost 300px, below the toolbar line.
+                let at = Point::new(self.window_size.width - 300.0 + self.dock_pointer.x, crate::view::TOOLBAR_TOP + self.dock_pointer.y);
+                self.popup = Some(Popup { kind: PopupKind::Layer(id), at, sub: None });
+            }
+            Message::SelectPixels => self.edit("Select Pixels", None, |doc| {
+                let Some(layer) = doc.active() else { return false };
+                let sel = Selection::from_alpha(&layer.pixels);
+                doc.selection = (!sel.is_empty()).then_some(sel);
+                true
+            }),
+            Message::DuplicateInto(target) => {
+                if let (Some(d), true) = (self.doc(), target < self.docs.len())
+                    && let Some(layer) = d.doc.active_id()
+                {
+                    let src = d.id;
+                    self.active = target;
+                    self.copy_layer_into(src, layer);
+                }
+            }
+            Message::About => self.info("Gallerion, the jamsdesign photo editor (Rust + iced)"),
+            Message::OpenPalette => {
+                self.popup = None;
+                self.palette = Some(String::new());
+                return operation::focus(crate::view::PALETTE_INPUT);
+            }
+            Message::PaletteInput(q) => {
+                if let Some(p) = self.palette.as_mut() {
+                    *p = q;
+                }
+            }
+            Message::ClosePalette => self.palette = None,
+            Message::SetWorkspace(w) => {
+                self.workspace = w;
+                self.popup = None;
+                let (color, properties, layers, history) = match w {
+                    Workspace::Essentials => (true, true, true, false),
+                    Workspace::Photography => (false, true, true, true),
+                    Workspace::Painting => (true, false, true, false),
+                    Workspace::Minimal => (false, false, false, false),
+                };
+                self.panels = Panels { color, properties, layers };
+                self.open_strip = history.then_some(0);
             }
             Message::SwapColors => std::mem::swap(&mut self.fg, &mut self.bg),
             Message::ResetColors => {
@@ -1802,24 +1900,31 @@ impl Photo {
                 self.edit("Move Layer", None, |doc| doc.move_layer(drag.layer, to as isize - from as isize));
             }
             Some(DropTarget::Tab(_) | DropTarget::Canvas | DropTarget::Layer(_)) if into_other => {
-                let Some(layer) = self.docs[src].doc.layer(drag.layer).cloned() else { return };
-                self.edit("Drag Layer", None, |doc| {
-                    let pixels = centred(&layer.pixels, doc.width, doc.height);
-                    let id = doc.add_layer(layer.name.clone());
-                    doc.layer_mut(id)
-                        .map(|l| {
-                            l.pixels = pixels;
-                            l.opacity = layer.opacity;
-                            l.blend = layer.blend;
-                            l.visible = layer.visible;
-                        })
-                        .is_some()
-                });
-                let target = self.docs[self.active].doc.name.clone();
-                self.info(format!("Copied layer \"{}\" into {target}", layer.name));
+                self.copy_layer_into(drag.doc, drag.layer);
             }
             _ => {}
         }
+    }
+
+    /// Copies a layer from document `src_doc` into the active document (centred if the sizes
+    /// differ), as one undo step there.
+    fn copy_layer_into(&mut self, src_doc: u64, layer: LayerId) {
+        let Some(src) = self.doc_index(src_doc) else { return };
+        let Some(layer) = self.docs[src].doc.layer(layer).cloned() else { return };
+        self.edit("Duplicate Layer", None, |doc| {
+            let pixels = centred(&layer.pixels, doc.width, doc.height);
+            let id = doc.add_layer(layer.name.clone());
+            doc.layer_mut(id)
+                .map(|l| {
+                    l.pixels = pixels;
+                    l.opacity = layer.opacity;
+                    l.blend = layer.blend;
+                    l.visible = layer.visible;
+                })
+                .is_some()
+        });
+        let target = self.docs[self.active].doc.name.clone();
+        self.info(format!("Copied layer \"{}\" into {target}", layer.name));
     }
 
     fn dialog_ok(&mut self) -> Task<Message> {
@@ -1925,6 +2030,10 @@ impl Photo {
                 | Message::MenuPointer(..)
                 | Message::MenuTitle(_)
                 | Message::PopupSub(_)
+                | Message::DockPointer(_)
+                | Message::OpenPalette
+                | Message::PaletteInput(_)
+                | Message::ClosePalette
                 | Message::DragOver(_)
                 | Message::PointerReleased
                 | Message::Maximized(_)
@@ -2187,6 +2296,10 @@ impl Photo {
         if !pressed {
             return Task::none();
         }
+        if self.palette.is_some() && matches!(key.as_ref(), Key::Named(Named::Escape)) {
+            self.palette = None;
+            return Task::none();
+        }
         if self.popup.is_some() && matches!(key.as_ref(), Key::Named(Named::Escape)) {
             self.popup = None;
             return Task::none();
@@ -2251,6 +2364,7 @@ impl Photo {
                 "e" if shift => Some(Message::MergeVisible),
                 "e" => Some(Message::MergeDown),
                 "f" if alt => Some(Message::LastFilter),
+                "f" => Some(Message::OpenPalette),
                 "c" if alt => Some(Message::ShowDialog(DialogKind::CanvasSize)),
                 "c" if shift => Some(Message::CopyMerged),
                 "d" if shift => Some(Message::Reselect),
@@ -2925,6 +3039,43 @@ mod tests {
         let depth = app.doc().unwrap().history.depth();
         let _ = app.update(Message::LastFilter);
         assert_eq!(app.doc().unwrap().history.depth(), depth + 1);
+    }
+
+    #[test]
+    fn layer_menu_commands_and_workspaces() {
+        let (mut app, _) = Photo::new();
+        white(&mut app, 30, 30);
+        let _ = app.update(Message::AddLayer);
+        let id = app.document().unwrap().active_id().unwrap();
+        app.docs[0].doc.layer_mut(id).unwrap().pixels.set_pixel(3, 3, [1, 1, 1, 255]);
+        let _ = app.update(Message::OpenLayerMenu(id));
+        assert_eq!(app.popup.map(|p| p.kind), Some(PopupKind::Layer(id)));
+        let _ = app.update(Message::Menu(Box::new(Message::SelectPixels)));
+        assert_eq!(app.document().unwrap().selection.as_ref().unwrap().bounds(), Some([3, 3, 4, 4]));
+
+        app.push_doc(Document::new("other", 10, 10), None);
+        let _ = app.update(Message::SelectDoc(0));
+        let _ = app.update(Message::DuplicateInto(1));
+        assert_eq!(app.active, 1);
+        assert_eq!(app.document().unwrap().layers().len(), 2);
+
+        let _ = app.update(Message::SetWorkspace(Workspace::Minimal));
+        assert!(!app.panels.color && !app.panels.layers);
+        let _ = app.update(Message::SetWorkspace(Workspace::Essentials));
+        assert!(app.panels.color && app.panels.layers && app.panels.properties);
+    }
+
+    #[test]
+    fn command_search_runs_menu_commands() {
+        let (mut app, _) = Photo::new();
+        white(&mut app, 20, 20);
+        let _ = app.update(Message::OpenPalette);
+        let _ = app.update(Message::PaletteInput("select all".into()));
+        assert!(app.palette.is_some());
+        // The palette runs entries through Message::Menu, which closes it.
+        let _ = app.update(Message::Menu(Box::new(Message::SelectAll)));
+        assert!(app.palette.is_none());
+        assert!(app.document().unwrap().selection.is_some());
     }
 
     #[test]

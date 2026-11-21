@@ -14,7 +14,7 @@ use crate::tool::Tool;
 use crate::APP_NAME;
 
 pub const MENUS: &[&str] = &[
-    "File", "Edit", "Image", "Layer", "Type", "Select", "Filter", "View", "Window", "Help",
+    "File", "Edit", "Image", "Layer", "Select", "Filter", "View", "Window", "Help",
 ];
 
 /// Our own title bar (the window has no system decorations): app badge, menus, title,
@@ -49,10 +49,19 @@ pub fn title_bar(app: &Photo) -> Element<'_, Message> {
             .on_move(move |p| Message::MenuPointer(i, p)),
         );
     }
-    let workspace = field_box(
-        row![value("Essentials"), icon(Icon::Chevron, 12.0, TEXT_SECONDARY)]
+    // Workspace switcher: opens under the pointer, like the menus.
+    let workspace = button(
+        row![value(app.workspace.name()), icon(Icon::Chevron, 12.0, TEXT_SECONDARY)]
             .spacing(6)
             .align_y(Vertical::Center),
+    )
+    .padding(Padding::from([3, 8]))
+    .style(style::ghost(matches!(app.popup, Some(p) if p.kind == PopupKind::Workspace)))
+    .on_press(Message::OpenPopup(PopupKind::Workspace, Point::new(app.title_pointer.x - 60.0, 30.0)));
+    let search = hover_tip(
+        button(icon(Icon::Zoom, 14.0, ICON)).padding(4).style(style::ghost(false)).on_press(Message::OpenPalette),
+        "Search commands (Ctrl+F)",
+        tooltip::Position::Bottom,
     );
     let export = button(
         row![icon(Icon::Share, 12.0, TEXT_PRIMARY), text("Export").size(TEXT_SIZE_SMALL).font(bold())]
@@ -93,7 +102,7 @@ pub fn title_bar(app: &Photo) -> Element<'_, Message> {
             space::horizontal(),
             text(title).size(TEXT_SIZE_SMALL).color(TEXT_MUTED),
             space::horizontal(),
-            row![icon(Icon::Zoom, 14.0, ICON), workspace, export]
+            row![search, workspace, export]
                 .spacing(12)
                 .align_y(Vertical::Center),
             space().width(12),

@@ -19,6 +19,8 @@ pub fn popup(app: &Photo) -> Option<Element<'_, Message>> {
         PopupKind::Context => (context(app), WIDTH),
         PopupKind::MenuBar(i) => (menu_bar(app, i), WIDTH),
         PopupKind::ToolSlot(slot) => (tool_slot(slot), 220.0),
+        PopupKind::Layer(_) => (layer_menu(app), WIDTH),
+        PopupKind::Workspace => (workspaces(app), 200.0),
     };
     let height = menu_height(&entries);
     // Keep the menu inside the window.
@@ -289,6 +291,7 @@ fn menu_bar(app: &Photo, i: usize) -> Vec<MenuEntry<'_, Message>> {
             Separator,
             item("Full Screen", "F11", true, Message::ToggleFullscreen),
         ],
+        "Help" => vec![item("About Gallerion", "", true, Message::About)],
         "Window" => vec![
             item("Color", check(app.panels.color), true, Message::TogglePanel(Panel::Color)),
             item("History", check(app.open_strip == Some(0)), true, Message::ToggleStrip(0)),
@@ -297,6 +300,124 @@ fn menu_bar(app: &Photo, i: usize) -> Vec<MenuEntry<'_, Message>> {
         ],
         _ => vec![item("Nothing here yet", "", false, Message::Noop)],
     }
+}
+
+/// Right-click on a layer row.
+fn layer_menu(app: &Photo) -> Vec<MenuEntry<'_, Message>> {
+    use MenuEntry::{Separator, Submenu};
+    let s = state(app);
+    let layer = app.document().and_then(|d| d.active());
+    let (visible, locked) = layer.map_or((true, false), |l| (l.visible, l.locked));
+    let id = layer.map(|l| l.id);
+    // Other open documents, for Duplicate Into.
+    let others: Vec<MenuEntry<'_, Message>> = app
+        .docs
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != app.active)
+        .map(|(i, d)| item(d.doc.name.as_str(), "", true, Message::DuplicateInto(i)))
+        .collect();
+    let mut entries = vec![
+        item("Select Pixels", "", s.doc, Message::SelectPixels),
+        Separator,
+        item("Duplicate Layer", "Ctrl+J", s.doc, Message::DuplicateLayer),
+    ];
+    entries.push(if others.is_empty() {
+        item("Duplicate Into...", "", false, Message::Noop)
+    } else {
+        Submenu("Duplicate Into", others)
+    });
+    entries.extend([
+        item("Delete Layer", "", s.doc && !locked, Message::DeleteLayer),
+        Separator,
+        item("Rename Layer", "", id.is_some(), id.map_or(Message::Noop, Message::StartRename)),
+        item(if visible { "Hide Layer" } else { "Show Layer" }, "", id.is_some(), id.map_or(Message::Noop, Message::ToggleVisible)),
+        item(if locked { "Unlock Layer" } else { "Lock Layer" }, "", id.is_some(), Message::ToggleLock),
+        Separator,
+        item("Merge Down", "Ctrl+E", s.can_merge_down, Message::MergeDown),
+        item("Merge Visible", "Shift+Ctrl+E", s.doc, Message::MergeVisible),
+        item("Flatten Image", "", s.doc, Message::Flatten),
+    ]);
+    entries
+}
+
+fn workspaces(app: &Photo) -> Vec<MenuEntry<'_, Message>> {
+    crate::app::Workspace::ALL
+        .iter()
+        .map(|&w| item(w.name(), check(app.workspace == w), true, Message::SetWorkspace(w)))
+        .collect()
+}
+
+/// Every enabled menu command as (path, shortcut, message), for the command search.
+fn commands(app: &Photo) -> Vec<(String, String, Message)> {
+    fn walk(prefix: &str, entries: Vec<MenuEntry<'_, Message>>, out: &mut Vec<(String, String, Message)>) {
+        for e in entries {
+            match e {
+                MenuEntry::Item(label, keys, Some(Message::Menu(m))) | MenuEntry::IconItem(_, label, keys, Some(Message::Menu(m))) => {
+                    out.push((format!("{prefix} > {}", label.trim_end_matches('.')), keys.to_owned(), *m));
+                }
+                MenuEntry::Submenu(label, children) => walk(&format!("{prefix} > {label}"), children, out),
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (i, title) in MENUS.iter().enumerate() {
+        walk(title, menu_bar(app, i), &mut out);
+    }
+    out
+}
+
+/// Command search: type to filter every menu command, Enter (or click) runs the top match.
+pub fn palette(app: &Photo) -> Option<Element<'_, Message>> {
+    use iced::widget::{button, container, row, text, text_input};
+    use jd_ui::tokens::*;
+    let query = app.palette.as_ref()?;
+    let words: Vec<String> = query.to_lowercase().split_whitespace().map(str::to_owned).collect();
+    let matches: Vec<(String, String, Message)> = commands(app)
+        .into_iter()
+        .filter(|(path, ..)| {
+            let p = path.to_lowercase();
+            words.iter().all(|w| p.contains(w.as_str()))
+        })
+        .take(12)
+        .collect();
+    let first = matches.first().map(|(_, _, m)| Message::Menu(Box::new(m.clone())));
+    let input = text_input("Search commands, e.g. \"gaussian\" or \"canvas size\"", query)
+        .id(crate::view::PALETTE_INPUT)
+        .size(TEXT_SIZE + 1.0)
+        .padding(iced::Padding::from([8, 10]))
+        .on_input(Message::PaletteInput)
+        .on_submit_maybe(first);
+    let mut list = column![].spacing(1);
+    if matches.is_empty() {
+        list = list.push(container(text("No matching commands").size(TEXT_SIZE).color(TEXT_MUTED)).padding(10));
+    }
+    for (i, (path, keys, m)) in matches.into_iter().enumerate() {
+        list = list.push(
+            button(row![text(path).size(TEXT_SIZE).width(Fill), text(keys).size(TEXT_SIZE_SMALL).color(TEXT_MUTED)].spacing(10))
+                .width(Fill)
+                .padding(iced::Padding::from([6, 10]))
+                .style(jd_ui::style::row(i == 0))
+                .on_press(Message::Menu(Box::new(m))),
+        );
+    }
+    let card = container(column![input, list].spacing(6).width(520))
+        .padding(8)
+        .style(|_| container::Style {
+            background: Some(BG_PANEL_HEADER.into()),
+            border: iced::Border { color: BORDER_SUBTLE, width: 1.0, radius: 8.0.into() },
+            shadow: iced::Shadow { color: iced::Color::from_rgba(0.0, 0.0, 0.0, 0.5), offset: iced::Vector::new(0.0, 8.0), blur_radius: 24.0 },
+            ..Default::default()
+        });
+    let x = ((app.window_size.width - 536.0) / 2.0).max(0.0);
+    Some(
+        stack![
+            mouse_area(space().width(Fill).height(Fill)).on_press(Message::ClosePalette).on_right_press(Message::ClosePalette),
+            pin(card).x(x).y(60.0),
+        ]
+        .into(),
+    )
 }
 
 /// A toolbar slot's alternates, Photoshop flyout style.

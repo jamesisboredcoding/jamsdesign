@@ -24,6 +24,7 @@ macro_rules! icons {
 
 icons! {
     Move => "move", Marquee => "marquee", Lasso => "lasso", Wand => "wand", Crop => "crop",
+    EyeOff => "eye-off",
     Eyedropper => "eyedropper", Heal => "heal", Brush => "brush", Stamp => "stamp",
     Eraser => "eraser", Gradient => "gradient", Dodge => "dodge", Pen => "pen", Type => "type",
     Select => "select", Shape => "shape", Hand => "hand", Zoom => "zoom", Eye => "eye",
