@@ -130,6 +130,11 @@ left-click in, right-click out.
       Selection tool (A) drags points, handles (Alt: one side) or whole shapes; Paths panel
       (next to Layers / Channels): select, new, delete, fill, stroke with the brush, load as
       selection (Ctrl+Enter). Paths follow crops, resizes and rotations and are saved in .jdp
+- [x] 6i: system clipboard: Copy / Cut / Copy Merged also put the pixels on the system
+      clipboard (cropped to their content); Ctrl+V pastes an image copied in another app as a
+      new centred layer (or a new document when none is open), image files copied in a file
+      manager are placed (or opened), and text pastes into text fields. Pasting Gallerion's
+      own copy keeps its position and layer
 - [ ] 6: PSD import, Flatpak
 
 ## App icon
@@ -190,7 +195,7 @@ Try it: `cargo run -p jd-io --example demo_doc -- demo.jdp base.jpg top.jpg`
   arrow keys or selecting part of the text), one style per layer. Painting on, filtering or
   free-transforming a text layer turns it into plain pixels without asking. Pasting into a document of a different size lands at the top-left
   (Photoshop centres it). Move and Ctrl+T refuse on a locked layer (unlock it first).
-- The clipboard is internal to Gallerion (iced only exposes text clipboard access).
+- Layer groups and layer names don't travel through the system clipboard (only pixels).
 - Marching ants don't animate. Transforms use bilinear resampling (Photoshop uses bicubic by
   default), so large downscales can alias.
 - Image > Adjustments are destructive (applied to the layer); use adjustment layers to keep

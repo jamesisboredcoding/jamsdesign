@@ -16,6 +16,8 @@ jd-io.workspace = true
 jd-ai.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# The system clipboard (images and text), Wayland via data-control.
+arboard = { version = "3.7", default-features = false, features = ["image-data", "wayland-data-control"] }
 jd-gpu.workspace = true
 rfd.workspace = true
 octotablet.workspace = true

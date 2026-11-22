@@ -544,6 +544,9 @@ pub struct Photo {
     pub snap: Snap,
     /// The value box being typed into, if any.
     pub field_edit: Option<FieldEdit>,
+    /// Fingerprint of the image we last put on the system clipboard (pasting it back uses our
+    /// own copy, which keeps its position).
+    last_copy_stamp: Option<u64>,
     /// Pen / Path Selection tool state (the open piece, what a drag moves).
     pub pen_tool: crate::pen::PenState,
     /// Edit > Preferences, and the open Preferences dialog.
@@ -753,6 +756,11 @@ pub enum Message {
     /// Moves a panel up (-1) or down (+1) among the shown panels.
     PanelMoveBy(Panel, i32),
     ResetPanels,
+
+    // System clipboard
+    SystemPaste(Option<Box<crate::clipboard::Pasted>>),
+    /// Ctrl+V while typing: text from the clipboard.
+    TypePasted(Option<String>),
 
     // Tool presets (options bar)
     ApplyBrushPreset(ToolPreset),
@@ -1030,6 +1038,7 @@ impl Photo {
             workspace: Workspace::Essentials,
             snap: Snap { on: true, bounds: true, layers: true },
             field_edit: None,
+            last_copy_stamp: None,
             pen_tool: Default::default(),
             prefs: Prefs::default(),
             prefs_dialog: None,
@@ -1207,6 +1216,7 @@ impl Photo {
                 | Message::TypeItalic
                 | Message::TypeAlign(_)
                 | Message::FontFilter(_)
+                | Message::TypePasted(_)
                 | Message::OpenPopup(PopupKind::Font, _)
                 | Message::ClosePopup
                 | Message::Menu(_) => {}
@@ -1318,6 +1328,7 @@ impl Photo {
                     return Task::none();
                 }
                 self.clipboard = Some(Clip { pixels });
+                self.export_clipboard();
                 if cut {
                     if self.check_layer_editable() {
                         let bg = gray(self.bg.to_rgba().to_srgb8());
@@ -1331,18 +1342,40 @@ impl Photo {
                 }
             }
             Message::Paste => {
-                let Some(clip) = &self.clipboard else {
-                    self.info("Nothing to paste");
-                    return Task::none();
-                };
-                let Some(doc) = self.document() else { return Task::none() };
-                // Same position when the sizes match; centred in a different-size document.
-                let pixels = centred(&clip.pixels, doc.width, doc.height);
-                self.edit("Paste", None, |doc| {
-                    let n = doc.layers().len();
-                    let id = doc.add_layer(format!("Layer {n}"));
-                    doc.layer_mut(id).map(|l| l.pixels = pixels).is_some()
-                });
+                // What's on the system clipboard decides (it may come from another app).
+                return Task::perform(async { crate::clipboard::read().map(Box::new) }, Message::SystemPaste);
+            }
+            Message::SystemPaste(pasted) => {
+                use crate::clipboard::Pasted;
+                match pasted.map(|b| *b) {
+                    // Our own copy: paste it with its position and exact pixels.
+                    Some(Pasted::Image { stamp, .. }) if Some(stamp) == self.last_copy_stamp && self.clipboard.is_some() => {
+                        self.paste_internal();
+                    }
+                    Some(Pasted::Image { width, height, rgba, .. }) => self.paste_image(width, height, &rgba),
+                    Some(Pasted::Files(paths)) => {
+                        // Copied in a file manager: open them, or place them into the image.
+                        if self.doc().is_none() {
+                            return self.update(Message::Open(paths));
+                        }
+                        return Task::batch(paths.into_iter().map(|path| {
+                            Task::perform(
+                                async move {
+                                    let loaded = jd_io::open(&path).map(Box::new).map_err(|e| e.to_string());
+                                    (path, loaded)
+                                },
+                                |(path, loaded)| Message::Placed(path, loaded),
+                            )
+                        }));
+                    }
+                    _ if self.clipboard.is_some() => self.paste_internal(),
+                    _ => self.info("Nothing to paste"),
+                }
+            }
+            Message::TypePasted(text) => {
+                if let Some(s) = text.map(|s| s.replace("\r\n", "\n")).filter(|s| !s.is_empty()) {
+                    self.retype("Paste", move |t| t.text.push_str(&s));
+                }
             }
             Message::LayerVia { cut } => {
                 let has_selection = self.document().is_some_and(|d| d.selection.is_some());
@@ -1624,6 +1657,7 @@ impl Photo {
                     None => flat,
                 };
                 self.clipboard = Some(Clip { pixels });
+                self.export_clipboard();
                 self.info("Copied (merged)");
             }
             Message::OrientLayer(o) => {
@@ -3480,6 +3514,53 @@ impl Photo {
         let _ = self.prefs.save();
     }
 
+    /// Also puts the copied pixels on the system clipboard, for other apps.
+    fn export_clipboard(&mut self) {
+        let Some(clip) = &self.clipboard else { return };
+        if let Some((w, h, px)) = crate::clipboard::grid_image(&clip.pixels) {
+            self.last_copy_stamp = Some(crate::clipboard::stamp(w, h, &px));
+            crate::clipboard::put_image(w, h, px);
+        }
+    }
+
+    /// Pastes our own copy as a new layer (same place when the sizes match, else centred).
+    fn paste_internal(&mut self) {
+        let Some(clip) = &self.clipboard else { return };
+        let Some(doc) = self.document() else { return };
+        let pixels = centred(&clip.pixels, doc.width, doc.height);
+        self.edit("Paste", None, |doc| {
+            let n = doc.layers().len();
+            let id = doc.add_layer(format!("Layer {n}"));
+            doc.layer_mut(id).map(|l| l.pixels = pixels).is_some()
+        });
+    }
+
+    /// Pastes an image from another app: a new layer, centred (or a new document when none
+    /// is open, like Photoshop's "New from clipboard").
+    fn paste_image(&mut self, width: u32, height: u32, rgba: &[u8]) {
+        if width == 0 || height == 0 || rgba.len() != (width * height * 4) as usize {
+            self.error("The clipboard image couldn't be read");
+            return;
+        }
+        let Some(doc) = self.document() else {
+            let mut d = Document::from_rgba8("Pasted", width, height, rgba);
+            if self.prefs.linear_blending {
+                d.blend_space = BlendSpace::Linear;
+            }
+            self.push_doc(d, None);
+            return;
+        };
+        let (dw, dh) = (doc.width, doc.height);
+        let (x, y) = ((dw as i64 - width as i64) / 2, (dh as i64 - height as i64) / 2);
+        let mut pixels = TileGrid::empty(dw, dh);
+        pixels.write_region_at(x, y, width, height, rgba);
+        self.edit("Paste", None, |doc| {
+            let n = doc.layers().len();
+            let id = doc.add_layer(format!("Layer {n}"));
+            doc.layer_mut(id).map(|l| l.pixels = pixels).is_some()
+        });
+    }
+
     /// Loads saved tool presets (a missing or unreadable file just means none).
     fn load_presets(&mut self) {
         self.presets_path = presets_path();
@@ -3749,6 +3830,17 @@ impl Photo {
             Key::Named(Named::Backspace) => self.retype("", |t| {
                 t.text.pop();
             }),
+            Key::Character(c) if modifiers.command() && c.eq_ignore_ascii_case("v") => {
+                return Task::perform(
+                    async {
+                        match crate::clipboard::read() {
+                            Some(crate::clipboard::Pasted::Text(t)) => Some(t),
+                            _ => None,
+                        }
+                    },
+                    Message::TypePasted,
+                );
+            }
             _ if modifiers.command() => {}
             _ => {
                 if let Some(s) = text.as_ref().map(|s| s.to_string()).filter(|s| s.chars().all(|c| !c.is_control())) {
@@ -4980,8 +5072,21 @@ mod tests {
         assert_eq!(doc.layers()[1].pixels.pixel(25, 25)[3], 0);
 
         let _ = app.update(Message::Copy);
+        // Paste reads the system clipboard first; nothing there (as in tests) falls back to
+        // our own copy.
         let _ = app.update(Message::Paste);
+        let _ = app.update(Message::SystemPaste(None));
         assert_eq!(app.document().unwrap().layers().len(), 3);
+
+        // An image from another app becomes a new layer, centred.
+        let rgba = vec![255u8, 0, 0, 255].repeat(4 * 2);
+        let stamp = crate::clipboard::stamp(4, 2, &rgba);
+        let img = crate::clipboard::Pasted::Image { width: 4, height: 2, rgba, stamp };
+        let _ = app.update(Message::SystemPaste(Some(Box::new(img))));
+        let doc = app.document().unwrap();
+        assert_eq!(doc.layers().len(), 4);
+        assert_eq!(doc.layers()[3].pixels.pixel(49, 49), [255, 0, 0, 255]);
+        assert_eq!(doc.layers()[3].pixels.pixel(49, 52)[3], 0);
     }
 
     #[test]

@@ -1,5 +1,6 @@
 mod adjust;
 mod app;
+mod clipboard;
 mod pen;
 mod prefs;
 mod tablet;
