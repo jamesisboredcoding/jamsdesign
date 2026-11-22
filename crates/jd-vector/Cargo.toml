@@ -1,0 +1,15 @@
+[package]
+name = "jd-vector"
+description = "Vector design document model for Blobr: scene graph, auto layout, ops, undo, .jdb files. No iced."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+jd-core.workspace = true
+serde.workspace = true
+# Exact float parsing: positions must survive a save and load unchanged.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+zip.workspace = true
+# Beziers, affine transforms and SVG path parsing. 0.11 is already in the lockfile (via iced).
+kurbo = "0.11"
