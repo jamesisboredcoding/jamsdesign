@@ -206,6 +206,8 @@ Try it: `cargo run -p jd-io --example demo_doc -- demo.jdp base.jpg top.jpg`
   free-transforming a text layer turns it into plain pixels without asking. Pasting into a document of a different size lands at the top-left
   (Photoshop centres it). Move and Ctrl+T refuse on a locked layer (unlock it first).
 - Layer groups and layer names don't travel through the system clipboard (only pixels).
+- While the Home screen is showing over an open document, shortcuts (Ctrl+V, Delete, Ctrl+Z...)
+  still act on that hidden document.
 - Marching ants don't animate. Transforms use bilinear resampling (Photoshop uses bicubic by
   default), so large downscales can alias.
 - Image > Adjustments are destructive (applied to the layer); use adjustment layers to keep

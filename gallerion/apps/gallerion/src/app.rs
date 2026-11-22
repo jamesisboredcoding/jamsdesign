@@ -1983,7 +1983,9 @@ impl Photo {
                     Message::Open,
                 );
             }
-            Message::Open(mut paths) => {
+            Message::Open(paths) => {
+                // Full paths, so a file opened as `a.jpg` and as `/home/me/a.jpg` is one file.
+                let mut paths: Vec<PathBuf> = paths.into_iter().map(|p| std::fs::canonicalize(&p).unwrap_or(p)).collect();
                 // Already-open files just get focused.
                 paths.retain(|p| {
                     let open = self.docs.iter().position(|d| d.path.as_deref() == Some(p.as_path()));
@@ -3195,11 +3197,9 @@ impl Photo {
     /// Puts a file just opened or saved at the top of the recent files, and caches its
     /// thumbnail (then shows the list again with it).
     fn remember_recent(&mut self, path: &Path, doc: &Document) -> Task<Message> {
-        let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-        crate::recent::remember(&mut self.prefs.recent, &path);
+        crate::recent::remember(&mut self.prefs.recent, path);
         let _ = self.prefs.save();
-        let doc = doc.clone();
-        Task::perform(async move { crate::recent::store_thumb(path, doc) }, |_| Message::RefreshRecent)
+        Task::perform(crate::recent::store_thumb(path.to_path_buf(), doc.clone()), |_| Message::RefreshRecent)
     }
 
     /// Reads the recent files' thumbnails and dates off the UI thread.
@@ -5271,6 +5271,13 @@ mod tests {
         assert!(!app.home);
         let _ = app.update(Message::ForgetRecent(path));
         assert!(app.prefs.recent.is_empty());
+
+        // The same file by a relative path is the open one, not a second tab.
+        let full = std::fs::canonicalize("Cargo.toml").unwrap();
+        let _ = app.update(Message::Loaded(full, Ok(Box::new(Document::new("Cargo.toml", 10, 10)))));
+        let _ = app.update(Message::ToggleHome);
+        let _ = app.update(Message::Open(vec![PathBuf::from("Cargo.toml")]));
+        assert_eq!((app.loading, app.docs.len(), app.active, app.home), (0, 2, 1, false));
     }
 
     #[test]

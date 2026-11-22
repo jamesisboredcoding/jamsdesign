@@ -37,14 +37,23 @@ fn thumb_file(path: &Path) -> Option<PathBuf> {
     Some(cache_dir()?.join(format!("{h:016x}.png")))
 }
 
-/// Writes `doc`'s thumbnail for `path` in the background.
-pub fn store_thumb(path: PathBuf, doc: Document) {
+/// Writes `doc`'s thumbnail for `path` on its own thread; finishes when it's written.
+pub async fn store_thumb(path: PathBuf, doc: Document) {
     if cfg!(test) {
         return;
     }
+    let (done, written) = iced::futures::channel::oneshot::channel::<()>();
     std::thread::spawn(move || {
-        let Some(file) = thumb_file(&path) else { return };
-        let (w, h, rgba) = jd_raster::composite::thumbnail(&doc, THUMB, None);
+        write_thumb(&path, &doc);
+        let _ = done.send(());
+    });
+    let _ = written.await;
+}
+
+fn write_thumb(path: &Path, doc: &Document) {
+    {
+        let Some(file) = thumb_file(path) else { return };
+        let (w, h, rgba) = jd_raster::composite::thumbnail(doc, THUMB, None);
         let Some(img) = image::RgbaImage::from_raw(w, h, rgba) else { return };
         if let Some(dir) = file.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -54,7 +63,7 @@ pub fn store_thumb(path: PathBuf, doc: Document) {
         if img.save(&tmp).is_ok() {
             let _ = std::fs::rename(&tmp, &file);
         }
-    });
+    }
 }
 
 /// What the Home screen shows for one recent file.
