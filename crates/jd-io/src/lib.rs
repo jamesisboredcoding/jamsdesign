@@ -30,6 +30,8 @@ pub enum LoadError {
     Decode(image::ImageError),
     /// A `.jdp` that's damaged or from an incompatible version.
     Format(String),
+    /// Another app's file we can't read (the message says why).
+    Unsupported(String),
 }
 
 impl fmt::Display for LoadError {
@@ -38,6 +40,7 @@ impl fmt::Display for LoadError {
             Self::Io(e) => write!(f, "couldn't read file: {e}"),
             Self::Decode(e) => write!(f, "couldn't decode image: {e}"),
             Self::Format(e) => write!(f, "not a valid Photosplash document: {e}"),
+            Self::Unsupported(e) => f.write_str(e),
         }
     }
 }

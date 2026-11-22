@@ -1644,6 +1644,10 @@ impl Photo {
             }
 
             Message::LayerPress(id) => {
+                // Another layer ends viewing a mask (like Photoshop).
+                if self.mask_view.is_some_and(|m| m != id) {
+                    self.mask_view = None;
+                }
                 let _ = self.update(Message::SelectLayer(id));
                 if let Some(d) = self.doc() {
                     self.layer_drag = Some(LayerDrag { doc: d.id, layer: id, target: None });
@@ -5535,6 +5539,13 @@ mod tests {
         assert_eq!(app.mask_view, Some(id));
         let _ = app.update(Message::ThumbPress(id, true));
         assert_eq!(app.mask_view, None);
+        let _ = app.update(Message::ThumbPress(id, true));
+        app.modifiers = keyboard::Modifiers::empty();
+        let below = app.document().unwrap().layers()[0].id;
+        let _ = app.update(Message::LayerPress(below));
+        assert_eq!(app.mask_view, None, "another layer ends the mask view");
+        let _ = app.update(Message::LayerPress(id));
+        app.modifiers = keyboard::Modifiers::ALT;
         let _ = app.update(Message::ThumbPress(id, true));
         app.modifiers = keyboard::Modifiers::empty();
         let _ = app.update(Message::TargetMask(false));

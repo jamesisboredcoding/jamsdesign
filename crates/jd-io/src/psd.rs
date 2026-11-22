@@ -63,19 +63,32 @@ enum Item {
 pub fn read(name: String, bytes: &[u8]) -> Result<Document, LoadError> {
     // The parser can panic on files it doesn't expect; that's a bad file, not a crash.
     let parsed = std::panic::catch_unwind(|| psd::Psd::from_bytes(bytes))
-        .map_err(|_| LoadError::Format("this Photoshop file uses features that can't be read yet".into()))?;
-    let file = parsed.map_err(|e| LoadError::Format(format!("couldn't read the Photoshop file: {e}")))?;
+        .map_err(|_| LoadError::Unsupported("this Photoshop file uses features that can't be read yet".into()))?;
+    let file = parsed.map_err(|e| LoadError::Unsupported(format!("couldn't read the Photoshop file: {e}")))?;
+    // What the crate turns into RGBA correctly; anything else would open with wrong colours.
+    let (depth, mode) = (file.depth(), file.color_mode());
+    if !matches!(depth, psd::PsdDepth::Eight) || !matches!(mode, psd::ColorMode::Rgb | psd::ColorMode::Grayscale) {
+        return Err(LoadError::Unsupported(format!(
+            "only 8-bit RGB and greyscale Photoshop files open for now (this one is {}-bit {mode:?}); \
+             in Photoshop, Image > Mode > RGB Color and 8 Bits/Channel converts it",
+            depth as u8
+        )));
+    }
     let (w, h) = (file.width(), file.height());
+    let canvas_bytes = w as usize * h as usize * 4;
     if w == 0 || h == 0 {
-        return Err(LoadError::Format("the Photoshop file has no size".into()));
+        return Err(LoadError::Unsupported("the Photoshop file has no size".into()));
     }
     let mut doc = Document::blank(name, w, h);
 
     // A file saved with only a background has no layers, just the flattened image.
     if file.layers().is_empty() {
-        let rgba = std::panic::catch_unwind(|| file.rgba()).map_err(|_| LoadError::Format("couldn't read the image data".into()))?;
+        let rgba = std::panic::catch_unwind(|| file.rgba()).map_err(|_| LoadError::Unsupported("couldn't read the image data".into()))?;
         let id = doc.add_layer("Background");
         if let Some(l) = doc.layer_mut(id) {
+            if rgba.len() != canvas_bytes {
+                return Err(LoadError::Unsupported("the image data has the wrong size".into()));
+            }
             l.pixels = jd_raster::TileGrid::from_rgba8(w, h, &rgba);
             l.locked = true;
         }
@@ -124,7 +137,10 @@ pub fn read(name: String, bytes: &[u8]) -> Result<Document, LoadError> {
             Item::Layer(i) => {
                 let layer = &file.layers()[i];
                 let rgba = std::panic::catch_unwind(|| layer.rgba())
-                    .map_err(|_| LoadError::Format(format!("couldn't read the pixels of layer \"{}\"", layer.name())))?;
+                    .map_err(|_| LoadError::Unsupported(format!("couldn't read the pixels of layer \"{}\"", layer.name())))?;
+                if rgba.len() != canvas_bytes {
+                    return Err(LoadError::Unsupported(format!("the pixels of layer \"{}\" have the wrong size", layer.name())));
+                }
                 let id = doc.add_layer(layer.name());
                 if let Some(l) = doc.layer_mut(id) {
                     l.pixels = jd_raster::TileGrid::from_rgba8(w, h, &rgba);

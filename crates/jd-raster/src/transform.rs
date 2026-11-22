@@ -199,8 +199,7 @@ pub fn transform_grid(src: &TileGrid, m: &Affine) -> TileGrid {
     };
     // Shrinking: each output pixel covers several source pixels along each axis, so average
     // that many samples spread over it (no aliasing, like Image Size).
-    let steps = |dx: f32, dy: f32| ((dx * dx + dy * dy).sqrt().ceil() as usize).clamp(1, 8);
-    let (nx, ny) = (steps(inv.a, inv.b), steps(inv.c, inv.d));
+    let (nx, ny) = footprint_steps(&inv);
     let sample = |x: f32, y: f32| -> [f32; 4] {
         if nx == 1 && ny == 1 {
             let (sx, sy) = inv.apply(x + 0.5, y + 0.5);
@@ -237,6 +236,14 @@ pub fn transform_grid(src: &TileGrid, m: &Affine) -> TileGrid {
         .collect();
     out.write_region_at(ox0, oy0, ow as u32, (oy1 - oy0).max(0) as u32, &rows.concat());
     out
+}
+
+/// How many samples per axis an output pixel needs (`inv` maps output to source): one
+/// (bicubic) unless it covers clearly more than a source pixel. The margin keeps rotations at
+/// 100% (whose footprint is 1.0000001 in floats) and slight shrinks sharp.
+fn footprint_steps(inv: &Affine) -> (usize, usize) {
+    let steps = |dx: f32, dy: f32| (((dx * dx + dy * dy).sqrt() - 0.25).ceil() as usize).clamp(1, 8);
+    (steps(inv.a, inv.b), steps(inv.c, inv.d))
 }
 
 /// Catmull-Rom weights for the four pixels around a position `t` (0..1) past the second.
@@ -552,5 +559,17 @@ mod place_tests {
         assert_eq!(out.pixel_at(16, 16), [200, 100, 50, 255]);
         let corner = out.pixel_at(-4, -4);
         assert_eq!(corner[3], 0, "{corner:?}");
+    }
+
+    #[test]
+    fn rotations_and_slight_shrinks_stay_bicubic() {
+        for angle in [0.1f32, 0.7, 1.3, 2.9, 4.0] {
+            for scale in [1.0f32, 0.99, 0.85] {
+                let inv = Affine::from_parts((50.0, 50.0), (60.0, 40.0), angle, scale, scale).inverse().unwrap();
+                assert_eq!(footprint_steps(&inv), (1, 1), "angle {angle}, scale {scale}");
+            }
+        }
+        let inv = Affine::from_parts((50.0, 50.0), (50.0, 50.0), 0.0, 0.3, 0.5).inverse().unwrap();
+        assert_eq!(footprint_steps(&inv), (4, 2));
     }
 }
