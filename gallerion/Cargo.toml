@@ -13,6 +13,7 @@ jd-raster = { path = "crates/jd-raster" }
 jd-ui = { path = "crates/jd-ui" }
 jd-io = { path = "crates/jd-io" }
 jd-gpu = { path = "crates/jd-gpu" }
+jd-ai = { path = "crates/jd-ai" }
 iced = { version = "0.14", features = ["svg", "canvas", "image-without-codecs"] }
 # Must stay on the same major version iced_wgpu uses (27 for iced 0.14).
 wgpu = "27"
@@ -40,6 +41,9 @@ iced_winit = { path = "vendor/iced_winit" }
 opt-level = 2
 
 [profile.dev.package.jd-raster]
+opt-level = 3
+
+[profile.dev.package.jd-ai]
 opt-level = 3
 
 [profile.dev.package.jd-gpu]

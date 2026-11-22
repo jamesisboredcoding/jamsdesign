@@ -1,0 +1,13 @@
+[package]
+name = "jd-ai"
+description = "On-device AI helpers for jamsdesign apps (background removal), no iced."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+# ONNX Runtime, statically linked from a prebuilt build fetched at compile time (nothing for
+# users to install). About 5x faster than pure-Rust inference for these models.
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "tls-native", "api-24"] }
+# Downloads the model once, when the user agrees to it.
+ureq = "3"

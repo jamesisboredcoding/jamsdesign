@@ -89,6 +89,9 @@ left-click in, right-click out.
 - [x] 6a: Type tool (T): click to add text, click a text layer to edit it, system fonts,
       size, bold/italic, left/center/right; typing is one undo step (Esc cancels, Ctrl+Enter
       or another tool commits); text layers stay editable when moved and are saved in .jdp
+- [x] 6b: Image > Remove Background (on-device AI, IS-Net via ONNX Runtime; the 179 MB model
+      downloads once after asking); font list drawn in each font; Adjustments panel; Channels
+      panel (load a channel as a selection); resizable dock; draggable dialogs
 - [ ] 6: PSD import, Flatpak, Pen tool
 
 ## App icon
@@ -134,6 +137,9 @@ Try it: `cargo run -p jd-io --example demo_doc -- demo.jdp base.jpg top.jpg`
   layer is slower; effects hide while the layer is being moved or transformed and come back
   on commit. Shadow and glow use normal blending (Photoshop defaults to Multiply/Screen).
   Not yet: Bevel, Inner Shadow/Glow, Satin, Gradient/Pattern Overlay.
+- Remove Background works on the active layer and writes transparency (no layer masks yet).
+  It takes about 1.5 s per image on a 12-core CPU; complex hair/fur edges are softer than
+  remove.bg. The download has no progress bar yet.
 - Type: point text only (no text boxes or wrapping), the caret is always at the end (no
   arrow keys or selecting part of the text), one style per layer. Painting on, filtering or
   free-transforming a text layer turns it into plain pixels without asking. Pasting into a document of a different size lands at the top-left

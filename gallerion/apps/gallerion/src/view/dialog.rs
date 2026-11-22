@@ -248,6 +248,21 @@ pub fn small(app: &Photo) -> Option<Element<'_, Message>> {
             )
         }
         DialogKind::BlendingOptions => ("Layer Style", super::layer_style::body(app, d)),
+        DialogKind::ModelDownload => (
+            "Remove Background",
+            column![
+                text(format!(
+                    "Remove Background uses an AI model (IS-Net, {} MB) that runs entirely on this computer. \
+                     Your images are never uploaded.",
+                    jd_ai::ISNET.size / 1_000_000
+                ))
+                .size(TEXT_SIZE),
+                text("Download it once now from the open-source rembg project on GitHub (Apache-2.0 licence)?").size(TEXT_SIZE),
+                text(format!("Saved to {}", jd_ai::models_dir().display())).size(TEXT_SIZE_SMALL).color(TEXT_MUTED),
+            ]
+            .spacing(8)
+            .into(),
+        ),
         kind => {
             let (title, label) = match kind {
                 DialogKind::Expand => ("Expand Selection", "Expand by (px)"),

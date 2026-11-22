@@ -156,6 +156,8 @@ pub enum DialogKind {
     Stroke,
     /// Layer > Blending Options (right-click a layer, or the fx button): previews live.
     BlendingOptions,
+    /// Asks before downloading the background removal model.
+    ModelDownload,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -422,6 +424,8 @@ pub struct Photo {
     pub panels: Panels,
     pub workspace: Workspace,
     pub snap: Snap,
+    /// Remove Background is downloading its model or working.
+    pub removing_background: bool,
     pub dock_width: f32,
     pub ui_drag: Option<UiDrag>,
     /// Pointer over a dialog's title row (its local position), to start a drag from it.
@@ -563,6 +567,11 @@ pub enum Message {
     DialogTitlePointer(Point),
     UiDragMove(Point),
     UiDragEnd,
+
+    // Image > Remove Background
+    RemoveBackground,
+    ModelDownloaded(Result<(), String>),
+    BackgroundMask { doc: u64, layer: LayerId, result: Result<std::sync::Arc<Vec<u8>>, String> },
 
     // Snapping
     ToggleSnap,
@@ -790,6 +799,7 @@ impl Photo {
             panels: Panels { color: true, properties: true, layers: true },
             workspace: Workspace::Essentials,
             snap: Snap { on: true, bounds: true, layers: true },
+            removing_background: false,
             dock_width: 300.0,
             ui_drag: None,
             title_grab: Point::ORIGIN,
@@ -1761,6 +1771,63 @@ impl Photo {
                 return self.update(*m);
             }
             Message::DockPointer(p) => self.dock_pointer = p,
+            Message::RemoveBackground => {
+                if self.removing_background {
+                    self.info("Remove Background is already working…");
+                    return Task::none();
+                }
+                if self.document().and_then(|d| d.active()).is_none() {
+                    return Task::none();
+                }
+                if !jd_ai::ISNET.is_installed() {
+                    return self.update(Message::ShowDialog(DialogKind::ModelDownload));
+                }
+                return self.start_background_removal();
+            }
+            Message::ModelDownloaded(result) => match result {
+                Ok(()) => {
+                    self.removing_background = false;
+                    return self.start_background_removal();
+                }
+                Err(e) => {
+                    self.removing_background = false;
+                    self.error(format!("Couldn't download the model: {e}"));
+                }
+            },
+            Message::BackgroundMask { doc, layer, result } => {
+                self.removing_background = false;
+                let mask = match result {
+                    Ok(m) => m,
+                    Err(e) => {
+                        self.error(format!("Remove Background failed: {e}"));
+                        return Task::none();
+                    }
+                };
+                let Some(i) = self.doc_index(doc) else { return Task::none() };
+                let d = &mut self.docs[i];
+                let Some(l) = d.doc.layer(layer) else { return Task::none() };
+                let (w, h) = (d.doc.width, d.doc.height);
+                if mask.len() != (w * h) as usize {
+                    self.error("The image changed size while removing the background");
+                    return Task::none();
+                }
+                let mut rgba = l.pixels.to_rgba8();
+                for (p, &m) in rgba.chunks_exact_mut(4).zip(mask.iter()) {
+                    // Tidy the model's soft output: faint values become fully clear and
+                    // near-certain subject fully opaque, keeping soft edges in between.
+                    let m = ((m as f32 - 30.0) / (225.0 - 30.0)).clamp(0.0, 1.0);
+                    p[3] = (p[3] as f32 * m + 0.5) as u8;
+                }
+                d.history.record("Remove Background", &d.doc, None);
+                if let Some(l) = d.doc.layer_mut(layer) {
+                    // Transparency needs an unlocked layer (Photoshop turns the Background
+                    // into a normal layer for this too).
+                    l.locked = false;
+                    l.pixels.write_region(0, 0, w, h, &rgba);
+                    l.text = None;
+                }
+                self.info("Background removed (Ctrl+Z to undo)");
+            }
             Message::DockResizeStart => self.ui_drag = Some(UiDrag::Dock),
             Message::DialogTitlePointer(p) => self.title_grab = p,
             Message::DialogDragStart => {
@@ -2320,6 +2387,11 @@ impl Photo {
 
     fn dialog_ok(&mut self) -> Task<Message> {
         let Some(d) = self.dialog.take() else { return Task::none() };
+        if d.kind == DialogKind::ModelDownload {
+            self.removing_background = true;
+            self.info(format!("Downloading the background removal model ({} MB)…", jd_ai::ISNET.size / 1_000_000));
+            return Task::perform(async { jd_ai::ISNET.download(|_| {}) }, Message::ModelDownloaded);
+        }
         if let Some(o) = d.original {
             // The layer already shows the new settings; record the old ones as one undo step.
             if let Some(open) = self.doc_mut()
@@ -2436,6 +2508,7 @@ impl Photo {
                 | Message::MenuTitle(_)
                 | Message::PopupSub(_)
                 | Message::DockPointer(_)
+                | Message::ModelDownloaded(_)
                 | Message::DockResizeStart
                 | Message::DialogDragStart
                 | Message::DialogTitlePointer(_)
@@ -2514,6 +2587,20 @@ impl Photo {
                 false
             }
         }
+    }
+
+    /// Runs the segmentation model on the active layer in the background.
+    fn start_background_removal(&mut self) -> Task<Message> {
+        let Some(d) = self.doc() else { return Task::none() };
+        let Some(layer) = d.doc.active() else { return Task::none() };
+        let (doc, id, w, h) = (d.id, layer.id, d.doc.width as usize, d.doc.height as usize);
+        let rgba = layer.pixels.to_rgba8();
+        self.removing_background = true;
+        self.info("Removing the background…");
+        Task::perform(
+            async move { jd_ai::foreground_mask(&jd_ai::ISNET, &rgba, w, h).map(std::sync::Arc::new) },
+            move |result| Message::BackgroundMask { doc, layer: id, result },
+        )
     }
 
     /// Loads the installed font list once (the first time the Type tool is used) and picks a
@@ -4025,6 +4112,29 @@ mod tests {
         assert_eq!((sel.get(0, 0), sel.get(1, 0)), (255, 0));
         let _ = app.update(Message::LoadChannel(2));
         assert!(app.document().unwrap().selection.is_none(), "no green anywhere");
+    }
+
+    #[test]
+    fn background_mask_makes_the_background_transparent_in_one_step() {
+        let (mut app, _) = Photo::new();
+        app.docs.clear();
+        app.push_doc(Document::from_rgba8("photo", 4, 1, &[200, 100, 50, 255].repeat(4)), None);
+        let (doc, layer) = (app.docs[0].id, app.document().unwrap().active_id().unwrap());
+        let depth = app.doc().unwrap().history.depth();
+        app.removing_background = true;
+        let mask = std::sync::Arc::new(vec![0u8, 20, 128, 255]);
+        let _ = app.update(Message::BackgroundMask { doc, layer, result: Ok(mask) });
+        let l = app.document().unwrap().active().unwrap();
+        let alphas: Vec<u8> = (0..4).map(|x| l.pixels.pixel(x, 0)[3]).collect();
+        assert_eq!(alphas[0], 0);
+        assert_eq!(alphas[1], 0, "faint model output is cleared");
+        assert!(alphas[2] > 100 && alphas[2] < 200, "soft edge kept: {}", alphas[2]);
+        assert_eq!(alphas[3], 255);
+        assert!(!l.locked, "the Background is unlocked to hold transparency");
+        assert!(!app.removing_background);
+        assert_eq!(app.doc().unwrap().history.depth(), depth + 1);
+        let _ = app.update(Message::Undo);
+        assert_eq!(app.document().unwrap().active().unwrap().pixels.pixel(0, 0)[3], 255);
     }
 
     #[test]

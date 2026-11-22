@@ -176,6 +176,22 @@ impl TileGrid {
 
     /// Writes a tightly packed RGBA8 block at (x0, y0), clipped to the grid. Fully transparent
     /// pixels landing on empty tiles don't create tiles.
+    /// The canvas part as tightly packed RGBA8 (row-major, `width` x `height`).
+    pub fn to_rgba8(&self) -> Vec<u8> {
+        let (w, h) = (self.width as usize, self.height as usize);
+        let mut out = vec![0u8; w * h * 4];
+        for (tx, ty, tile) in self.iter() {
+            let (x0, y0) = ((tx * TILE_SIZE) as usize, (ty * TILE_SIZE) as usize);
+            let ts = TILE_SIZE as usize;
+            let cols = ts.min(w - x0);
+            for ly in 0..ts.min(h - y0) {
+                let src = &tile.data()[ly * ts * 4..(ly * ts + cols) * 4];
+                out[((y0 + ly) * w + x0) * 4..((y0 + ly) * w + x0 + cols) * 4].copy_from_slice(src);
+            }
+        }
+        out
+    }
+
     pub fn write_region(&mut self, x0: u32, y0: u32, w: u32, h: u32, rgba: &[u8]) {
         let (x1, y1) = ((x0 + w).min(self.width), (y0 + h).min(self.height));
         if x0 >= x1 || y0 >= y1 {
@@ -379,6 +395,12 @@ mod tests {
         let coords: Vec<_> = grid.iter().map(|(x, y, _)| (x, y)).collect();
         assert_eq!(coords, [(0, 0)]);
         assert_eq!(grid.pixel(300, 10), [0; 4]);
+    }
+
+    #[test]
+    fn to_rgba8_round_trips() {
+        let px: Vec<u8> = (0..300 * 270 * 4).map(|i| (i * 7 % 251) as u8).collect();
+        assert_eq!(TileGrid::from_rgba8(300, 270, &px).to_rgba8(), px);
     }
 
     #[test]

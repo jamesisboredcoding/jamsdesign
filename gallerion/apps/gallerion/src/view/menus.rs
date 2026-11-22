@@ -209,6 +209,13 @@ fn menu_bar(app: &Photo, i: usize) -> Vec<MenuEntry<'_, Message>> {
                 item("Auto Tone", "Shift+Ctrl+L", ed, Message::AutoTone),
                 item("Auto Contrast", "Alt+Shift+Ctrl+L", ed, Message::AutoContrast),
                 Separator,
+                item(
+                    if app.removing_background { "Remove Background (working…)" } else { "Remove Background" },
+                    "",
+                    doc && !app.removing_background,
+                    Message::RemoveBackground,
+                ),
+                Separator,
                 item("Image Size...", "Alt+Ctrl+I", doc, Message::ShowDialog(DialogKind::ImageSize)),
                 item("Canvas Size...", "Alt+Ctrl+C", doc, Message::ShowDialog(DialogKind::CanvasSize)),
                 Submenu(
