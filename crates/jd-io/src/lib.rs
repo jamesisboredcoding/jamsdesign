@@ -6,6 +6,7 @@
 //! - embedded ICC profiles are ignored; pixels are assumed to be sRGB
 
 pub mod jdp;
+pub mod psd;
 
 use std::fmt;
 use std::io::{BufReader, Read, Write};
@@ -17,7 +18,7 @@ use jd_raster::Document;
 /// File extensions we can open, for file dialogs.
 pub const OPEN_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "webp", "tif", "tiff", "gif", "bmp", "tga", "qoi", "exr", "hdr", "ico",
-    "pnm", "pbm", "pgm", "ppm", "dds", "ff",
+    "pnm", "pbm", "pgm", "ppm", "dds", "ff", "psd",
 ];
 
 /// File extensions we can export to.
@@ -110,6 +111,9 @@ pub fn open(path: &Path) -> Result<Document, LoadError> {
     let n = std::fs::File::open(path)?.read(&mut head)?;
     if jdp::sniff(&head[..n]) {
         return jdp::read(name, BufReader::new(std::fs::File::open(path)?));
+    }
+    if head[..n].starts_with(b"8BPS") {
+        return psd::read(name, &std::fs::read(path)?);
     }
     Ok(from_image(name, decode(path)?))
 }

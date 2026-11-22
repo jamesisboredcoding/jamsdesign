@@ -150,7 +150,9 @@ left-click in, right-click out.
       New / Open and the recent files as thumbnails (cached in
       `~/.cache/jamsdesign/photosplash-thumbs/` when a file is opened or saved; right-click one
       to remove it); File > Open Recent
-- [ ] 6: PSD import, Flatpak
+- [x] 6n: open Photoshop files (.psd): layers with names, opacity, visibility and blend
+      modes, and nested groups (Pass Through kept)
+- [ ] 6: Flatpak, PSD saving
 
 ## App icon
 
@@ -222,6 +224,10 @@ Try it: `cargo run -p jd-io --example demo_doc -- demo.jdp base.jpg top.jpg`
   and OK waits for the final render if the preview hasn't caught up. Filters refuse images over
   120 megapixels (they need a large working copy). Adjustment dialogs are modal, including the
   title bar.
+- Photoshop files: 8-bit RGB and greyscale only. Layer masks, adjustment layers, layer
+  effects, clipping masks, vector shapes and editable text aren't carried over (shapes and
+  adjustment layers come in empty, text as its pixels); Darker/Lighter Color and Hard Mix
+  become Darken, Lighten and Vivid Light. Saving goes to .jdp.
 - Dissolve as a brush mode paints like Normal for now (it's handled as a layer mode only).
 - Drag-and-drop to open doesn't work on Wayland: winit 0.30 has no Wayland drag-and-drop
   support (it only works under X11). Fix later via our own Wayland data-device listener or
