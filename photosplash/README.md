@@ -213,8 +213,10 @@ Try it: `cargo run -p jd-io --example demo_doc -- demo.jdp base.jpg top.jpg`
 - Layer groups and layer names don't travel through the system clipboard (only pixels).
 - While the Home screen is showing, the panels still show (and edit) the document behind it;
   shortcuts and menus that edit it are off until you go back (Esc or the Home button).
-- Marching ants don't animate. Transforms use bilinear resampling (Photoshop uses bicubic by
-  default), so large downscales can alias.
+- Marching ants don't animate. Committing a transform resamples bicubically (averaged over the
+  footprint when shrinking): about 0.4 s for a 15 MP layer rotated, 0.6 s enlarged 1.5x
+  (`cargo run --release -p jd-raster --example bench_transform`). The live preview is the
+  GPU's (bilinear).
 - Image > Adjustments are destructive (applied to the layer); use adjustment layers to keep
   them editable. Adjustment layers are computed on the CPU (cached per tile: about 0.2 s the
   first time on a 15 MP image, 30 ms per settings change); while a filter dialog or a

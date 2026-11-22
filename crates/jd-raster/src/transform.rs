@@ -1,8 +1,9 @@
 //! Moving, scaling and rotating pixels.
 //!
 //! While the user drags, the GPU previews the change by transforming tile quads. On commit we
-//! resample here: whole-pixel moves are exact copies; anything else is bilinear in
-//! premultiplied alpha (so edges don't pick up dark fringes).
+//! resample here: whole-pixel moves are exact copies; anything else is bicubic (averaged over
+//! each output pixel's footprint when shrinking) in premultiplied alpha (so edges don't pick
+//! up dark fringes).
 
 use rayon::prelude::*;
 
@@ -156,24 +157,66 @@ pub fn transform_grid(src: &TileGrid, m: &Affine) -> TileGrid {
     let oy1 = pts.iter().map(|p| p.1).fold(f32::MIN, f32::max).ceil() as i64;
     let ow = (ox1 - ox0).max(0) as usize;
 
-    // Premultiplied bilinear sample at continuous source position (pixel centres at +0.5).
-    let sample = |sx: f32, sy: f32| -> [f32; 4] {
+    // Premultiplied samples at continuous source positions (pixel centres at +0.5).
+    let px = |x: i64, y: i64| -> [f32; 4] {
+        let p = src.pixel_at(x, y);
+        let a = p[3] as f32 / 255.0;
+        [p[0] as f32 * a, p[1] as f32 * a, p[2] as f32 * a, a]
+    };
+    let bilinear = |sx: f32, sy: f32| -> [f32; 4] {
         let (fx, fy) = (sx - 0.5, sy - 0.5);
         let (bx, by) = (fx.floor(), fy.floor());
         let (tx, ty) = (fx - bx, fy - by);
         let mut acc = [0f32; 4];
         for (dx, dy, wgt) in [(0, 0, (1.0 - tx) * (1.0 - ty)), (1, 0, tx * (1.0 - ty)), (0, 1, (1.0 - tx) * ty), (1, 1, tx * ty)] {
-            if wgt <= 0.0 {
-                continue;
+            if wgt > 0.0 {
+                let p = px(bx as i64 + dx, by as i64 + dy);
+                for k in 0..4 {
+                    acc[k] += p[k] * wgt;
+                }
             }
-            let p = src.pixel_at(bx as i64 + dx, by as i64 + dy);
-            let a = p[3] as f32 / 255.0 * wgt;
-            acc[0] += p[0] as f32 * a;
-            acc[1] += p[1] as f32 * a;
-            acc[2] += p[2] as f32 * a;
-            acc[3] += a;
         }
         acc
+    };
+    // Bicubic (Catmull-Rom), Photoshop's default: sharper than bilinear when enlarging or
+    // rotating. Clamped, so its slight overshoot can't make colours brighter than opaque.
+    let bicubic = |sx: f32, sy: f32| -> [f32; 4] {
+        let (fx, fy) = (sx - 0.5, sy - 0.5);
+        let (bx, by) = (fx.floor(), fy.floor());
+        let (wx, wy) = (catmull_rom(fx - bx), catmull_rom(fy - by));
+        let mut acc = [0f32; 4];
+        for (j, wyj) in wy.iter().enumerate() {
+            for (i, wxi) in wx.iter().enumerate() {
+                let w = wxi * wyj;
+                let p = px(bx as i64 + i as i64 - 1, by as i64 + j as i64 - 1);
+                for k in 0..4 {
+                    acc[k] += p[k] * w;
+                }
+            }
+        }
+        let a = acc[3].clamp(0.0, 1.0);
+        [acc[0].clamp(0.0, a * 255.0), acc[1].clamp(0.0, a * 255.0), acc[2].clamp(0.0, a * 255.0), a]
+    };
+    // Shrinking: each output pixel covers several source pixels along each axis, so average
+    // that many samples spread over it (no aliasing, like Image Size).
+    let steps = |dx: f32, dy: f32| ((dx * dx + dy * dy).sqrt().ceil() as usize).clamp(1, 8);
+    let (nx, ny) = (steps(inv.a, inv.b), steps(inv.c, inv.d));
+    let sample = |x: f32, y: f32| -> [f32; 4] {
+        if nx == 1 && ny == 1 {
+            let (sx, sy) = inv.apply(x + 0.5, y + 0.5);
+            return bicubic(sx, sy);
+        }
+        let mut acc = [0f32; 4];
+        for j in 0..ny {
+            for i in 0..nx {
+                let (sx, sy) = inv.apply(x + (i as f32 + 0.5) / nx as f32, y + (j as f32 + 0.5) / ny as f32);
+                let p = bilinear(sx, sy);
+                for k in 0..4 {
+                    acc[k] += p[k];
+                }
+            }
+        }
+        acc.map(|v| v / (nx * ny) as f32)
     };
 
     let rows: Vec<Vec<u8>> = (oy0..oy1)
@@ -181,8 +224,7 @@ pub fn transform_grid(src: &TileGrid, m: &Affine) -> TileGrid {
         .map(|y| {
             let mut row = vec![0u8; ow * 4];
             for (i, x) in (ox0..ox1).enumerate() {
-                let (sx, sy) = inv.apply(x as f32 + 0.5, y as f32 + 0.5);
-                let [r, g, b, a] = sample(sx, sy);
+                let [r, g, b, a] = sample(x as f32, y as f32);
                 if a > 0.0 {
                     row[i * 4] = (r / a + 0.5).min(255.0) as u8;
                     row[i * 4 + 1] = (g / a + 0.5).min(255.0) as u8;
@@ -195,6 +237,17 @@ pub fn transform_grid(src: &TileGrid, m: &Affine) -> TileGrid {
         .collect();
     out.write_region_at(ox0, oy0, ow as u32, (oy1 - oy0).max(0) as u32, &rows.concat());
     out
+}
+
+/// Catmull-Rom weights for the four pixels around a position `t` (0..1) past the second.
+fn catmull_rom(t: f32) -> [f32; 4] {
+    let (t2, t3) = (t * t, t * t * t);
+    [
+        (-t3 + 2.0 * t2 - t) / 2.0,
+        (3.0 * t3 - 5.0 * t2 + 2.0) / 2.0,
+        (-3.0 * t3 + 4.0 * t2 + t) / 2.0,
+        (t3 - t2) / 2.0,
+    ]
 }
 
 /// Resamples a selection mask through `m` (bilinear on coverage).
@@ -480,5 +533,24 @@ mod place_tests {
         }
         let up = resize(&TileGrid::from_rgba8(2, 1, &[0, 0, 0, 255, 200, 200, 200, 255]), 8, 1);
         assert!(up.pixel(0, 0)[0] < up.pixel(4, 0)[0] && up.pixel(4, 0)[0] < up.pixel(7, 0)[0] + 1);
+    }
+
+    #[test]
+    fn shrinking_averages_and_enlarging_keeps_solid_areas_exact() {
+        // A one-pixel checkerboard shrunk to a quarter: even grey, not a moire of black/white.
+        let px: Vec<u8> = (0..64 * 64).flat_map(|i| if (i % 64 + i / 64) % 2 == 0 { [0, 0, 0, 255] } else { [255, 255, 255, 255] }).collect();
+        let src = TileGrid::from_rgba8(64, 64, &px);
+        let out = transform_grid(&src, &Affine::from_parts((32.0, 32.0), (32.0, 32.0), 0.0, 0.25, 0.25));
+        for (x, y) in [(26, 26), (30, 28), (36, 37)] {
+            let p = out.pixel(x, y);
+            assert!((p[0] as i32 - 128).abs() <= 20 && p[3] == 255, "{x},{y}: {p:?}");
+        }
+        // A solid colour stays exactly that colour inside when enlarged and rotated (bicubic
+        // weights add up to one), and nothing spills past the edge as overshoot.
+        let src = TileGrid::from_rgba8(8, 8, &[200, 100, 50, 255].repeat(64));
+        let out = transform_grid(&src, &Affine::from_parts((4.0, 4.0), (16.0, 16.0), 0.3, 3.0, 3.0));
+        assert_eq!(out.pixel_at(16, 16), [200, 100, 50, 255]);
+        let corner = out.pixel_at(-4, -4);
+        assert_eq!(corner[3], 0, "{corner:?}");
     }
 }
