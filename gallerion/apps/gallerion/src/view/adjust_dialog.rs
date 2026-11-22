@@ -156,7 +156,7 @@ fn slider_row_mapped<'a>(
 ) -> Element<'a, Message> {
     let (lo, hi) = (*range.start(), *range.end());
     let typed = on_change.clone();
-    let field = super::field::custom(app, name, shown, 80, move |t| {
+    let field = super::field::custom_live(app, name, shown, 80, move |t| {
         let n: f32 = super::field::number_text(t).parse().ok()?;
         n.is_finite().then(|| typed(map(n).clamp(lo, hi)))
     });

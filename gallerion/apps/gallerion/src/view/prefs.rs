@@ -54,7 +54,7 @@ fn general<'a>(app: &'a Photo, p: &Prefs) -> Element<'a, Message> {
         text("History States").size(TEXT_SIZE).font(bold()),
         row![
             slider(HISTORY_RANGE, history, set_history.clone()).step(1.0f32).width(Fill).style(style::slider),
-            super::field::number(app, "prefs-history", format!("{history:.0}"), 60, 1.0, HISTORY_RANGE, set_history),
+            super::field::number_live(app, "prefs-history", format!("{history:.0}"), 60, 1.0, HISTORY_RANGE, set_history),
         ]
         .spacing(10)
         .align_y(Vertical::Center),

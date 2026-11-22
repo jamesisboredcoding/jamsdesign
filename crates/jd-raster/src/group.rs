@@ -65,6 +65,23 @@ impl Document {
         true
     }
 
+    /// Whether a group around `id` is combined first (not plain Pass Through), so the layer
+    /// is drawn as part of that group's look rather than on its own.
+    pub fn in_combined_group(&self, id: LayerId) -> bool {
+        let mut cur = self.layer(id).and_then(|l| l.parent);
+        while let Some(p) = cur {
+            let Some(g) = self.layer(p) else { return false };
+            let combined = g.group.is_some_and(|x| {
+                !x.pass_through || g.opacity < 1.0 || g.mask.as_ref().is_some_and(|m| m.enabled) || !g.style.is_empty()
+            });
+            if combined {
+                return true;
+            }
+            cur = g.parent;
+        }
+        false
+    }
+
     /// Layer > New > Group: an empty group above the active layer.
     pub fn add_group(&mut self, name: impl Into<String>) -> LayerId {
         let id = self.add_layer(name);

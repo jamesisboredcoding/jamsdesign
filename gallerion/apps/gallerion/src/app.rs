@@ -351,6 +351,9 @@ pub struct FieldEdit {
     pub text: String,
     /// What applying the current text does (`None` while it isn't a valid value).
     pending: Option<Box<Message>>,
+    /// Applies as you type; `revert` puts the value back (Esc).
+    live: bool,
+    revert: Option<Box<Message>>,
 }
 
 /// The open Preferences dialog.
@@ -760,6 +763,8 @@ pub enum Message {
 
     // Typing into value boxes
     FieldEdit(&'static str, String),
+    /// A value box that applies as you type, and the message that puts its value back.
+    FieldEditLive(&'static str, String, Option<Box<Message>>),
     FieldInput(String, Option<Box<Message>>),
     FieldCommit,
     /// Escape anywhere, even inside a text field (which swallows it).
@@ -1182,7 +1187,7 @@ impl Photo {
         // A value box being typed into is applied by anything else you do (like Photoshop).
         if self.field_edit.is_some() {
             match message {
-                Message::FieldEdit(..) | Message::FieldInput(..) | Message::FieldCommit | Message::EscapePressed => {}
+                Message::FieldEdit(..) | Message::FieldEditLive(..) | Message::FieldInput(..) | Message::FieldCommit | Message::EscapePressed => {}
                 ref m if !Self::keeps_field(m) => {
                     let _ = self.commit_field();
                 }
@@ -2116,8 +2121,8 @@ impl Photo {
                 }
                 match self.document().and_then(|d| d.active()) {
                     None => return Task::none(),
-                    Some(l) if l.adjustment.is_some() => {
-                        self.error("Remove Background needs a layer with pixels, not an adjustment layer");
+                    Some(l) if l.adjustment.is_some() || l.is_group() => {
+                        self.error("Remove Background needs a layer with pixels (not a group or an adjustment layer)");
                         return Task::none();
                     }
                     Some(_) => {}
@@ -2242,7 +2247,8 @@ impl Photo {
                     return Task::none();
                 }
                 let mut st = self.pen_tool;
-                self.edit("Pen", None, |doc| {
+                // The click and the drag that follows are one undo step.
+                self.edit("Pen", Some("path-drag"), |doc| {
                     st.grab = Some(crate::pen::pen_click(doc, &mut st, at, tol));
                     true
                 });
@@ -2576,12 +2582,17 @@ impl Photo {
                     d.doc.mask_target = on_mask;
                 }
             }
-            Message::FieldEdit(key, text) => {
+            Message::FieldEdit(..) | Message::FieldEditLive(..) => {
+                let (key, text, live, revert) = match message {
+                    Message::FieldEdit(k, t) => (k, t, false, None),
+                    Message::FieldEditLive(k, t, r) => (k, t, true, r),
+                    _ => unreachable!("matched above"),
+                };
                 if self.field_edit.as_ref().is_some_and(|f| f.key == key) {
                     return Task::none();
                 }
                 let _ = self.commit_field();
-                self.field_edit = Some(FieldEdit { key, text, pending: None });
+                self.field_edit = Some(FieldEdit { key, text, pending: None, live, revert });
                 return Task::batch([
                     operation::focus(crate::view::field::FIELD_INPUT),
                     operation::select_all(crate::view::field::FIELD_INPUT),
@@ -2630,15 +2641,27 @@ impl Photo {
                 self.select = SelectOptions::default();
             }
             Message::FieldInput(text, pending) => {
-                if let Some(f) = self.field_edit.as_mut() {
-                    f.text = text;
+                let Some(f) = self.field_edit.as_mut() else { return Task::none() };
+                f.text = text;
+                if f.live {
+                    // Applied now, so whatever the user touches next sees the new value. (The
+                    // box stays open: it's set aside so applying doesn't count as moving on.)
+                    if let Some(m) = pending {
+                        let open = self.field_edit.take();
+                        let task = self.update(*m);
+                        self.field_edit = open;
+                        return task;
+                    }
+                } else {
                     f.pending = pending;
                 }
             }
             Message::FieldCommit => return self.commit_field(),
             Message::EscapePressed => {
-                if self.field_edit.take().is_some() {
-                    return Task::none();
+                if let Some(f) = self.field_edit.take()
+                    && let Some(revert) = f.revert
+                {
+                    return self.update(*revert);
                 }
             }
             Message::ZoomPercent(z) => {
@@ -3337,6 +3360,7 @@ impl Photo {
                 | Message::PickHue(_)
                 | Message::SetFg(_)
                 | Message::FieldEdit(..)
+                | Message::FieldEditLive(..)
                 | Message::FieldInput(..)
                 | Message::FieldCommit
                 | Message::EscapePressed
@@ -4680,6 +4704,39 @@ mod tests {
         app.type_opts.size = 10.0;
         let _ = app.update(Message::ResetAllTools);
         assert_eq!((app.select.tolerance, app.type_opts.size), (32, 48.0));
+    }
+
+    #[test]
+    fn live_value_boxes_apply_while_typing_and_escape_puts_them_back() {
+        let (mut app, _) = Photo::new();
+        white(&mut app, 20, 20);
+        let _ = app.update(Message::OpenOp(OpKind::Levels));
+        let levels = |b: u8| Box::new(Message::AdjustSet(Op::Adjust(jd_raster::adjust::Adjustment::Levels { in_black: b, in_white: 255, gamma: 1.0, out_black: 0, out_white: 255 })));
+        let _ = app.update(Message::FieldEditLive("Shadows", "0".into(), Some(levels(0))));
+        let _ = app.update(Message::FieldInput("20".into(), Some(levels(20))));
+        let black = |app: &Photo| match &app.adjusting.as_ref().unwrap().op {
+            Op::Adjust(jd_raster::adjust::Adjustment::Levels { in_black, .. }) => *in_black,
+            _ => 99,
+        };
+        assert_eq!(black(&app), 20, "applied while typing, before any other control is touched");
+        let _ = app.update(Message::EscapePressed);
+        assert_eq!(black(&app), 0, "Esc puts it back");
+        let _ = app.update(Message::AdjustCancel);
+
+        // Preferences: typed history states survive clicking a checkbox right after.
+        let _ = app.update(Message::OpenPreferences);
+        let with = |n: u32| {
+            let mut p = app.prefs.clone();
+            p.history_states = n;
+            Box::new(Message::PrefsSet(Box::new(p)))
+        };
+        let (before, typed) = (with(100), with(40));
+        let _ = app.update(Message::FieldEditLive("prefs-history", "100".into(), Some(before)));
+        let _ = app.update(Message::FieldInput("40".into(), Some(typed)));
+        let mut toggled = app.prefs.clone();
+        toggled.wheel_zooms = !toggled.wheel_zooms;
+        let _ = app.update(Message::PrefsSet(Box::new(toggled)));
+        assert_eq!(app.prefs.history_states, 40);
     }
 
     #[test]

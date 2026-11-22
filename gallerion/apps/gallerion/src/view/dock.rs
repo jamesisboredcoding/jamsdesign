@@ -87,7 +87,7 @@ fn color_panel(app: &Photo) -> Element<'_, Message> {
             let channel = move |name: &'static str, key: &'static str, i: usize| {
                 row![
                     text(name).size(10).color(TEXT_MUTED),
-                    super::field::number(app, key, rgb[i].to_string(), Fill, 1.0, 0.0..=255.0, move |v| {
+                    super::field::number_live(app, key, rgb[i].to_string(), Fill, 1.0, 0.0..=255.0, move |v| {
                         let mut c = rgb;
                         c[i] = v.round() as u8;
                         set(c)
@@ -98,7 +98,7 @@ fn color_panel(app: &Photo) -> Element<'_, Message> {
             };
             let hex_field = row![
                 text("#").size(10).color(TEXT_MUTED),
-                super::field::custom(app, "hex", hex.trim_start_matches('#').to_owned(), Fill, |t| {
+                super::field::custom_live(app, "hex", hex.trim_start_matches('#').to_owned(), Fill, |t| {
                     jd_core::Rgba::from_hex(t.trim().trim_start_matches('#')).map(|c| Message::SetFg(Hsv::from_rgba(c)))
                 }),
             ]

@@ -62,8 +62,11 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
 
     // Transform preview: the layer (or its lifted selection) is drawn through the affine.
     let session = app.transform.as_ref().filter(|t| t.doc == open.id);
+    // (Inside a combined group the layer is part of the group's look: its move shows when
+    // committed, rather than drawing it twice.)
     if let Some(t) = session
         && let Some(i) = doc.layers().iter().position(|l| l.id == t.layer)
+        && !doc.in_combined_group(t.layer)
     {
         let m = t.affine().as_array();
         let tiles = |g: &jd_raster::TileGrid| g.iter_all().map(|(x, y, t)| ([x, y], t.clone())).collect::<Vec<_>>();
@@ -106,7 +109,19 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
             _ => None,
         };
         let shown = shown.as_ref().unwrap_or(preview);
-        scene.layers[i].tiles = shown.iter_all().map(|(x, y, t)| ([x, y], t.clone())).collect();
+        if doc.in_combined_group(a.layer) {
+            // Part of a group's look: redo the whole stack with the preview in place (cached
+            // per tile, so only what changed is recomputed).
+            let mut d = doc.clone();
+            if let Some(l) = d.layer_mut(a.layer) {
+                *l.target_mut(a.mask) = preview.clone();
+            }
+            let retain = std::mem::take(&mut scene.retain);
+            scene = Scene::from_document(&d);
+            scene.retain = retain;
+        } else {
+            scene.layers[i].tiles = shown.iter_all().map(|(x, y, t)| ([x, y], t.clone())).collect();
+        }
     }
 
     let pixels = Shader::new(Pixels { scene: Arc::new(scene), origin, zoom }).width(Fill).height(Fill);

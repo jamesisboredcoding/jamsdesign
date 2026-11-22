@@ -40,6 +40,21 @@ pub fn number<'a>(
     custom(app, key, shown, width, move |typed| parse(typed, scale, &range).map(&on_value))
 }
 
+/// Like [`number`], but the value applies with every keystroke (Esc puts it back). For boxes
+/// next to controls whose messages carry the other settings too (dialog sliders, colour
+/// channels, preferences): applying later would be undone by those.
+pub fn number_live<'a>(
+    app: &'a Photo,
+    key: &'static str,
+    shown: String,
+    width: impl Into<Length>,
+    scale: f32,
+    range: RangeInclusive<f32>,
+    on_value: impl Fn(f32) -> Message + 'a,
+) -> Element<'a, Message> {
+    custom_live(app, key, shown, width, move |typed| parse(typed, scale, &range).map(&on_value))
+}
+
 /// A value box whose typed text is turned into a message by `commit` (`None`: not valid).
 pub fn custom<'a>(
     app: &'a Photo,
@@ -48,7 +63,28 @@ pub fn custom<'a>(
     width: impl Into<Length>,
     commit: impl Fn(&str) -> Option<Message> + 'a,
 ) -> Element<'a, Message> {
-    let width = width.into();
+    field(app, key, shown, width.into(), false, commit)
+}
+
+/// [`custom`], applying as you type (see [`number_live`]).
+pub fn custom_live<'a>(
+    app: &'a Photo,
+    key: &'static str,
+    shown: String,
+    width: impl Into<Length>,
+    commit: impl Fn(&str) -> Option<Message> + 'a,
+) -> Element<'a, Message> {
+    field(app, key, shown, width.into(), true, commit)
+}
+
+fn field<'a>(
+    app: &'a Photo,
+    key: &'static str,
+    shown: String,
+    width: Length,
+    live: bool,
+    commit: impl Fn(&str) -> Option<Message> + 'a,
+) -> Element<'a, Message> {
     match &app.field_edit {
         Some(edit) if edit.key == key => text_input("", &edit.text)
             .id(FIELD_INPUT)
@@ -63,8 +99,15 @@ pub fn custom<'a>(
             .into(),
         _ => {
             let initial = if key == "hex" { shown.trim_start_matches('#').to_owned() } else { number_text(&shown) };
+            // A live box remembers how to put the value back (Esc).
+            let press = if live {
+                let revert = commit(&initial).map(Box::new);
+                Message::FieldEditLive(key, initial, revert)
+            } else {
+                Message::FieldEdit(key, initial)
+            };
             mouse_area(field_box(value(shown)).width(width))
-                .on_press(Message::FieldEdit(key, initial))
+                .on_press(press)
                 .interaction(iced::mouse::Interaction::Text)
                 .into()
         }

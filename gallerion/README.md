@@ -177,6 +177,11 @@ Try it: `cargo run -p jd-io --example demo_doc -- demo.jdp base.jpg top.jpg`
   Not yet: Bevel, Inner Shadow/Glow, Satin, Gradient/Pattern Overlay.
 - Remove Background works on the active layer and hides the background with a layer mask
   (it replaces a mask the layer already had).
+- Groups: inside a group that isn't plain Pass Through (another blend mode, or opacity /
+  mask / effects on the group), Move and Free Transform show the result when committed
+  rather than while dragging. Copying a group to another document isn't supported yet.
+- Paths: no Convert Point / Add or Delete Anchor tools, no vector shape layers, no Make Work
+  Path from a selection; the Pen's last point can only be removed while drawing.
 - Layer masks: no Alt+click to view the mask alone, no Ctrl+\\ / Ctrl+2 shortcuts to switch
   target, and masks are always linked (moving a selection inside a mask isn't supported).
   It takes about 1.5 s per image on a 12-core CPU; complex hair/fur edges are softer than
