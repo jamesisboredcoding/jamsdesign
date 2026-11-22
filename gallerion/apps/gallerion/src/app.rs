@@ -1127,7 +1127,7 @@ impl Photo {
         if self.field_edit.is_some() {
             match message {
                 Message::FieldEdit(..) | Message::FieldInput(..) | Message::FieldCommit | Message::EscapePressed => {}
-                ref m if !Self::keeps_transform(m) => {
+                ref m if !Self::keeps_field(m) => {
                     let _ = self.commit_field();
                 }
                 _ => {}
@@ -2049,8 +2049,13 @@ impl Photo {
                     self.info("Remove Background is already working…");
                     return Task::none();
                 }
-                if self.document().and_then(|d| d.active()).is_none() {
-                    return Task::none();
+                match self.document().and_then(|d| d.active()) {
+                    None => return Task::none(),
+                    Some(l) if l.adjustment.is_some() => {
+                        self.error("Remove Background needs a layer with pixels, not an adjustment layer");
+                        return Task::none();
+                    }
+                    Some(_) => {}
                 }
                 if !jd_ai::ISNET.is_installed() {
                     return self.update(Message::ShowDialog(DialogKind::ModelDownload));
@@ -2698,12 +2703,14 @@ impl Photo {
             window::resize_events().map(|(_, size)| Message::WindowResized(size)),
             window::close_requests().map(|_| Message::RequestQuit),
             // Only fires on X11: winit 0.30 has no Wayland drag-and-drop yet.
-            event::listen_with(|event, _status, _id| match event {
+            event::listen_with(|event, status, _id| match event {
                 iced::Event::Window(window::Event::FileDropped(path)) => Some(Message::Open(vec![path])),
                 // Ends layer drags wherever the button is released.
                 iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => Some(Message::PointerReleased),
                 // Text fields swallow Escape; a value box being typed into still needs it.
-                iced::Event::Keyboard(keyboard::Event::KeyPressed { key: keyboard::Key::Named(keyboard::key::Named::Escape), .. }) => {
+                iced::Event::Keyboard(keyboard::Event::KeyPressed { key: keyboard::Key::Named(keyboard::key::Named::Escape), .. })
+                    if status == event::Status::Captured =>
+                {
                     Some(Message::EscapePressed)
                 }
                 _ => None,
@@ -2945,6 +2952,37 @@ impl Photo {
     }
 
     /// Messages that leave an open Move/Free Transform alone (view, input plumbing, its own).
+    /// Messages that aren't something the user did (pointer tracking, layout, async results):
+    /// a value box being typed into stays open through them. Anything else applies it first.
+    fn keeps_field(m: &Message) -> bool {
+        matches!(
+            m,
+            Message::CursorMoved(_)
+                | Message::CanvasBounds(_)
+                | Message::Tablet(_)
+                | Message::TabletHandles(_)
+                | Message::WindowOpened(_)
+                | Message::WindowResized(_)
+                | Message::Maximized(_)
+                | Message::ModeChanged(_)
+                | Message::TitleMoved(_)
+                | Message::ToolbarPointer(_)
+                | Message::MenuPointer(..)
+                | Message::MenuTitle(_)
+                | Message::PopupSub(_)
+                | Message::DockPointer(_)
+                | Message::OptionsPointer(_)
+                | Message::DialogTitlePointer(_)
+                | Message::UiDragMove(_)
+                | Message::PanelMeasured(..)
+                | Message::PointerReleased
+                | Message::DragOver(_)
+                | Message::AdjustPreviewReady(..)
+                | Message::Key(_)
+                | Message::Noop
+        )
+    }
+
     fn keeps_transform(m: &Message) -> bool {
         matches!(
             m,
@@ -3656,7 +3694,7 @@ impl Photo {
                     mix(jd_raster::text::signature(&m.pixels) ^ m.default as u64);
                 }
                 mix(l.visible as u64 | (l.opacity.to_bits() as u64) << 1 | (l.blend as u64) << 40);
-                for b in format!("{:?}", l.style).bytes() {
+                for b in format!("{:?}{:?}", l.style, l.adjustment).bytes() {
                     mix(b as u64);
                 }
             }
@@ -3713,9 +3751,18 @@ impl Photo {
             self.modifiers = m;
             return Task::none();
         }
-        // Keys a value box being typed into doesn't use (arrows up/down...) do nothing else.
+        // A value box being typed into: keys its text field passes on (up/down, Tab) do
+        // nothing else; any other key that gets here means the field lost focus (a click on
+        // empty space), so the typed value applies and the key works as usual.
         if self.field_edit.is_some() {
-            return Task::none();
+            if let keyboard::Event::KeyPressed { key, .. } = &event
+                && matches!(key.as_ref(), Key::Named(Named::ArrowUp | Named::ArrowDown | Named::Tab))
+            {
+                return Task::none();
+            }
+            if matches!(event, keyboard::Event::KeyPressed { .. }) {
+                let _ = self.commit_field();
+            }
         }
         if self.typing.is_some() {
             return self.type_key(&event);
@@ -4070,6 +4117,29 @@ mod tests {
         let _ = app.update(Message::FieldCommit);
         assert_eq!(app.brush.size, 120.0);
         assert!(app.field_edit.is_none());
+
+        // Clicking a button applies what was typed before the button's own action.
+        let _ = app.update(Message::Nudge(0.0, 0.0));
+        let _ = app.update(Message::FreeTransform);
+        type_field(&mut app, "transform-w", "50", |v| Message::TransformValue(TransformField::Width, v), 100.0, -100.0..=100.0);
+        let _ = app.update(Message::CommitTransform);
+        assert!(app.transform.is_none());
+        let b = jd_raster::transform::content_bounds(&app.document().unwrap().layers()[0].pixels).unwrap();
+        assert_eq!(b[2] - b[0], 100, "scaled to 50% wide before committing");
+        // A key that reaches the app (the field lost focus) applies it and still works.
+        type_field(&mut app, "brush-size", "33", Message::BrushSize, 1.0, 1.0..=5000.0);
+        let _ = app.update(Message::Key(keyboard::Event::KeyPressed {
+            key: Key::Character("e".into()),
+            modified_key: Key::Character("e".into()),
+            physical_key: keyboard::key::Physical::Unidentified(keyboard::key::NativeCode::Unidentified),
+            location: keyboard::Location::Standard,
+            modifiers: keyboard::Modifiers::empty(),
+            text: Some("e".into()),
+            repeat: false,
+        }));
+        assert_eq!(app.brush.size, 33.0);
+        assert!(app.field_edit.is_none());
+        app.brush.size = 120.0;
 
         type_field(&mut app, "brush-size", "7", Message::BrushSize, 1.0, 1.0..=5000.0);
         let _ = app.update(Message::EscapePressed);
