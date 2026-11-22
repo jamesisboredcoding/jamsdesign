@@ -43,6 +43,11 @@ icons! {
     Camera => "camera", Magnet => "magnet", Marker => "marker", Razor => "razor",
     Ripple => "ripple", Slip => "slip", TrackSelect => "track-select", Wrench => "wrench",
     Mic => "mic", Music => "music", List => "list", Grid => "grid", Film => "film",
+    // Design (Blobr)
+    Frame => "frame", Comment => "comment", Component => "component", Instance => "instance",
+    AutoLayout => "auto-layout", AlignTop => "align-top", AlignMiddle => "align-middle",
+    AlignBottom => "align-bottom", Rotate => "rotate", Page => "page", Minus => "minus",
+    ChevronRight => "chevron-right",
 }
 
 /// Handles are built once: creating one hashes the SVG bytes, which we don't want per frame.
