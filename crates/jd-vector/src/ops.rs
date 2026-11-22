@@ -215,6 +215,8 @@ pub struct Patch {
     pub min_height: Option<Option<f64>>,
     #[serde(deserialize_with = "double", skip_serializing_if = "Option::is_none")]
     pub max_height: Option<Option<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exports: Option<Vec<ExportSetting>>,
     /// Text nodes: the characters.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
@@ -563,7 +565,7 @@ fn set(doc: &mut Document, id: NodeId, patch: &Patch) -> Result<(), String> {
         ($($f:ident),*) => { $( if let Some(v) = &patch.$f { p.$f = v.clone(); } )* };
     }
     copy!(x, y, rotation, visible, locked, opacity, blend, fills, strokes, stroke, corner, effects, clip);
-    copy!(layout, sizing_h, sizing_v, absolute, constraints, min_width, max_width, min_height, max_height);
+    copy!(layout, sizing_h, sizing_v, absolute, constraints, min_width, max_width, min_height, max_height, exports);
     // Typing a size turns hug/fill into a fixed size, as in the Design panel.
     if let Some(w) = patch.width {
         p.width = w;

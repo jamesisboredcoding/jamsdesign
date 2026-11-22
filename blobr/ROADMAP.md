@@ -42,7 +42,7 @@ CLI argument as a file to open. Names are provisional until Step 0.
 
 ## Status
 
-- [ ] Step 0: headless core (`crates/jd-vector`)
+- [x] Step 0: headless core (`crates/jd-vector`)
   - [x] Document > pages > node tree. Kinds: Frame, Group (fits its children), Section,
         Rectangle, Ellipse (arc), Line, Polygon, Star, Vector (bezier path, SVG path import),
         Text. Component and Instance come in Step 2
@@ -58,17 +58,26 @@ CLI argument as a file to open. Names are provisional until Step 0.
   - [x] `.jdb` format, version 1: zip of `mimetype`, nested readable `document.json` and
         `images/` (unused images dropped). Decided: JSON in a zip, like `.jdp`
   - [x] Decided: `kurbo` 0.11 for paths and transforms (already in the lockfile)
-  - [ ] Text: one style per node and a `TextMeasure` trait for layout (font-free
-        `ApproxMeasure` for now). Still to do: the real `cosmic-text` measurer (with
-        rendering), mixed styles within one text node
-  - [ ] Hit testing (point and rectangle selection) and boolean operations
-- [ ] Step 1: headless rendering and export
-  - CPU renderer: node or page to PNG at any scale, used for export, thumbnails and tests (and later MCP)
-  - Export PNG and SVG per node, with export settings saved on the node
-  - Golden-image tests for shapes, strokes, gradients, effects, text and auto layout
-  - Spike: rendering backend for both headless and on-screen (one renderer for both if
-    possible, otherwise a parity test like `jd-gpu`'s `blend_parity`). `jd-gpu` composites
-    raster tiles, so vectors need their own path. Check current crates
+  - [x] Text: one style per node, a `TextMeasure` trait for layout; the real measurer
+        (`CosmicMeasure`, system fonts) lives in `jd-vector-render`. Mixed styles within one
+        text node come later
+  - [x] Shape outlines for every kind (`geometry::outline`), hit testing (topmost node under
+        a point, respecting clipping and rotation, with slop for lines) and marquee tests
+  - Boolean operations moved to Step 4 (editing tools)
+- [x] Step 1: headless rendering and export (`crates/jd-vector-render`)
+  - [x] CPU renderer with tiny-skia: fills (solid, linear/radial gradients, images in
+        fill/fit/stretch/tile), strokes inside/centre/outside with dashes, caps and joins,
+        clipping, opacity, all blend modes, drop and inner shadows (with spread), layer and
+        background blur, any scale
+  - [x] Text drawn from unhinted glyph outlines (cosmic-text): sharp at any zoom or angle,
+        takes any paint, exports to SVG as paths
+  - [x] PNG and SVG export of a node or page; `examples/render.rs` renders any `.jdb`
+  - [x] Tests: pixel checks per feature, plus SVG export rendered by resvg compared with our
+        raster renderer
+  - [x] Decided: tiny-skia (already in the lockfile) for headless rendering. On-screen
+        rendering is decided with the app in Step 3 (tiny-skia into a texture first, GPU
+        later if needed)
+  - [x] Export settings saved on nodes (PNG/SVG, scale, suffix) and `export_files`
 - [ ] Step 2: components, variants and tokens in the core
   - Components, instances, overrides, component properties (text, boolean, instance swap)
     and variant sets

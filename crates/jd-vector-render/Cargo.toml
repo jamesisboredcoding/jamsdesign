@@ -1,0 +1,21 @@
+[package]
+name = "jd-vector-render"
+description = "Draws jd-vector documents without a window: CPU raster (tiny-skia), PNG and SVG export, text shaping. No iced."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+jd-core.workspace = true
+jd-vector = { path = "../jd-vector" }
+image.workspace = true
+kurbo = "0.11"
+# All three are already in the lockfile (iced's svg support pulls in tiny-skia and resvg).
+tiny-skia = "0.11"
+cosmic-text = "0.15"
+# Same swash cosmic-text uses, for its glyph outline commands.
+swash = "0.2"
+
+[dev-dependencies]
+# Renders our SVG export back to pixels, to check it matches the raster renderer.
+resvg = "0.45"

@@ -183,6 +183,37 @@ pub struct Props {
     pub min_height: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_height: Option<f64>,
+    /// What File > Export makes of this node.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub exports: Vec<ExportSetting>,
+}
+
+/// One file to export a node as.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExportSetting {
+    pub format: ExportFormat,
+    /// Pixels per document pixel (PNG only).
+    #[serde(default = "one64")]
+    pub scale: f64,
+    /// Added to the node's name for the file name, e.g. "@2x".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub suffix: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportFormat {
+    Png,
+    Svg,
+}
+
+impl ExportFormat {
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Png => "png",
+            Self::Svg => "svg",
+        }
+    }
 }
 
 impl Default for Props {
@@ -212,6 +243,7 @@ impl Default for Props {
             max_width: None,
             min_height: None,
             max_height: None,
+            exports: Vec::new(),
         }
     }
 }
@@ -750,6 +782,9 @@ fn is_zero32(v: &f32) -> bool {
     *v == 0.0
 }
 fn one() -> f32 {
+    1.0
+}
+fn one64() -> f64 {
     1.0
 }
 fn yes() -> bool {

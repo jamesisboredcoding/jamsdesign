@@ -15,6 +15,7 @@
 mod color;
 mod doc;
 pub mod file;
+pub mod geometry;
 pub mod history;
 pub mod layout;
 pub mod node;
