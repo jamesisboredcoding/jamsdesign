@@ -102,7 +102,12 @@ pub fn view(app: &Blobr) -> Element<'_, Message> {
             None => space().into(),
         },
     };
-    column![panel_header(&["Design", "Prototype", "Inspect"], 0, |_| Message::Noop), scrollable(body).height(Fill)].into()
+    let header = panel_header(&["Design", "Prototype", "Inspect"], app.right_tab, Message::RightTab);
+    match app.right_tab {
+        1 => column![header, super::prototype::view(app)].into(),
+        2 => column![header, super::inspect::view(app)].into(),
+        _ => column![header, scrollable(body).height(Fill)].into(),
+    }
 }
 
 fn input_style(_: &Theme, status: text_input::Status) -> text_input::Style {
@@ -725,7 +730,7 @@ fn effects<'a>(app: &'a Blobr, n: &'a Node) -> Element<'a, Message> {
         );
         match e {
             E::DropShadow(s) | E::InnerShadow(s) => {
-                let hex = s.color.to_hex();
+                let hex = jd_vector::color::to_hex(s.color);
                 col = col.push(column![
                     pair(field(app, "X", Field::Effect(i, "x"), || num(s.x as f64)), field(app, "Y", Field::Effect(i, "y"), || num(s.y as f64))),
                     pair(field(app, "B", Field::Effect(i, "blur"), || num(s.blur as f64)), field(app, "S", Field::Effect(i, "spread"), || num(s.spread as f64))),

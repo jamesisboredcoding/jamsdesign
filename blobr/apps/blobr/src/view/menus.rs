@@ -70,6 +70,7 @@ fn entries(app: &Blobr, menu: usize) -> Vec<MenuEntry<'_, Message>> {
             todo("Rulers", "Shift+R"),
             todo("Pixel Grid", "Shift+'"),
             Separator,
+            item("Present", "Ctrl+Alt+Enter", Some(Message::Present(None))),
             item("Full Screen", "F11", Some(Message::Chrome(chrome::Event::ToggleFullscreen))),
         ],
         "Object" => vec![

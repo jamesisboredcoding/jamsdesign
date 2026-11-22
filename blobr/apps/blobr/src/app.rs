@@ -116,6 +116,29 @@ pub struct Library {
     pub thumbnails: HashMap<NodeId, image::Handle>,
 }
 
+/// A frame rendered for presenting: picture, scale it was drawn at, size on the page.
+#[derive(Debug, Clone)]
+pub struct Shot {
+    pub image: image::Handle,
+    pub fit: f64,
+    pub size: kurbo::Size,
+}
+
+/// The prototype being presented.
+#[derive(Debug, Clone)]
+pub struct Presentation {
+    pub frame: NodeId,
+    pub shot: Option<Shot>,
+    pub overlay: Option<(NodeId, Shot)>,
+    /// The frame we came from, sliding or fading out.
+    pub leaving: Option<(Shot, jd_vector::Transition, Instant, f32)>,
+    pub history: Vec<NodeId>,
+    pub entered: Instant,
+    pub delay_done: bool,
+    pub cursor: Point,
+    pub hovered: Option<NodeId>,
+}
+
 /// Name of the page that holds components copied in from libraries.
 pub const LIBRARY_PAGE: &str = "Library components";
 
@@ -198,6 +221,8 @@ pub enum Field {
     /// A component's text property default.
     PropDefault(String),
     VarName(NodeId),
+    /// A part of reaction `index`: "delay", "duration" or "url".
+    Reaction(usize, &'static str),
     /// A part of effect `index`: "x", "y", "blur", "spread", "color" or "radius".
     Effect(usize, &'static str),
     VarValue(NodeId, String),
@@ -251,6 +276,25 @@ pub enum Message {
     Align(Align),
     Boolean(BoolOp),
     LeftTab(usize),
+    /// The right panel's tab: 0 Design, 1 Prototype, 2 Inspect.
+    RightTab(usize),
+    AddReaction,
+    RemoveReaction(usize),
+    /// "click", "hover" or "delay".
+    SetTrigger(usize, &'static str),
+    /// "navigate", "overlay", "back" or "url".
+    SetAction(usize, &'static str),
+    SetTarget(usize, NodeId),
+    SetTransition(usize, jd_vector::Transition),
+    /// Present the prototype from a frame (None: the selection's frame, or the first).
+    Present(Option<NodeId>),
+    StopPresenting,
+    PresentMove(Point),
+    PresentClick,
+    PresentTick,
+    /// Next (+1) or previous (-1) top-level frame while presenting.
+    PresentStep(i32),
+    CopyText(String),
     /// The Local variables dialog.
     ShowVariables(bool),
     SelectCollection(NodeId),
@@ -387,6 +431,8 @@ pub struct Blobr {
     pub vector_edit: Option<VectorEdit>,
     /// The left panel's tab: 0 Layers, 1 Assets.
     pub left_tab: usize,
+    pub right_tab: usize,
+    pub present: Option<Presentation>,
     /// The Local variables dialog is open, showing this collection.
     pub variables_open: bool,
     pub var_collection: Option<NodeId>,
@@ -454,6 +500,8 @@ impl Blobr {
             pen: None,
             vector_edit: None,
             left_tab: 0,
+            right_tab: 0,
+            present: None,
             variables_open: false,
             var_collection: None,
             asset_filter: String::new(),
@@ -489,6 +537,7 @@ impl Blobr {
             WindowChrome::subscription().map(Message::Chrome),
             window::close_requests().map(|_| Message::Quit),
             if self.drag.is_some() { window::frames().map(|_| Message::Frame) } else { Subscription::none() },
+            if self.present_animating() { window::frames().map(|_| Message::PresentTick) } else { Subscription::none() },
         ])
     }
 
@@ -602,6 +651,84 @@ impl Blobr {
                 }
             }
             Message::LeftTab(t) => self.left_tab = t,
+            Message::RightTab(t) => self.right_tab = t,
+            Message::AddReaction => {
+                let doc = self.doc();
+                let Some(&id) = self.selection.first() else { return Task::none() };
+                // To the next top-level frame after this layer's own, as a start.
+                let own = self.top_frame(id);
+                let frames = self.top_frames();
+                let next = frames.iter().position(|&f| Some(f) == own).map_or(frames.first().copied(), |i| frames.get((i + 1) % frames.len()).copied());
+                let action = match next.filter(|&n| Some(n) != own || frames.len() == 1) {
+                    Some(to) => jd_vector::Action::Navigate { to },
+                    None => jd_vector::Action::Back,
+                };
+                let _ = doc;
+                self.edit_reactions("Add interaction", move |r| {
+                    r.push(jd_vector::Reaction { trigger: jd_vector::Trigger::Click, action: action.clone(), transition: jd_vector::Transition::Instant, duration: 0.3 })
+                });
+            }
+            Message::RemoveReaction(i) => self.edit_reactions("Remove interaction", |r| {
+                if i < r.len() {
+                    r.remove(i);
+                }
+            }),
+            Message::SetTrigger(i, t) => self.edit_reactions("Interaction trigger", |r| {
+                if let Some(x) = r.get_mut(i) {
+                    x.trigger = match t {
+                        "hover" => jd_vector::Trigger::Hover,
+                        "delay" => jd_vector::Trigger::AfterDelay { seconds: 1.0 },
+                        _ => jd_vector::Trigger::Click,
+                    };
+                }
+            }),
+            Message::SetAction(i, a) => {
+                let fallback = self.top_frames().first().copied();
+                self.edit_reactions("Interaction action", move |r| {
+                    let Some(x) = r.get_mut(i) else { return };
+                    let target = match &x.action {
+                        jd_vector::Action::Navigate { to } | jd_vector::Action::Overlay { to } => Some(*to),
+                        _ => fallback,
+                    };
+                    x.action = match (a, target) {
+                        ("navigate", Some(to)) => jd_vector::Action::Navigate { to },
+                        ("overlay", Some(to)) => jd_vector::Action::Overlay { to },
+                        ("url", _) => jd_vector::Action::OpenUrl { url: "https://".into() },
+                        _ => jd_vector::Action::Back,
+                    };
+                })
+            }
+            Message::SetTarget(i, to) => self.edit_reactions("Interaction destination", |r| {
+                if let Some(x) = r.get_mut(i) {
+                    match &mut x.action {
+                        jd_vector::Action::Navigate { to: t } | jd_vector::Action::Overlay { to: t } => *t = to,
+                        _ => x.action = jd_vector::Action::Navigate { to },
+                    }
+                }
+            }),
+            Message::SetTransition(i, t) => self.edit_reactions("Interaction transition", |r| {
+                if let Some(x) = r.get_mut(i) {
+                    x.transition = t;
+                }
+            }),
+            Message::Present(from) => self.start_presenting(from),
+            Message::StopPresenting => self.present = None,
+            Message::PresentMove(at) => self.present_move(at),
+            Message::PresentClick => self.present_click(),
+            Message::PresentTick => self.present_tick(),
+            Message::PresentStep(d) => {
+                let frames = self.top_frames();
+                if let Some(p) = &self.present
+                    && let Some(i) = frames.iter().position(|&f| f == p.frame)
+                {
+                    let j = (i as i32 + d).rem_euclid(frames.len() as i32) as usize;
+                    self.go_to(frames[j], jd_vector::Transition::Instant, 0.0, true);
+                }
+            }
+            Message::CopyText(t) => {
+                clipboard::put_text(t);
+                self.info("Copied".into());
+            }
             Message::ShowVariables(open) => {
                 self.variables_open = open;
                 if self.var_collection.is_none_or(|c| !self.doc().tokens().collections.contains_key(&c)) {
@@ -664,7 +791,7 @@ impl Blobr {
             Message::Bind(path, var) => self.per_node("Bind variable", |_| Some(Patch { bind: Some([(path.clone(), var)].into()), ..Patch::default() })),
             Message::AddEffect => self.edit_effects("Add effect", |e| {
                 e.push(jd_vector::Effect::DropShadow(jd_vector::Shadow {
-                    color: Rgba::from_hex("#00000040").unwrap_or(Rgba::from_srgb8(0, 0, 0)),
+                    color: Rgba::new(0.0, 0.0, 0.0, 0.25),
                     x: 0.0,
                     y: 4.0,
                     blur: 4.0,
@@ -683,7 +810,7 @@ impl Blobr {
                 let shadow = match &cur {
                     E::DropShadow(s) | E::InnerShadow(s) => s.clone(),
                     E::LayerBlur { radius, .. } | E::BackgroundBlur { radius, .. } => {
-                        jd_vector::Shadow { color: Rgba::from_hex("#00000040").unwrap_or(Rgba::from_srgb8(0, 0, 0)), x: 0.0, y: 4.0, blur: *radius, spread: 0.0, visible: true }
+                        jd_vector::Shadow { color: Rgba::new(0.0, 0.0, 0.0, 0.25), x: 0.0, y: 4.0, blur: *radius, spread: 0.0, visible: true }
                     }
                 };
                 let radius = match &cur {
@@ -1071,6 +1198,14 @@ impl Blobr {
             _ => return Task::none(),
         }
         let keyboard::Event::KeyPressed { key, modifiers, .. } = event else { return Task::none() };
+        if self.present.is_some() {
+            return match key.as_ref() {
+                Key::Named(Named::Escape) => self.handle(Message::StopPresenting),
+                Key::Named(Named::ArrowRight | Named::Space) => self.handle(Message::PresentStep(1)),
+                Key::Named(Named::ArrowLeft) => self.handle(Message::PresentStep(-1)),
+                _ => Task::none(),
+            };
+        }
         if matches!(key.as_ref(), Key::Named(Named::Escape | Named::Enter)) {
             if self.pen.is_some() {
                 self.finish_pen(false);
@@ -1140,6 +1275,7 @@ impl Blobr {
                 self.selection = parent.into_iter().collect();
                 None
             }
+            Key::Named(Named::Enter) if cmd && alt => Some(Message::Present(None)),
             Key::Named(Named::Enter) if plain => match self.selection[..] {
                 [one] if self.is_text(one) => Some(Message::EditText(one)),
                 [one] if self.is_vector(one) => {
@@ -1458,9 +1594,34 @@ impl Blobr {
                 });
                 return;
             }
+            Field::Reaction(i, part) => {
+                let (i, part) = (*i, *part);
+                let v = num();
+                if part != "url" && v.is_none() {
+                    return bad(self);
+                }
+                let url = input.clone();
+                return self.edit_reactions("Edit interaction", move |r| {
+                    let Some(x) = r.get_mut(i) else { return };
+                    match part {
+                        "delay" => {
+                            if let jd_vector::Trigger::AfterDelay { seconds } = &mut x.trigger {
+                                *seconds = v.unwrap_or(1.0).max(0.0) as f32;
+                            }
+                        }
+                        "duration" => x.duration = (v.unwrap_or(300.0) / 1000.0).clamp(0.0, 10.0) as f32,
+                        _ => {
+                            if let jd_vector::Action::OpenUrl { url: u } = &mut x.action {
+                                *u = url.clone();
+                            }
+                        }
+                    }
+                });
+            }
             Field::Effect(i, part) => {
                 let (i, part) = (*i, *part);
-                let color = Rgba::from_hex(&input);
+                // Shadow colours keep their alpha (#RRGGBBAA).
+                let color = jd_vector::color::from_hex(&input);
                 let v = num();
                 if (part == "color" && color.is_none()) || (part != "color" && v.is_none()) {
                     return bad(self);
@@ -1653,6 +1814,228 @@ impl Blobr {
 
     fn handle_default(&mut self, name: String, value: String) {
         let _ = self.handle(Message::SetPropertyDefault(name, PropValue::Text(value)));
+    }
+
+    fn edit_reactions(&mut self, label: &str, f: impl Fn(&mut Vec<jd_vector::Reaction>)) {
+        let [id] = self.selection[..] else { return };
+        let Some(n) = self.doc().node(id) else { return };
+        let mut r = n.props.reactions.clone();
+        f(&mut r);
+        self.run(label, &[Op::set(id, Patch { reactions: Some(r), ..Patch::default() })]);
+    }
+
+    /// The current page's top-level frames, in layer order (bottom first).
+    pub fn top_frames(&self) -> Vec<NodeId> {
+        let doc = self.doc();
+        doc.children(self.page).iter().copied().filter(|&c| doc.node(c).is_some_and(|n| n.kind.is_frame_like())).collect()
+    }
+
+    /// The top-level frame a layer is in (or is).
+    pub fn top_frame(&self, id: NodeId) -> Option<NodeId> {
+        let doc = self.doc();
+        let mut cur = id;
+        loop {
+            let p = doc.parent(cur)?;
+            if p == self.page {
+                return doc.node(cur).is_some_and(|n| n.kind.is_frame_like()).then_some(cur);
+            }
+            cur = p;
+        }
+    }
+
+    // ----- Presenting --------------------------------------------------------------------
+
+    fn shoot(&self, id: NodeId, overlay: bool) -> Option<Shot> {
+        let n = self.doc().node(id)?;
+        let size = kurbo::Size::new(n.props.width, n.props.height);
+        let (w, h) = (self.chrome.size.width as f64, self.chrome.size.height as f64);
+        let room = if overlay { 0.9 } else { 1.0 };
+        let fit = ((w - 48.0) * room / size.width.max(1.0)).min((h - 48.0) * room / size.height.max(1.0)).max(0.05);
+        // Overlays keep the main frame's scale, so they sit at their real size relative to it.
+        let fit = if overlay { self.present.as_ref().and_then(|p| p.shot.as_ref()).map_or(fit, |s| s.fit.min(fit)) } else { fit };
+        let pm = jd_vector_render::render_node(self.doc(), id, RenderOptions { scale: fit * self.scale_factor as f64, background: None })?;
+        Some(Shot { image: image::Handle::from_rgba(pm.width(), pm.height(), clipboard::to_rgba(&pm)), fit, size })
+    }
+
+    fn start_presenting(&mut self, from: Option<NodeId>) {
+        let frames = self.top_frames();
+        let start = from.or_else(|| self.selection.first().and_then(|&s| self.top_frame(s))).or_else(|| frames.first().copied());
+        let Some(start) = start else { return self.error("Add a frame to present".into()) };
+        self.chrome.open_menu = None;
+        self.present = Some(Presentation {
+            frame: start,
+            shot: None,
+            overlay: None,
+            leaving: None,
+            history: Vec::new(),
+            entered: Instant::now(),
+            delay_done: false,
+            cursor: Point::ORIGIN,
+            hovered: None,
+        });
+        let shot = self.shoot(start, false);
+        if let Some(p) = &mut self.present {
+            p.shot = shot;
+        }
+    }
+
+    /// Shows `to` (a top-level frame), animating from the current one.
+    fn go_to(&mut self, to: NodeId, transition: jd_vector::Transition, duration: f32, remember: bool) {
+        if !self.doc().node(to).is_some_and(|n| n.kind.is_frame_like()) {
+            return;
+        }
+        let shot = self.shoot(to, false);
+        let Some(p) = &mut self.present else { return };
+        if remember {
+            p.history.push(p.frame);
+        }
+        let old = p.shot.take();
+        if transition != jd_vector::Transition::Instant
+            && let Some(old) = old
+        {
+            p.leaving = Some((old, transition, Instant::now(), duration.max(0.05)));
+        }
+        p.frame = to;
+        p.shot = shot;
+        p.overlay = None;
+        p.entered = Instant::now();
+        p.delay_done = false;
+        p.hovered = None;
+    }
+
+    fn act(&mut self, r: &jd_vector::Reaction) {
+        match &r.action {
+            jd_vector::Action::Navigate { to } => self.go_to(*to, r.transition, r.duration, true),
+            jd_vector::Action::Overlay { to } => {
+                let shot = self.shoot(*to, true);
+                if let (Some(p), Some(s)) = (&mut self.present, shot) {
+                    p.overlay = Some((*to, s));
+                }
+            }
+            jd_vector::Action::Back => {
+                let Some(p) = &mut self.present else { return };
+                if p.overlay.take().is_some() {
+                    return;
+                }
+                if let Some(prev) = p.history.pop() {
+                    self.go_to(prev, r.transition, r.duration, false);
+                }
+            }
+            jd_vector::Action::OpenUrl { url } => {
+                // Only web links, opened by the desktop's browser.
+                if url.starts_with("https://") || url.starts_with("http://") {
+                    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+                }
+            }
+        }
+    }
+
+    /// Where a frame's picture sits in the window: its top-left and scale.
+    pub fn shot_origin(&self, shot: &Shot) -> Point {
+        let (w, h) = (self.chrome.size.width, self.chrome.size.height);
+        let (sw, sh) = ((shot.size.width * shot.fit) as f32, (shot.size.height * shot.fit) as f32);
+        Point::new((w - sw) / 2.0, (h - sh) / 2.0)
+    }
+
+    /// The topmost layer under the pointer (in `frame`) with a reaction for `trigger`.
+    fn reaction_at(&self, frame: NodeId, shot: &Shot, at: Point, trigger: fn(&jd_vector::Trigger) -> bool) -> Option<(NodeId, jd_vector::Reaction)> {
+        let doc = self.doc();
+        let o = self.shot_origin(shot);
+        let local = kurbo::Point::new((at.x - o.x) as f64 / shot.fit, (at.y - o.y) as f64 / shot.fit);
+        if local.x < 0.0 || local.y < 0.0 || local.x > shot.size.width || local.y > shot.size.height {
+            return None;
+        }
+        let page_pt = doc.world_transform(frame) * local;
+        let page = doc.page_of(frame)?;
+        for hit in doc.nodes_at(page, page_pt, 0.0) {
+            if hit != frame && !doc.is_ancestor(frame, hit) {
+                continue;
+            }
+            let mut cur = Some(hit);
+            while let Some(c) = cur {
+                if let Some(r) = doc.node(c).and_then(|n| n.props.reactions.iter().find(|r| trigger(&r.trigger))) {
+                    return Some((c, r.clone()));
+                }
+                if c == frame {
+                    break;
+                }
+                cur = doc.parent(c);
+            }
+        }
+        None
+    }
+
+    fn present_move(&mut self, at: Point) {
+        let Some(p) = &mut self.present else { return };
+        p.cursor = at;
+        let (frame, shot) = match (&p.overlay, &p.shot) {
+            (Some((o, s)), _) => (*o, s.clone()),
+            (None, Some(s)) => (p.frame, s.clone()),
+            _ => return,
+        };
+        let found = self.reaction_at(frame, &shot, at, |t| matches!(t, jd_vector::Trigger::Hover));
+        let Some(p) = &mut self.present else { return };
+        let was = p.hovered;
+        p.hovered = found.as_ref().map(|f| f.0);
+        if let Some((id, r)) = found
+            && was != Some(id)
+        {
+            self.act(&r);
+        }
+    }
+
+    fn present_click(&mut self) {
+        let Some(p) = &self.present else { return };
+        let at = p.cursor;
+        if let Some((o, s)) = &p.overlay {
+            match self.reaction_at(*o, s, at, |t| matches!(t, jd_vector::Trigger::Click)) {
+                Some((_, r)) => return self.act(&r),
+                None => {
+                    // Clicking outside an overlay closes it.
+                    let org = self.shot_origin(s);
+                    let inside = at.x >= org.x && at.y >= org.y && at.x <= org.x + (s.size.width * s.fit) as f32 && at.y <= org.y + (s.size.height * s.fit) as f32;
+                    if !inside && let Some(p) = &mut self.present {
+                        p.overlay = None;
+                    }
+                    return;
+                }
+            }
+        }
+        let Some(shot) = p.shot.clone() else { return };
+        if let Some((_, r)) = self.reaction_at(p.frame, &shot, at, |t| matches!(t, jd_vector::Trigger::Click)) {
+            self.act(&r);
+        }
+    }
+
+    fn present_tick(&mut self) {
+        let Some(p) = &mut self.present else { return };
+        if let Some((_, _, start, d)) = &p.leaving
+            && start.elapsed().as_secs_f32() >= *d
+        {
+            p.leaving = None;
+        }
+        if p.delay_done {
+            return;
+        }
+        let elapsed = p.entered.elapsed().as_secs_f32();
+        let frame = p.frame;
+        let due = self.doc().node(frame).and_then(|n| {
+            n.props.reactions.iter().find(|r| matches!(r.trigger, jd_vector::Trigger::AfterDelay { seconds } if elapsed >= seconds)).cloned()
+        });
+        if let Some(r) = due {
+            if let Some(p) = &mut self.present {
+                p.delay_done = true;
+            }
+            self.act(&r);
+        }
+    }
+
+    /// Whether presenting needs a tick every frame (a transition or a timer running).
+    pub fn present_animating(&self) -> bool {
+        self.present.as_ref().is_some_and(|p| {
+            p.leaving.is_some()
+                || (!p.delay_done && self.doc().node(p.frame).is_some_and(|n| n.props.reactions.iter().any(|r| matches!(r.trigger, jd_vector::Trigger::AfterDelay { .. }))))
+        })
     }
 
     fn edit_effects(&mut self, label: &str, f: impl Fn(&mut Vec<jd_vector::Effect>)) {
@@ -3086,6 +3469,73 @@ mod tests {
         let _ = app.update(Message::CreateComponent);
         let _ = app.update(Message::AddProperty("swap"));
         assert!(matches!(&app.doc().node(host).unwrap().kind, NodeKind::Component { properties, .. } if matches!(properties.get("Icon"), Some(PropDef::InstanceSwap { default }) if *default == local)));
+    }
+
+    #[test]
+    fn prototype_links_present_and_inspect() {
+        let mut app = app();
+        let p = app.page;
+        let done = app
+            .run(
+                "Add",
+                &[
+                    Op::create_as("a", p, NodeSpec::frame("Home", 400.0, 300.0)),
+                    Op::create_as("btn", "a", NodeSpec::rect("Button", 100.0, 40.0).at(150.0, 130.0)),
+                    Op::create_as("b", p, NodeSpec::frame("Details", 400.0, 300.0).at(500.0, 0.0)),
+                ],
+            )
+            .unwrap();
+        let (a, btn, b) = (done.id("a").unwrap(), done.id("btn").unwrap(), done.id("b").unwrap());
+        app.select(btn, false);
+        let _ = app.update(Message::RightTab(1));
+        let _ = app.update(Message::AddReaction);
+        let r = &app.doc().node(btn).unwrap().props.reactions[0];
+        assert_eq!(r.action, jd_vector::Action::Navigate { to: b }, "links to the next frame by default");
+        let _ = app.update(Message::SetTransition(0, jd_vector::Transition::SlideLeft));
+        // Details goes back on its own after half a second.
+        app.select(b, false);
+        let _ = app.update(Message::AddReaction);
+        let _ = app.update(Message::SetTrigger(0, "delay"));
+        let _ = app.update(Message::SetAction(0, "back"));
+        let _ = app.update(Message::FieldInput(Field::Reaction(0, "delay"), "0".into()));
+        let _ = app.update(Message::FieldSubmit(Field::Reaction(0, "delay")));
+
+        app.selection.clear();
+        let _ = app.update(Message::Present(Some(a)));
+        let shot = app.present.as_ref().unwrap().shot.clone().unwrap();
+        let o = app.shot_origin(&shot);
+        // The middle of the button, on screen.
+        let at = Point::new(o.x + (200.0 * shot.fit) as f32, o.y + (150.0 * shot.fit) as f32);
+        let _ = app.update(Message::PresentMove(at));
+        let _ = app.update(Message::PresentClick);
+        let pr = app.present.as_ref().unwrap();
+        assert_eq!(pr.frame, b);
+        assert!(pr.leaving.is_some(), "sliding");
+        assert!(app.present_animating());
+        let _ = app.update(Message::PresentTick);
+        assert_eq!(app.present.as_ref().unwrap().frame, a, "the timer went back");
+        let _ = app.update(Message::Key(keyboard::Event::KeyPressed {
+            key: Key::Named(Named::Escape),
+            modified_key: Key::Named(Named::Escape),
+            physical_key: keyboard::key::Physical::Unidentified(keyboard::key::NativeCode::Unidentified),
+            location: keyboard::Location::Standard,
+            modifiers: keyboard::Modifiers::empty(),
+            text: None,
+            repeat: false,
+        }));
+        assert!(app.present.is_none());
+
+        // Copying both frames keeps the link between the copies.
+        app.selection = vec![a, b];
+        let _ = app.update(Message::Copy);
+        app.selection.clear();
+        let _ = app.update(Message::Pasted(None));
+        let copies = app.selection.clone();
+        let btn2 = app.doc().children(copies[0])[0];
+        assert_eq!(app.doc().node(btn2).unwrap().props.reactions[0].action, jd_vector::Action::Navigate { to: copies[1] });
+
+        let css = jd_vector::inspect::css(app.doc(), btn);
+        assert!(css.contains(&"position: absolute;".to_string()) && css.contains(&"left: 150px;".to_string()), "{css:?}");
     }
 
     #[test]

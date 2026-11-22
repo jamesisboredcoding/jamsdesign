@@ -4,8 +4,11 @@
 mod assets;
 mod canvas;
 mod design;
+mod inspect;
 mod layers;
 mod menus;
+mod present;
+mod prototype;
 mod variables;
 
 use iced::alignment::Vertical;
@@ -72,6 +75,10 @@ pub fn view(app: &Blobr) -> Element<'_, Message> {
     }
     if app.variables_open {
         layers = layers.push(variables::view(app));
+    }
+    if let Some(p) = present::view(app) {
+        // Presenting covers the whole window.
+        return p;
     }
     if let Some(after) = app.confirm {
         layers = layers.push(confirm(app, after));
@@ -144,7 +151,12 @@ fn title_actions<'a>() -> Element<'a, Message> {
     .padding(Padding::from([4, 10]))
     .style(style::primary)
     .on_press(Message::Export(ExportFormat::Png));
-    row![icon(Icon::Zoom, 14.0, ICON), workspace, export].spacing(12).align_y(Vertical::Center).into()
+    let play = jd_ui::widget::hover_tip(
+        button(icon(Icon::Play, 14.0, ICON)).padding(4).style(style::ghost(false)).on_press(Message::Present(None)),
+        "Present (Ctrl+Alt+Enter)",
+        iced::widget::tooltip::Position::Bottom,
+    );
+    row![icon(Icon::Zoom, 14.0, ICON), workspace, play, export].spacing(12).align_y(Vertical::Center).into()
 }
 
 fn toolbar(app: &Blobr) -> Element<'_, Message> {

@@ -211,13 +211,45 @@ impl canvas::Program<Message> for Overlay<'_> {
             }
         }
 
+        // Prototype connections: a curve from each layer with a link to its destination frame.
+        if app.right_tab == 1 {
+            let blue = Color::from_rgb8(0x4C, 0x8D, 0xFF);
+            for id in doc.descendants(app.page) {
+                let Some(n) = doc.node(id) else { continue };
+                for r in &n.props.reactions {
+                    let (jd_vector::Action::Navigate { to } | jd_vector::Action::Overlay { to }) = r.action else { continue };
+                    let (Some(a), Some(b)) = (app.screen_bounds(id), app.screen_bounds(to)) else { continue };
+                    let selected = app.selection.contains(&id);
+                    let from = Point::new(a.x + a.width, a.y + a.height / 2.0);
+                    let end = if b.x >= from.x { Point::new(b.x, b.y + b.height.min(60.0) / 2.0) } else { Point::new(b.x + b.width, b.y + b.height.min(60.0) / 2.0) };
+                    let bend = ((end.x - from.x).abs() / 2.0).max(40.0);
+                    let c2x = if end.x >= from.x { end.x - bend } else { end.x + bend };
+                    let curve = Path::new(|p| {
+                        p.move_to(from);
+                        p.bezier_curve_to(Point::new(from.x + bend, from.y), Point::new(c2x, end.y), end);
+                    });
+                    let color = if selected { blue } else { Color { a: 0.6, ..blue } };
+                    frame.stroke(&curve, Stroke::default().with_width(if selected { 2.0 } else { 1.5 }).with_color(color));
+                    frame.fill(&Path::circle(from, 3.5), color);
+                    let dir = if end.x >= c2x { 1.0 } else { -1.0 };
+                    let head = Path::new(|p| {
+                        p.move_to(end);
+                        p.line_to(Point::new(end.x - 7.0 * dir, end.y - 4.0));
+                        p.line_to(Point::new(end.x - 7.0 * dir, end.y + 4.0));
+                        p.close();
+                    });
+                    frame.fill(&head, color);
+                }
+            }
+        }
+
         // Smart guides while a drag snaps, and Alt-hover distances, in Figma's red.
         let red = Color::from_rgb8(0xF2, 0x48, 0x22);
         for g in &app.guides {
             let line = Path::line(app.camera.to_screen(g.from), app.camera.to_screen(g.to));
             frame.stroke(&line, Stroke::default().with_width(1.0).with_color(red));
         }
-        if app.modifiers.alt()
+        if (app.modifiers.alt() || app.right_tab == 2)
             && app.drag.is_none()
             && let Some(a) = app.selection_bounds()
         {

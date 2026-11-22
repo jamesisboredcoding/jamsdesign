@@ -15,11 +15,12 @@
 pub mod arrange;
 pub mod boolean;
 pub mod clip;
-mod color;
+pub mod color;
 pub mod component;
 mod doc;
 pub mod file;
 pub mod geometry;
+pub mod inspect;
 pub mod history;
 pub mod layout;
 pub mod node;

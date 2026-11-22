@@ -298,6 +298,58 @@ pub struct Props {
     pub modes: BTreeMap<NodeId, String>,
     #[serde(skip_serializing_if = "is_default")]
     pub styles: StyleRefs,
+    /// Prototype interactions: what happens when this node is clicked, hovered, ...
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub reactions: Vec<Reaction>,
+}
+
+/// A prototype interaction: a trigger on a node, and what it does.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Reaction {
+    pub trigger: Trigger,
+    pub action: Action,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub transition: Transition,
+    /// Seconds the transition takes.
+    #[serde(default = "default_duration")]
+    pub duration: f32,
+}
+
+fn default_duration() -> f32 {
+    0.3
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Trigger {
+    Click,
+    Hover,
+    /// On the frame being shown, after a delay.
+    AfterDelay { seconds: f32 },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Action {
+    /// Show another top-level frame.
+    Navigate { to: NodeId },
+    /// Show a frame on top of the current one.
+    Overlay { to: NodeId },
+    /// Go back to the previous frame (or close the overlay).
+    Back,
+    OpenUrl { url: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Transition {
+    #[default]
+    Instant,
+    Dissolve,
+    SlideLeft,
+    SlideRight,
+    SlideUp,
+    SlideDown,
 }
 
 /// One file to export a node as.
@@ -360,6 +412,7 @@ impl Default for Props {
             bind: BTreeMap::new(),
             modes: BTreeMap::new(),
             styles: StyleRefs::default(),
+            reactions: Vec::new(),
         }
     }
 }

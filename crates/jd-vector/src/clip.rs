@@ -147,6 +147,17 @@ pub(crate) fn paste(doc: &mut Document, clip: &Clip, parent: NodeId, created: &m
         id
     }
     let roots: Vec<NodeId> = clip.roots.iter().map(|r| add(doc, r, parent, created, &mut old_to_new)).collect();
+    // Prototype links between pasted layers point at the copies.
+    for &new in old_to_new.values() {
+        let n = doc.node_mut(new).expect("pasted");
+        for r in &mut n.props.reactions {
+            if let crate::node::Action::Navigate { to } | crate::node::Action::Overlay { to } = &mut r.action
+                && let Some(&t) = old_to_new.get(to)
+            {
+                *to = t;
+            }
+        }
+    }
     for &new in old_to_new.values() {
         let NodeKind::Instance { component, .. } = &doc.node(new).expect("pasted").kind else { continue };
         let component = *component;

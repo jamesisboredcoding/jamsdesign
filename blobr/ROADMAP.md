@@ -148,11 +148,17 @@ CLI argument as a file to open. Names are provisional until Step 0.
   - [x] Libraries: add another .jdb, place its components (copied in once, onto a
         "Library components" page). Libraries are remembered for the session only
   - [ ] Libraries that update when their file changes; remembered per document
-- [ ] Step 6: prototype and inspect
-  - Prototype tab: connections between frames (on click, navigate, overlay, back), simple
-    transitions, a presentation window
-  - Inspect tab: measurements and code for the selection (CSS, and Rust constants in the
-    form `jd-ui`'s `theme.rs` uses)
+- [x] Step 6: prototype and inspect
+  - [x] Prototype tab: interactions (on click, while hovering, after a delay) that navigate,
+        open an overlay, go back or open a link; instant, dissolve and slide transitions;
+        connection arrows on the canvas; links between pasted frames point at the copies
+  - [x] Presenting full-window (Ctrl+Alt+Enter or the play button): click hotspots, Escape
+        leaves, arrows step through frames. In the main window rather than a second one
+  - [x] Inspect tab: measurements, colours (with their variables), type, and code: CSS,
+        HTML for a subtree, an iced snippet, and the variables as Rust constants in the form
+        `jd-ui`'s `theme.rs` uses (`jd_vector::inspect`, for the MCP server too); hovering
+        shows distances while the tab is open
+  - [ ] Smart animate, scroll behaviour, prototype flows saved per page, a separate window
 - [ ] Step 7: interop and moving off Figma
   - Full SVG import and export, PDF export
   - Spike: one-time import of Figma files through the Figma REST API's JSON (needs a
