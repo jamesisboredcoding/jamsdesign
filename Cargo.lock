@@ -477,6 +477,7 @@ name = "blobr"
 version = "0.1.0"
 dependencies = [
  "iced",
+ "iced_runtime",
  "jd-core",
  "jd-ui",
  "jd-vector",
