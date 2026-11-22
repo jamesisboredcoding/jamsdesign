@@ -53,6 +53,10 @@ fn run() -> Result<(), String> {
     let [source, out] = args.as_slice() else {
         return Err("usage: figma2jdb <figma file URL or key | file.json> <out.jdb>".into());
     };
+    // Make the output's folder first, so a bad path fails before any API calls.
+    if let Some(dir) = std::path::Path::new(out).parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
     let (json, images) = if source.ends_with(".json") {
         (std::fs::read_to_string(source).map_err(|e| format!("{source}: {e}"))?, HashMap::new())
     } else {
