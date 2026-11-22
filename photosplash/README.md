@@ -203,11 +203,10 @@ Try it: `cargo run -p jd-io --example demo_doc -- demo.jdp base.jpg top.jpg`
   remove.bg. The download has no progress bar yet.
 - Type: point text only (no text boxes or wrapping), the caret is always at the end (no
   arrow keys or selecting part of the text), one style per layer. Painting on, filtering or
-  free-transforming a text layer turns it into plain pixels without asking. Pasting into a document of a different size lands at the top-left
-  (Photoshop centres it). Move and Ctrl+T refuse on a locked layer (unlock it first).
+  free-transforming a text layer turns it into plain pixels without asking. Move and Ctrl+T refuse on a locked layer (unlock it first).
 - Layer groups and layer names don't travel through the system clipboard (only pixels).
-- While the Home screen is showing over an open document, shortcuts (Ctrl+V, Delete, Ctrl+Z...)
-  still act on that hidden document.
+- While the Home screen is showing, the panels still show (and edit) the document behind it;
+  shortcuts and menus that edit it are off until you go back (Esc or the Home button).
 - Marching ants don't animate. Transforms use bilinear resampling (Photoshop uses bicubic by
   default), so large downscales can alias.
 - Image > Adjustments are destructive (applied to the layer); use adjustment layers to keep

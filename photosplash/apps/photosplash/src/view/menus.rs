@@ -86,7 +86,8 @@ fn state(app: &Photo) -> State {
     let d = app.document();
     let index = d.and_then(|d| d.active_id().and_then(|id| d.layers().iter().position(|l| l.id == id)));
     State {
-        doc: d.is_some(),
+        // The Home screen hides the document: its commands wait until it's back.
+        doc: d.is_some() && !app.home,
         sel: d.is_some_and(|d| d.selection.is_some()),
         editable: d.and_then(|d| d.active()).is_some_and(|l| !l.locked),
         undo: app.doc().is_some_and(|d| d.history.can_undo()),

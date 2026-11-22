@@ -4560,6 +4560,28 @@ impl Photo {
             }
             _ => None,
         };
+        // The Home screen over an open document: Esc goes back to it, and only shortcuts that
+        // don't edit the (hidden) document work.
+        if self.home && !self.docs.is_empty() {
+            if matches!(key.as_ref(), Key::Named(Named::Escape)) {
+                return self.update(Message::ToggleHome);
+            }
+            let works = matches!(
+                msg,
+                Some(
+                    Message::NewDocDialog
+                        | Message::OpenDialog
+                        | Message::OpenPreferences
+                        | Message::ToggleFullscreen
+                        | Message::SelectDoc(_)
+                        | Message::OpenPalette
+                        | Message::RequestQuit
+                )
+            );
+            if !works {
+                return Task::none();
+            }
+        }
         msg.map_or_else(Task::none, |m| self.update(m))
     }
 }
@@ -5266,6 +5288,24 @@ mod tests {
         assert!(app.home);
         let _ = app.update(Message::Open(vec![path.clone()]));
         assert!(!app.home, "opening an open file goes back to it");
+        let _ = app.update(Message::ToggleHome);
+        // Editing shortcuts don't reach the hidden document; Esc goes back to it.
+        let key = |k: Key, m| keyboard::Event::KeyPressed {
+            key: k.clone(),
+            modified_key: k,
+            physical_key: keyboard::key::Physical::Unidentified(keyboard::key::NativeCode::Unidentified),
+            location: keyboard::Location::Standard,
+            modifiers: m,
+            text: None,
+            repeat: false,
+        };
+        let layers = app.document().unwrap().layers().len();
+        let _ = app.on_key(key(Key::Character("j".into()), keyboard::Modifiers::CTRL));
+        assert_eq!(app.document().unwrap().layers().len(), layers);
+        let _ = app.on_key(key(Key::Named(Named::Escape), keyboard::Modifiers::empty()));
+        assert!(!app.home);
+        let _ = app.on_key(key(Key::Character("j".into()), keyboard::Modifiers::CTRL));
+        assert_eq!(app.document().unwrap().layers().len(), layers + 1, "works once back");
         let _ = app.update(Message::ToggleHome);
         let _ = app.update(Message::SelectDoc(0));
         assert!(!app.home);
