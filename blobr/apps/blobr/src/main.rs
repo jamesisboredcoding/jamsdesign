@@ -1,5 +1,6 @@
 mod app;
 mod clipboard;
+mod pen;
 mod tool;
 mod view;
 

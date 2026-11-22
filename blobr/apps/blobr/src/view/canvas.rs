@@ -123,20 +123,30 @@ impl canvas::Program<Message> for Overlay<'_> {
             });
         }
 
-        if let Some(h) = app.hover.filter(|h| !app.selection.contains(h))
-            && let Some(r) = app.screen_bounds(h)
-        {
-            frame.stroke(&Path::rectangle(r.position(), r.size()), Stroke::default().with_width(1.0).with_color(ACCENT_PRIMARY));
+        let outline = |frame: &mut Frame, id| {
+            if let Some(c) = app.screen_corners(id) {
+                let p = Path::new(|b| {
+                    b.move_to(c[0]);
+                    for q in &c[1..] {
+                        b.line_to(*q);
+                    }
+                    b.close();
+                });
+                frame.stroke(&p, Stroke::default().with_width(1.0).with_color(ACCENT_PRIMARY));
+            }
+        };
+        if let Some(h) = app.hover.filter(|h| !app.selection.contains(h)) {
+            outline(&mut frame, h);
         }
-
         for &id in &app.selection {
-            let Some(r) = app.screen_bounds(id) else { continue };
-            frame.stroke(&Path::rectangle(r.position(), r.size()), Stroke::default().with_width(1.0).with_color(ACCENT_PRIMARY));
+            outline(&mut frame, id);
         }
+        let rotated = |id| doc.node(id).is_some_and(|n| n.props.rotation != 0.0);
         if let [one] = app.selection[..]
+            && app.vector_edit.is_none()
             && let Some(r) = app.screen_bounds(one)
         {
-            for h in Handle::ALL {
+            for h in Handle::ALL.into_iter().filter(|_| !rotated(one)) {
                 let (ax, ay) = h.anchor();
                 let c = Point::new(r.x + r.width * ax as f32, r.y + r.height * ay as f32);
                 let sq = Path::rectangle(Point::new(c.x - 3.5, c.y - 3.5), Size::new(7.0, 7.0));
@@ -155,6 +165,49 @@ impl canvas::Program<Message> for Overlay<'_> {
                     size: 10.0.into(),
                     ..Text::default()
                 });
+            }
+        }
+
+        // Pen: the path so far, its points, and the segment following the pointer.
+        if let Some(pen) = &app.pen {
+            let to_screen = |p: [f64; 2]| app.camera.to_screen(kurbo::Point::new(p[0], p[1]));
+            let mut anchors = pen.anchors.clone();
+            if !pen.dragging
+                && let Some(c) = pen.cursor
+            {
+                anchors.push(jd_vector::Anchor::corner(c.x, c.y));
+            }
+            let bez = crate::pen::bez(&anchors, false);
+            let screen = kurbo::Affine::scale(app.camera.zoom) * kurbo::Affine::translate(-app.camera.origin.to_vec2()) * bez;
+            frame.stroke(&to_iced(&screen), Stroke::default().with_width(1.0).with_color(ACCENT_PRIMARY));
+            for (i, a) in pen.anchors.iter().enumerate() {
+                point(&mut frame, to_screen(a.p), i == 0 && pen.anchors.len() >= 2);
+            }
+            if let Some(last) = pen.anchors.last() {
+                handles(&mut frame, to_screen(last.p), last.handle_in.map(to_screen), last.handle_out.map(to_screen));
+            }
+        }
+
+        // Editing a vector's points: the path, every point, and the selected point's handles.
+        if let Some(ve) = app.vector_edit
+            && let Some(jd_vector::NodeKind::Vector { path }) = doc.node(ve.id).map(|n| &n.kind)
+            && let Some(map) = app.anchors_to_screen(ve.id)
+        {
+            let n = doc.node(ve.id).expect("checked");
+            let local = path.to_bez(n.props.width, n.props.height);
+            frame.stroke(&to_iced(&(app.node_to_screen(ve.id) * local)), Stroke::default().with_width(1.0).with_color(ACCENT_PRIMARY));
+            let to_screen = |p: [f64; 2]| {
+                let q = map * kurbo::Point::new(p[0], p[1]);
+                Point::new(q.x as f32, q.y as f32)
+            };
+            for (s, sp) in path.subpaths.iter().enumerate() {
+                for (i, a) in sp.anchors.iter().enumerate() {
+                    let selected = ve.selected == Some((s, i));
+                    if selected {
+                        handles(&mut frame, to_screen(a.p), a.handle_in.map(to_screen), a.handle_out.map(to_screen));
+                    }
+                    point(&mut frame, to_screen(a.p), selected);
+                }
             }
         }
 
@@ -225,12 +278,18 @@ impl canvas::Program<Message> for Overlay<'_> {
             Some(Drag::Create { .. }) => return mouse::Interaction::Crosshair,
             _ => {}
         }
+        if matches!(app.drag, Some(Drag::Rotate { .. })) {
+            return mouse::Interaction::Grabbing;
+        }
         let Some(p) = cursor.position_in(bounds) else { return mouse::Interaction::default() };
         if app.space_held || app.tool == Tool::Hand {
             return mouse::Interaction::Grab;
         }
-        if app.tool.creates() {
+        if app.tool.creates() || app.tool == Tool::Pen {
             return mouse::Interaction::Crosshair;
+        }
+        if app.handle_at(p).is_none() && app.rotate_at(p).is_some() {
+            return mouse::Interaction::Grab;
         }
         match app.handle_at(p).map(|(_, h)| h) {
             Some(Handle::Left | Handle::Right) => mouse::Interaction::ResizingHorizontally,
@@ -239,5 +298,38 @@ impl canvas::Program<Message> for Overlay<'_> {
             Some(Handle::TopRight | Handle::BottomLeft) => mouse::Interaction::ResizingDiagonallyUp,
             None => mouse::Interaction::default(),
         }
+    }
+}
+
+/// A kurbo path (screen coordinates) as an iced one.
+fn to_iced(bez: &kurbo::BezPath) -> Path {
+    let p = |q: kurbo::Point| Point::new(q.x as f32, q.y as f32);
+    Path::new(|b| {
+        for el in bez.elements() {
+            match *el {
+                kurbo::PathEl::MoveTo(a) => b.move_to(p(a)),
+                kurbo::PathEl::LineTo(a) => b.line_to(p(a)),
+                kurbo::PathEl::QuadTo(c, a) => b.quadratic_curve_to(p(c), p(a)),
+                kurbo::PathEl::CurveTo(c1, c2, a) => b.bezier_curve_to(p(c1), p(c2), p(a)),
+                kurbo::PathEl::ClosePath => b.close(),
+            }
+        }
+    })
+}
+
+/// A vector point: white square, blue when selected.
+fn point(frame: &mut Frame, at: Point, selected: bool) {
+    let sq = Path::rectangle(Point::new(at.x - 3.5, at.y - 3.5), Size::new(7.0, 7.0));
+    frame.fill(&sq, if selected { ACCENT_PRIMARY } else { Color::WHITE });
+    frame.stroke(&sq, Stroke::default().with_width(1.0).with_color(ACCENT_PRIMARY));
+}
+
+/// A point's bezier handles: lines out to small circles.
+fn handles(frame: &mut Frame, at: Point, hin: Option<Point>, hout: Option<Point>) {
+    for h in [hin, hout].into_iter().flatten() {
+        frame.stroke(&Path::line(at, h), Stroke::default().with_width(1.0).with_color(ACCENT_PRIMARY));
+        let c = Path::circle(h, 3.5);
+        frame.fill(&c, Color::WHITE);
+        frame.stroke(&c, Stroke::default().with_width(1.0).with_color(ACCENT_PRIMARY));
     }
 }

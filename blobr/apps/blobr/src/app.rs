@@ -13,6 +13,7 @@ use iced_runtime::image::Allocation;
 use jd_core::Rgba;
 use jd_ui::chrome::{self, WindowChrome};
 use jd_vector::arrange::{self, Align, Order};
+use jd_vector::boolean::{self, BoolOp};
 use jd_vector::clip::Clip;
 use jd_vector::snap::{self, Edges, Line};
 use jd_vector::{
@@ -23,6 +24,7 @@ use jd_vector_render::{CosmicMeasure, RenderOptions, export_svg, render_png, ren
 use kurbo::{Affine, Rect, Vec2};
 
 use crate::clipboard::{self, Pasted};
+use crate::pen::{self, Part, PenPath, VectorEdit};
 use crate::tool::Tool;
 use crate::view::{self, MENU_COUNT};
 
@@ -84,6 +86,11 @@ pub enum Drag {
     Move { start: kurbo::Point, items: Vec<(NodeId, f64, f64, Affine)>, started: bool, bounds: Rect, targets: Vec<Rect> },
     Resize { id: NodeId, handle: Handle, start: kurbo::Point, rect: Rect, to_parent: Affine, started: bool, targets: Vec<Rect> },
     Marquee { start: kurbo::Point, now: kurbo::Point },
+    /// Turning a layer about its centre: the centre on the page and in the parent, the
+    /// pointer's starting angle, the starting rotation and half the layer's size.
+    Rotate { id: NodeId, center_page: kurbo::Point, center_parent: kurbo::Point, a0: f64, rot0: f64, half: Vec2 },
+    /// A vector point or handle (subpath, anchor, which part).
+    Anchor { id: NodeId, sub: usize, idx: usize, part: Part },
     Create { tool: Tool, start: kurbo::Point, now: kurbo::Point },
 }
 
@@ -183,6 +190,8 @@ pub enum Message {
     Pasted(Option<Pasted>),
     CopyAsPng,
     Align(Align),
+    Boolean(BoolOp),
+    Flatten,
     Distribute(bool),
     Group,
     FrameSelection,
@@ -266,6 +275,10 @@ pub struct Blobr {
     clip: Option<Clip>,
     /// A text layer being typed into on the canvas.
     pub text_edit: Option<(NodeId, text_editor::Content)>,
+    /// A path being drawn with the Pen.
+    pub pen: Option<PenPath>,
+    /// A vector whose points are being edited.
+    pub vector_edit: Option<VectorEdit>,
     last_click: Option<(Instant, Point)>,
     fit_pending: bool,
 }
@@ -320,6 +333,8 @@ impl Blobr {
             after_save: None,
             clip: None,
             text_edit: None,
+            pen: None,
+            vector_edit: None,
             last_click: None,
             fit_pending: false,
         };
@@ -459,6 +474,14 @@ impl Blobr {
                     None => self.error("Nothing to copy: the layer is empty or hidden".into()),
                 }
             }
+            Message::Boolean(op) => {
+                let ops = boolean::boolean(self.doc(), &self.selection, op);
+                self.replace_with("result", op.name(), ops);
+            }
+            Message::Flatten => {
+                let ops = boolean::flatten(self.doc(), &self.selection);
+                self.replace_with("result", "Flatten", ops);
+            }
             Message::Align(to) => {
                 let ops = arrange::align(self.doc(), &self.selection, to);
                 self.run("Align", &ops);
@@ -528,6 +551,10 @@ impl Blobr {
                 }
             }
             Message::Tool(t) => {
+                if t != Tool::Pen {
+                    self.finish_pen(false);
+                }
+                self.vector_edit = None;
                 self.tool = t;
                 self.drag = None;
             }
@@ -719,6 +746,44 @@ impl Blobr {
             _ => return Task::none(),
         }
         let keyboard::Event::KeyPressed { key, modifiers, .. } = event else { return Task::none() };
+        if matches!(key.as_ref(), Key::Named(Named::Escape | Named::Enter)) {
+            if self.pen.is_some() {
+                self.finish_pen(false);
+                return Task::none();
+            }
+            if self.vector_edit.take().is_some() {
+                return Task::none();
+            }
+        }
+        if let Some(VectorEdit { id, selected: Some((s, i)) }) = self.vector_edit
+            && matches!(key.as_ref(), Key::Named(Named::Delete | Named::Backspace))
+        {
+            let path = match self.doc().node(id).map(|n| &n.kind) {
+                Some(NodeKind::Vector { path }) => pen::without(path, s, i),
+                _ => return Task::none(),
+            };
+            self.vector_edit = Some(VectorEdit { id, selected: None });
+            match path {
+                Some(path) => {
+                    let patch = Patch { path: Some(path), ..Patch::default() };
+                    let refit = self.doc().node(id).map(|n| {
+                        let mut n = n.clone();
+                        if let NodeKind::Vector { path } = &mut n.kind {
+                            *path = patch.path.clone().expect("set");
+                        }
+                        pen::refit(&n)
+                    });
+                    let mut ops = vec![Op::set(id, patch)];
+                    ops.extend(refit.flatten().map(|p| Op::set(id, p)));
+                    self.run("Delete point", &ops);
+                }
+                None => {
+                    self.vector_edit = None;
+                    self.run("Delete", &[Op::Delete { id: id.into() }]);
+                }
+            }
+            return Task::none();
+        }
         if matches!(key.as_ref(), Key::Named(Named::Escape)) {
             if self.text_edit.is_some() {
                 self.commit_text();
@@ -752,6 +817,10 @@ impl Blobr {
             }
             Key::Named(Named::Enter) if plain => match self.selection[..] {
                 [one] if self.is_text(one) => Some(Message::EditText(one)),
+                [one] if self.is_vector(one) => {
+                    self.vector_edit = Some(VectorEdit { id: one, selected: None });
+                    None
+                }
                 // Enter goes into a frame, like Figma.
                 [one] => {
                     let kids = self.doc().children(one).to_vec();
@@ -785,6 +854,7 @@ impl Blobr {
                     ("s", false, false, true) => Some(Message::Align(Align::Bottom)),
                     ("h", false, true, true) => Some(Message::Distribute(true)),
                     ("v", false, true, true) => Some(Message::Distribute(false)),
+                    ("e", true, false, false) => Some(Message::Flatten),
                     ("g", true, false, false) => Some(Message::Group),
                     ("g", true, false, true) => Some(Message::FrameSelection),
                     ("g", true, true, false) => Some(Message::Ungroup),
@@ -1126,6 +1196,21 @@ impl Blobr {
 
     // ----- Arranging ---------------------------------------------------------------------
 
+    /// Runs ops that replace the selection with one new layer (known as `key`), and selects it.
+    fn replace_with(&mut self, key: &str, label: &str, ops: Result<Vec<Op>, String>) {
+        match ops {
+            Ok(ops) if ops.is_empty() => {}
+            Ok(ops) => {
+                if let Some(done) = self.run(label, &ops)
+                    && let Some(id) = done.id(key)
+                {
+                    self.select(id, false);
+                }
+            }
+            Err(e) => self.error(e),
+        }
+    }
+
     fn group(&mut self, frame: bool) {
         match arrange::group(self.doc(), &self.selection, frame) {
             Ok(ops) => {
@@ -1397,6 +1482,19 @@ impl Blobr {
         }
         // Clicking anywhere else on the canvas finishes typing.
         self.commit_text();
+        if self.tool == Tool::Pen {
+            self.pen_press(page, at);
+            return Task::none();
+        }
+        if let Some(ve) = self.vector_edit {
+            if let Some((sub, idx, part)) = self.anchor_at(ve.id, at, ve.selected) {
+                self.vector_edit = Some(VectorEdit { selected: Some((sub, idx)), ..ve });
+                self.drag = Some(Drag::Anchor { id: ve.id, sub, idx, part });
+                return Task::none();
+            }
+            // Clicking away from the points leaves point editing.
+            self.vector_edit = None;
+        }
         let now = Instant::now();
         let double = self.last_click.is_some_and(|(t, p)| now - t < Duration::from_millis(400) && (p.x - at.x).abs() < 4.0 && (p.y - at.y).abs() < 4.0);
         self.last_click = Some((now, at));
@@ -1412,10 +1510,23 @@ impl Blobr {
             self.drag = Some(Drag::Resize { id, handle, start: page, rect, to_parent, started: false, targets });
             return Task::none();
         }
+        if let Some(id) = self.rotate_at(at) {
+            let n = self.doc().node(id).expect("selected");
+            let half = Vec2::new(n.props.width / 2.0, n.props.height / 2.0);
+            let center_parent = jd_vector::Document::local_transform(n) * half.to_point();
+            let center_page = self.doc().world_transform(id) * half.to_point();
+            let a0 = (page - center_page).atan2();
+            self.drag = Some(Drag::Rotate { id, center_page, center_parent, a0, rot0: n.props.rotation, half });
+            return Task::none();
+        }
         let shift = self.modifiers.shift();
         match self.pick_at(at, self.modifiers.command(), double) {
             // Double-clicking a selected text layer types into it.
             Some(id) if double && self.selection == [id] && self.is_text(id) => return self.start_text_edit(id),
+            // And a selected vector edits its points.
+            Some(id) if double && self.selection == [id] && self.is_vector(id) => {
+                self.vector_edit = Some(VectorEdit { id, selected: None });
+            }
             Some(id) => {
                 if shift {
                     self.select(id, true);
@@ -1436,6 +1547,90 @@ impl Blobr {
             }
         }
         Task::none()
+    }
+
+    fn is_vector(&self, id: NodeId) -> bool {
+        self.doc().node(id).is_some_and(|n| matches!(n.kind, NodeKind::Vector { .. })) && !self.doc().is_inside_instance(id)
+    }
+
+    /// The page corners of a layer, on screen (rotated layers aren't boxes on screen).
+    pub fn screen_corners(&self, id: NodeId) -> Option<[Point; 4]> {
+        let n = self.doc().node(id)?;
+        let t = self.doc().world_transform(id);
+        let (w, h) = (n.props.width, n.props.height);
+        Some([(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)].map(|(x, y)| self.camera.to_screen(t * kurbo::Point::new(x, y))))
+    }
+
+    /// Maps a layer's own space to the screen.
+    pub fn node_to_screen(&self, id: NodeId) -> Affine {
+        let c = self.camera;
+        Affine::scale(c.zoom) * Affine::translate(-c.origin.to_vec2()) * self.doc().world_transform(id)
+    }
+
+    /// Maps a vector's anchor space to the screen.
+    pub fn anchors_to_screen(&self, id: NodeId) -> Option<Affine> {
+        let n = self.doc().node(id)?;
+        let NodeKind::Vector { path } = &n.kind else { return None };
+        Some(self.node_to_screen(id) * pen::base_scale(n, path))
+    }
+
+    fn anchor_at(&self, id: NodeId, at: Point, selected: Option<(usize, usize)>) -> Option<(usize, usize, Part)> {
+        let NodeKind::Vector { path } = &self.doc().node(id)?.kind else { return None };
+        pen::hit(path, self.anchors_to_screen(id)?, kurbo::Point::new(at.x as f64, at.y as f64), selected, 6.0)
+    }
+
+    /// The rotate zone just outside a corner of the single selected layer.
+    pub fn rotate_at(&self, at: Point) -> Option<NodeId> {
+        let [id] = self.selection[..] else { return None };
+        let n = self.doc().node(id)?;
+        let local = self.doc().world_transform(id).inverse() * self.camera.to_page(at);
+        if (0.0..=n.props.width).contains(&local.x) && (0.0..=n.props.height).contains(&local.y) {
+            return None;
+        }
+        let corners = self.screen_corners(id)?;
+        corners.iter().any(|c| (7.0..=22.0).contains(&c.distance(at))).then_some(id)
+    }
+
+    // ----- Pen ---------------------------------------------------------------------------
+
+    fn pen_press(&mut self, page: kurbo::Point, at: Point) {
+        let close = self.pen.as_ref().is_some_and(|p| {
+            p.anchors.len() >= 2 && self.camera.to_screen(kurbo::Point::new(p.anchors[0].p[0], p.anchors[0].p[1])).distance(at) <= 8.0
+        });
+        if close {
+            self.finish_pen(true);
+            return;
+        }
+        let pen = self.pen.get_or_insert_with(PenPath::default);
+        pen.anchors.push(jd_vector::Anchor::corner(page.x.round(), page.y.round()));
+        pen.dragging = true;
+    }
+
+    /// Turns the Pen's path into a vector layer (two points or more).
+    pub fn finish_pen(&mut self, closed: bool) {
+        let Some(pen) = self.pen.take() else { return };
+        if pen.anchors.len() < 2 {
+            return;
+        }
+        let first = kurbo::Point::new(pen.anchors[0].p[0], pen.anchors[0].p[1]);
+        let parent = self.frame_at(first);
+        let to_local = self.doc().world_transform(parent).inverse();
+        let (x, y, path) = pen::vector_from(&pen.anchors, closed, to_local);
+        let n = self.doc().children(parent).len() + 1;
+        let spec = NodeSpec::vector(&format!("Vector {n}"), path).at(round2(x), round2(y));
+        if let Some(done) = self.run("Pen", &[Op::create(parent, spec)]) {
+            self.select(done.created[0], false);
+            self.tool = Tool::Move;
+        }
+    }
+
+    /// The frame new layers drawn at `p` go into (else the page).
+    fn frame_at(&self, p: kurbo::Point) -> NodeId {
+        let doc = self.doc();
+        doc.nodes_at(self.page, p, 0.0)
+            .into_iter()
+            .find(|&id| doc.node(id).is_some_and(|n| matches!(n.kind, NodeKind::Frame | NodeKind::Section | NodeKind::Component { .. })) && !doc.is_inside_instance(id))
+            .unwrap_or(self.page)
     }
 
     fn is_text(&self, id: NodeId) -> bool {
@@ -1496,6 +1691,22 @@ impl Blobr {
                 return;
             }
             *started = true;
+        }
+        if self.tool == Tool::Pen
+            && let Some(pen) = &mut self.pen
+        {
+            if pen.dragging
+                && let Some(last) = pen.anchors.last_mut()
+            {
+                let a = kurbo::Point::new(last.p[0], last.p[1]);
+                if (page - a).hypot() * self.camera.zoom > 2.0 {
+                    let mirror = a + (a - page);
+                    last.handle_out = Some([page.x, page.y]);
+                    last.handle_in = Some([mirror.x, mirror.y]);
+                }
+            }
+            pen.cursor = Some(page);
+            return;
         }
         let Some(drag) = self.drag.clone() else {
             let hover = if self.tool == Tool::Move { self.pick_at(at, self.modifiers.command(), false) } else { None };
@@ -1566,17 +1777,46 @@ impl Blobr {
                 self.run_gesture("Resize", &ops);
             }
             Drag::Marquee { start, .. } => self.drag = Some(Drag::Marquee { start, now: page }),
+            Drag::Rotate { id, center_page, center_parent, a0, rot0, half } => {
+                let a = (page - center_page).atan2();
+                let mut rot = rot0 - (a - a0).to_degrees();
+                if self.modifiers.shift() {
+                    rot = (rot / 15.0).round() * 15.0;
+                }
+                rot = round2(((rot + 180.0).rem_euclid(360.0)) - 180.0);
+                let off = Affine::rotate(-rot.to_radians()) * half.to_point();
+                let at = center_parent - off.to_vec2();
+                self.run_gesture("Rotate", &[Op::set(id, Patch { rotation: Some(rot), x: Some(round2(at.x)), y: Some(round2(at.y)), ..Patch::default() })]);
+            }
+            Drag::Anchor { id, sub, idx, part } => {
+                let Some(n) = self.doc().node(id) else { return };
+                let NodeKind::Vector { path } = &n.kind else { return };
+                let to_anchor = (self.doc().world_transform(id) * pen::base_scale(n, path)).inverse();
+                let q = to_anchor * page;
+                let path = pen::moved(path, sub, idx, part, [round2(q.x), round2(q.y)]);
+                self.run_gesture("Edit points", &[Op::set(id, Patch { path: Some(path), ..Patch::default() })]);
+            }
             Drag::Create { tool, start, .. } => self.drag = Some(Drag::Create { tool, start, now: page }),
         }
     }
 
     fn release(&mut self, at: Point) -> Task<Message> {
         let page = self.camera.to_page(at);
+        if let Some(pen) = &mut self.pen {
+            pen.dragging = false;
+        }
         let Some(drag) = self.drag.take() else { return Task::none() };
         match drag {
-            Drag::Move { .. } | Drag::Resize { .. } => {
+            Drag::Move { .. } | Drag::Resize { .. } | Drag::Rotate { .. } => {
                 self.ed.end_gesture();
                 self.guides.clear();
+            }
+            Drag::Anchor { id, .. } => {
+                // Fit the layer's box to the moved points, in the same undo step.
+                if let Some(patch) = self.doc().node(id).and_then(pen::refit) {
+                    self.run_gesture("Edit points", &[Op::set(id, patch)]);
+                }
+                self.ed.end_gesture();
             }
             Drag::Pan { .. } => {}
             Drag::Marquee { start, .. } => {
@@ -1605,18 +1845,14 @@ impl Blobr {
     }
 
     fn create(&mut self, tool: Tool, start: kurbo::Point, end: kurbo::Point) -> Task<Message> {
-        let doc = self.doc();
         let mut r = Rect::from_points(start, end);
         let clicked = r.width() * self.camera.zoom < 3.0 && r.height() * self.camera.zoom < 3.0;
         if clicked {
             r = Rect::from_origin_size(start, (100.0, 100.0));
         }
         // Into the frame under the start point, like Figma.
-        let parent = doc
-            .nodes_at(self.page, start, 0.0)
-            .into_iter()
-            .find(|&id| doc.node(id).is_some_and(|n| matches!(n.kind, NodeKind::Frame | NodeKind::Section | NodeKind::Component { .. })) && !doc.is_inside_instance(id))
-            .unwrap_or(self.page);
+        let parent = self.frame_at(start);
+        let doc = self.doc();
         let to_local = doc.world_transform(parent).inverse();
         let at = to_local * kurbo::Point::new(r.x0, r.y0);
         let (w, h) = (r.width().round(), r.height().round());
@@ -1626,7 +1862,7 @@ impl Blobr {
             Tool::Rectangle => NodeSpec::rect(&format!("Rectangle {n}"), w, h),
             Tool::Ellipse => NodeSpec::ellipse(&format!("Ellipse {n}"), w, h),
             Tool::Text => NodeSpec::text("Text", "Text", TextStyle { size: 16.0, ..TextStyle::default() }),
-            Tool::Move | Tool::Hand => return Task::none(),
+            Tool::Move | Tool::Hand | Tool::Pen => return Task::none(),
         }
         .at(at.x.round(), at.y.round());
         if let Some(done) = self.run(&format!("Add {}", tool.tip().split(' ').next().unwrap_or("layer")), &[Op::create(parent, spec)]) {
@@ -2013,6 +2249,122 @@ mod tests {
         let _ = app.update(Message::CanvasPress { at: Point::new(700.0, 500.0), button: mouse::Button::Left });
         let _ = app.update(Message::CanvasRelease(Point::new(700.0, 500.0)));
         assert!(!app.doc().contains(t));
+    }
+
+    fn click(app: &mut Blobr, at: Point) {
+        let _ = app.update(Message::CanvasPress { at, button: mouse::Button::Left });
+        let _ = app.update(Message::CanvasRelease(at));
+    }
+
+    #[test]
+    fn the_pen_draws_closed_shapes_and_curves() {
+        let mut app = app();
+        let _ = app.update(Message::Tool(Tool::Pen));
+        click(&mut app, Point::new(100.0, 100.0));
+        click(&mut app, Point::new(200.0, 100.0));
+        click(&mut app, Point::new(150.0, 180.0));
+        click(&mut app, Point::new(101.0, 101.0)); // back on the first point: closes
+        let v = app.selection[0];
+        let n = app.doc().node(v).unwrap();
+        assert_eq!((n.props.x, n.props.y, n.props.width, n.props.height), (100.0, 100.0, 100.0, 80.0));
+        assert!(matches!(&n.kind, NodeKind::Vector { path } if path.subpaths[0].closed && path.subpaths[0].anchors.len() == 3));
+        assert_eq!(app.tool, Tool::Move);
+
+        // Dragging pulls out handles; Enter leaves the path open.
+        let _ = app.update(Message::Tool(Tool::Pen));
+        click(&mut app, Point::new(300.0, 300.0));
+        let _ = app.update(Message::CanvasPress { at: Point::new(400.0, 300.0), button: mouse::Button::Left });
+        let _ = app.update(Message::CanvasMove(Point::new(400.0, 350.0)));
+        let _ = app.update(Message::CanvasRelease(Point::new(400.0, 350.0)));
+        let _ = app.update(Message::Key(keyboard::Event::KeyPressed {
+            key: Key::Named(Named::Enter),
+            modified_key: Key::Named(Named::Enter),
+            physical_key: keyboard::key::Physical::Unidentified(keyboard::key::NativeCode::Unidentified),
+            location: keyboard::Location::Standard,
+            modifiers: keyboard::Modifiers::empty(),
+            text: None,
+            repeat: false,
+        }));
+        let curve = app.selection[0];
+        let NodeKind::Vector { path } = &app.doc().node(curve).unwrap().kind else { panic!("a vector") };
+        assert!(!path.subpaths[0].closed);
+        assert!(path.subpaths[0].anchors[1].handle_in.is_some(), "the drag made a smooth point");
+        assert!(app.doc().node(curve).unwrap().props.height > 0.0, "the curve bulges, so the box has height");
+    }
+
+    #[test]
+    fn rotating_turns_about_the_centre() {
+        let mut app = app();
+        let p = app.page;
+        let r = app.run("Add", &[Op::create(p, NodeSpec::rect("R", 100.0, 50.0).at(100.0, 100.0))]).unwrap().created[0];
+        app.select(r, false);
+        // Just outside the bottom-right corner (200, 150), then round to the right of the centre.
+        let start = Point::new(210.0, 160.0);
+        assert_eq!(app.rotate_at(start), Some(r));
+        let _ = app.update(Message::CanvasPress { at: start, button: mouse::Button::Left });
+        // Quarter turn clockwise about the centre (150, 125).
+        let (dx, dy) = (start.x - 150.0, start.y - 125.0);
+        let to = Point::new(150.0 - dy, 125.0 + dx);
+        let _ = app.update(Message::CanvasMove(to));
+        let _ = app.update(Message::CanvasRelease(to));
+        let n = app.doc().node(r).unwrap();
+        assert!((n.props.rotation + 90.0).abs() < 0.01, "clockwise is negative: {}", n.props.rotation);
+        let c = app.doc().world_bounds(r).unwrap().center();
+        assert!((c.x - 150.0).abs() < 0.02 && (c.y - 125.0).abs() < 0.02, "centre stays: {c:?}");
+        let _ = app.update(Message::Undo);
+        assert_eq!(app.doc().node(r).unwrap().props.rotation, 0.0, "one undo step");
+    }
+
+    #[test]
+    fn editing_vector_points_refits_the_layer() {
+        let mut app = app();
+        let _ = app.update(Message::Tool(Tool::Pen));
+        click(&mut app, Point::new(100.0, 100.0));
+        click(&mut app, Point::new(200.0, 100.0));
+        click(&mut app, Point::new(150.0, 200.0));
+        click(&mut app, Point::new(100.0, 100.0));
+        let v = app.selection[0];
+        let _ = app.update(Message::Key(keyboard::Event::KeyPressed {
+            key: Key::Named(Named::Enter),
+            modified_key: Key::Named(Named::Enter),
+            physical_key: keyboard::key::Physical::Unidentified(keyboard::key::NativeCode::Unidentified),
+            location: keyboard::Location::Standard,
+            modifiers: keyboard::Modifiers::empty(),
+            text: None,
+            repeat: false,
+        }));
+        assert_eq!(app.vector_edit.map(|e| e.id), Some(v));
+        // Drag the bottom point further down: the box grows to fit.
+        let _ = app.update(Message::CanvasPress { at: Point::new(150.0, 200.0), button: mouse::Button::Left });
+        assert_eq!(app.vector_edit.unwrap().selected, Some((0, 2)));
+        let _ = app.update(Message::CanvasMove(Point::new(150.0, 260.0)));
+        let _ = app.update(Message::CanvasRelease(Point::new(150.0, 260.0)));
+        let n = app.doc().node(v).unwrap();
+        assert_eq!((n.props.y, n.props.height), (100.0, 160.0));
+        let _ = app.update(Message::Undo);
+        assert_eq!(app.doc().node(v).unwrap().props.height, 100.0, "move and refit are one step");
+    }
+
+    #[test]
+    fn booleans_and_flatten_from_the_app() {
+        let mut app = app();
+        let ids = three_rects(&mut app);
+        let p = app.page;
+        let big = app.run("Add", &[Op::create(p, NodeSpec::rect("Big", 300.0, 300.0).at(80.0, 80.0))]).unwrap().created[0];
+        // Subtract cuts the upper layers out of the bottom one: put Big at the bottom.
+        app.selection = vec![big];
+        let _ = app.update(Message::Reorder(Order::Back));
+        app.selection = vec![big, ids[0]];
+        let _ = app.update(Message::Boolean(BoolOp::Subtract));
+        let r = app.selection[0];
+        assert!(matches!(app.doc().node(r).unwrap().kind, NodeKind::Vector { .. }));
+        assert!(!app.doc().contains(big) && !app.doc().contains(ids[0]));
+        // A boolean of separate layers that don't overlap is refused with a message.
+        app.selection = vec![ids[1]];
+        let _ = app.update(Message::Boolean(BoolOp::Union));
+        assert!(app.status.error);
+        let _ = app.update(Message::Flatten);
+        assert!(matches!(app.doc().node(app.selection[0]).unwrap().kind, NodeKind::Vector { .. }));
     }
 
     #[test]

@@ -13,3 +13,7 @@ serde_json = { workspace = true, features = ["float_roundtrip"] }
 zip.workspace = true
 # Beziers, affine transforms and SVG path parsing. 0.11 is already in the lockfile (via iced).
 kurbo = "0.11"
+# Boolean operations on bezier paths (union, subtract, intersect, exclude). It uses kurbo 0.13,
+# so paths are converted at the boundary (boolean.rs).
+linesweeper = "0.5"
+kurbo13 = { package = "kurbo", version = "0.13" }

@@ -8,6 +8,7 @@ pub enum Tool {
     Frame,
     Rectangle,
     Ellipse,
+    Pen,
     Text,
     Hand,
 }
@@ -20,6 +21,7 @@ impl Tool {
         Some(Tool::Rectangle),
         Some(Tool::Ellipse),
         None,
+        Some(Tool::Pen),
         Some(Tool::Text),
         None,
         Some(Tool::Hand),
@@ -31,6 +33,7 @@ impl Tool {
             Tool::Frame => Icon::Frame,
             Tool::Rectangle => Icon::Shape,
             Tool::Ellipse => Icon::EllipseShape,
+            Tool::Pen => Icon::Pen,
             Tool::Text => Icon::Type,
             Tool::Hand => Icon::Hand,
         }
@@ -42,6 +45,7 @@ impl Tool {
             Tool::Frame => "Frame (F)",
             Tool::Rectangle => "Rectangle (R)",
             Tool::Ellipse => "Ellipse (O)",
+            Tool::Pen => "Pen (P): click for corners, drag for curves, Enter to finish",
             Tool::Text => "Text (T)",
             Tool::Hand => "Hand (H, or hold Space)",
         }
@@ -53,6 +57,7 @@ impl Tool {
             "f" | "a" => Tool::Frame,
             "r" => Tool::Rectangle,
             "o" => Tool::Ellipse,
+            "p" => Tool::Pen,
             "t" => Tool::Text,
             "h" => Tool::Hand,
             _ => return None,

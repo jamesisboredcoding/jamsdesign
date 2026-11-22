@@ -117,7 +117,13 @@ CLI argument as a file to open. Names are provisional until Step 0.
       distances to the hovered layer or the parent; group, frame selection, ungroup and
       stacking order, align and distribute, as `jd_vector::arrange` op builders; copy, cut and
       paste through the system clipboard (`jd_vector::clip`, `Op::Paste`), images and text
-      pasted from other apps, Copy as PNG; typing text on the canvas)
+      pasted from other apps, Copy as PNG; typing text on the canvas; rotating from just
+      outside a corner (Shift: 15 degree steps); the Pen tool (click for corners, drag for
+      curves, click the first point to close) and editing a vector's points and handles
+      (double-click or Enter), the box refitting afterwards; booleans (union, subtract,
+      intersect, exclude via `linesweeper`) and flatten, as `jd_vector::boolean`)
+  - [ ] Live boolean groups (editable afterwards, as in Figma), outline stroke, resize
+        handles on rotated layers, adding points to an existing path
   - Move, resize and rotate with handles; Frame (with device presets), Rectangle, Ellipse,
     Line, Pen (bezier editing) and Text tools; Hand and Zoom
   - Snapping, smart guides and spacing measurements (as in the mockup)

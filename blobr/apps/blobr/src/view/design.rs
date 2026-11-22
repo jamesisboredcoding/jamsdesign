@@ -79,6 +79,23 @@ fn arrange(app: &Blobr) -> Element<'_, Message> {
     ]
     .spacing(2)
     .align_y(Vertical::Center);
+    let col_extra = (app.selection.len() >= 2).then(|| {
+        use jd_vector::boolean::BoolOp;
+        let t = |label: &'static str, tip: &'static str, m: Message| {
+            jd_ui::widget::hover_tip(
+                button(text(label).size(TEXT_SIZE_SMALL)).padding(Padding::from([3, 7])).style(style::ghost(false)).on_press(m),
+                tip,
+                iced::widget::tooltip::Position::Bottom,
+            )
+        };
+        row![
+            t("Union", "Union selection", Message::Boolean(BoolOp::Union)),
+            t("Subtract", "Subtract the top layers from the bottom one", Message::Boolean(BoolOp::Subtract)),
+            t("Intersect", "Keep where they all overlap", Message::Boolean(BoolOp::Intersect)),
+            t("Exclude", "Keep where they don't overlap", Message::Boolean(BoolOp::Exclude)),
+        ]
+        .spacing(2)
+    });
     if app.selection.len() >= 3 {
         let d = |label: &'static str, tip: &'static str, m: Message| {
             jd_ui::widget::hover_tip(button(text(label).size(TEXT_SIZE_SMALL)).padding(Padding::from([3, 6])).style(style::ghost(false)).on_press(m), tip, iced::widget::tooltip::Position::Bottom)
@@ -87,7 +104,11 @@ fn arrange(app: &Blobr) -> Element<'_, Message> {
         r = r.push(d("↔", "Distribute horizontal spacing (Alt+Shift+H)", Message::Distribute(true)));
         r = r.push(d("↕", "Distribute vertical spacing (Alt+Shift+V)", Message::Distribute(false)));
     }
-    container(r).padding(Padding::from([6, 10])).into()
+    let mut c = column![r].spacing(4);
+    if let Some(extra) = col_extra {
+        c = c.push(extra);
+    }
+    container(c).padding(Padding::from([6, 10])).into()
 }
 
 fn num(v: f64) -> String {

@@ -6,6 +6,7 @@ use jd_ui::chrome;
 use jd_ui::widget::MenuEntry;
 use jd_vector::ExportFormat;
 use jd_vector::arrange::{Align, Order};
+use jd_vector::boolean::BoolOp;
 
 use crate::app::{Blobr, Message};
 
@@ -82,8 +83,16 @@ fn entries(app: &Blobr, menu: usize) -> Vec<MenuEntry<'_, Message>> {
             item("Detach Instance", "Ctrl+Alt+B", on(sel, Message::Detach)),
             item("Reset All Overrides", "", on(sel, Message::ResetOverrides)),
             Separator,
-            todo("Boolean Groups", ""),
-            todo("Flatten Selection", "Ctrl+E"),
+            MenuEntry::Submenu(
+                "Boolean",
+                vec![
+                    item("Union", "", on(app.selection.len() >= 2, Message::Boolean(BoolOp::Union))),
+                    item("Subtract", "", on(app.selection.len() >= 2, Message::Boolean(BoolOp::Subtract))),
+                    item("Intersect", "", on(app.selection.len() >= 2, Message::Boolean(BoolOp::Intersect))),
+                    item("Exclude", "", on(app.selection.len() >= 2, Message::Boolean(BoolOp::Exclude))),
+                ],
+            ),
+            item("Flatten Selection", "Ctrl+E", on(sel, Message::Flatten)),
             todo("Outline Stroke", "Ctrl+Shift+O"),
         ],
         "Text" => vec![todo("Bold", "Ctrl+B"), todo("Italic", "Ctrl+I"), todo("Underline", "Ctrl+U"), Separator, todo("Text Styles...", "")],
