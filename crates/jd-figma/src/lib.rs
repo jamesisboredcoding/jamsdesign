@@ -207,6 +207,8 @@ impl Ctx<'_> {
         let Some(t) = str_of(v, "type") else { return };
         let name = str_of(v, "name").unwrap_or(t).to_owned();
         let (x, y, w, h, rot) = placement(v, origin);
+        // How far left a widened text box moves to keep its text in place.
+        let mut widened: Option<f64> = None;
         let mut spec = match t {
             "FRAME" | "COMPONENT" | "INSTANCE" | "COMPONENT_SET" => {
                 if t == "INSTANCE" {
@@ -260,6 +262,28 @@ impl Ctx<'_> {
                     Some("HEIGHT") => (Sizing::Fixed, Sizing::Hug),
                     _ => (Sizing::Fixed, Sizing::Fixed),
                 };
+                // One line in Figma stays one line here: if this machine's font for it runs
+                // wider than Figma's box, widen the box by the difference (keeping centred or
+                // right-aligned text where it was).
+                if let NodeKind::Text { text } = &spec.kind
+                    && sh == Sizing::Fixed
+                    && !text.content.contains('\n')
+                    && h < text.style.size as f64 * 1.6
+                {
+                    use jd_vector::TextMeasure;
+                    let (mw, _) = jd_vector_render::CosmicMeasure.measure(&text.content, &text.style, None);
+                    let extra = mw - w;
+                    if extra > 0.01 {
+                        let shift = match text.style.align {
+                            TextAlign::Center => extra / 2.0,
+                            TextAlign::Right => extra,
+                            _ => 0.0,
+                        };
+                        spec.props.width = mw.ceil();
+                        widened = Some(shift);
+                        self.report.note("one-line text boxes widened to fit this machine's fonts");
+                    }
+                }
                 spec.props.sizing_h = sh;
                 spec.props.sizing_v = sv;
                 spec
@@ -301,7 +325,7 @@ impl Ctx<'_> {
         if t == "GROUP" {
             spec = spec.at(0.0, 0.0);
         } else {
-            spec = spec.at(x, y);
+            spec = spec.at(x - widened.unwrap_or(0.0), y);
             spec.props.rotation = rot;
         }
         self.finish(v, spec, parent, t, origin, true);

@@ -5,8 +5,8 @@
 //! (Figma: Settings > Security > Personal access tokens, with "File content" read access).
 //! The token goes to curl on stdin, so it never shows up in the process list.
 //!
-//! With a `.json` file instead (the body of `GET /v1/files/:key?geometry=paths`), nothing is
-//! fetched and image fills come in grey.
+//! Fetching also saves the raw JSON beside the output (`out.figma.json`). Given a `.json` file
+//! instead of a URL, nothing is fetched (image fills then come in grey).
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -64,6 +64,10 @@ fn run() -> Result<(), String> {
         let key = file_key(source);
         eprintln!("Fetching file {key}...");
         let json = String::from_utf8(get(&format!("https://api.figma.com/v1/files/{key}?geometry=paths"), Some(&token))?).map_err(|e| e.to_string())?;
+        // Keep the raw file next to the output, so later imports can run offline from it.
+        let raw = std::path::Path::new(out).with_extension("figma.json");
+        std::fs::write(&raw, &json).map_err(|e| format!("{}: {e}", raw.display()))?;
+        eprintln!("Saved the Figma JSON as {} (re-import offline with it in place of the URL).", raw.display());
         // Image fills: a map of image ref -> temporary download URL.
         let fills = get(&format!("https://api.figma.com/v1/files/{key}/images"), Some(&token))?;
         let fills: serde_json::Value = serde_json::from_slice(&fills).map_err(|e| e.to_string())?;
