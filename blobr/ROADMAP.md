@@ -168,8 +168,8 @@ CLI argument as a file to open. Names are provisional until Step 0.
         strokes, effects, components); `cargo run -p jd-figma --bin figma2jdb -- <file URL>
         out.jdb` with `FIGMA_TOKEN` set fetches it (2 API calls + image downloads). Instances
         come in as frames, component sets as frames of variants, no variables/styles
-  - [ ] Move the suite's mockups (Photosplash, Cinematica, Blobr, the logos) into `.jdb`
-        files in the repo (needs a Figma token: run figma2jdb on the mockup file)
+  - [x] The suite's mockups are in `blobr/mockups/suite.jdb` (with the Figma JSON they came
+        from, for offline re-imports); design work no longer depends on Figma
   - [x] `jd_vector_render::place`: a `.jdb` file's frames and one as RGBA, for Photosplash
   - [ ] Photosplash File > Place uses it (Photosplash's side)
 
