@@ -23,6 +23,8 @@ pub struct History {
     gesture: Option<String>,
     /// `undo.len()` when last saved; `None` if that state is no longer reachable.
     saved_at: Option<usize>,
+    /// Most undo steps kept (0: the default, 100).
+    limit: usize,
 }
 
 impl History {
@@ -46,7 +48,19 @@ impl History {
         }
         self.redo.clear();
         self.undo.push(Step { label: label.to_owned(), before: doc.clone() });
-        if self.undo.len() > LIMIT {
+        self.trim();
+    }
+
+    /// Sets how many undo steps are kept (Preferences > History States), dropping the oldest
+    /// if there are more.
+    pub fn set_limit(&mut self, limit: usize) {
+        self.limit = limit.max(1);
+        self.trim();
+    }
+
+    fn trim(&mut self) {
+        let limit = if self.limit == 0 { LIMIT } else { self.limit };
+        while self.undo.len() > limit {
             self.undo.remove(0);
             self.saved_at = self.saved_at.and_then(|s| s.checked_sub(1));
         }

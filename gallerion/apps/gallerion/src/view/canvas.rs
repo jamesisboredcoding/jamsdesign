@@ -111,6 +111,9 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
         bounds: app.canvas_bounds,
         tool: app.effective_tool(),
         brush_size: app.brush.size,
+        wheel_zooms: app.prefs.wheel_zooms,
+        modifiers: app.modifiers,
+        brush_cursor: app.prefs.brush_cursor,
         pen: app.pen,
         pen_paints: app.pen_pressure,
         select_mode: app.select.mode,
@@ -289,6 +292,10 @@ struct Overlay<'a> {
     bounds: Rectangle,
     tool: Tool,
     brush_size: f32,
+    /// Preferences: the scroll wheel zooms (else it scrolls; Ctrl zooms), and the paint cursor.
+    wheel_zooms: bool,
+    modifiers: iced::keyboard::Modifiers,
+    brush_cursor: crate::prefs::BrushCursor,
     /// Pen hovering or drawing (from the tablet), for the brush outline.
     pen: Option<Pen>,
     /// The pen paints with pressure through `Message::Tablet` (so ignore its pointer twin).
@@ -458,10 +465,17 @@ impl canvas::Program<Message> for Overlay<'_> {
         match event {
             mouse::Event::WheelScrolled { delta } => {
                 let anchor = local?;
-                let dy = match delta {
-                    ScrollDelta::Lines { y, .. } | ScrollDelta::Pixels { y, .. } => *y,
+                let (dx, dy) = match delta {
+                    ScrollDelta::Lines { x, y } => (*x * 40.0, *y * 40.0),
+                    ScrollDelta::Pixels { x, y } => (*x, *y),
                 };
-                if dy == 0.0 { None } else { publish(Message::ZoomAt { zoom_in: dy > 0.0, anchor }) }
+                if self.wheel_zooms || self.modifiers.command() {
+                    if dy == 0.0 { None } else { publish(Message::ZoomAt { zoom_in: dy > 0.0, anchor }) }
+                } else if self.modifiers.shift() {
+                    publish(Message::PanBy(Vector::new(dy + dx, 0.0)))
+                } else {
+                    publish(Message::PanBy(Vector::new(dx, dy)))
+                }
             }
             mouse::Event::ButtonPressed(button) => {
                 let p = local?;
@@ -825,17 +839,21 @@ impl canvas::Program<Message> for Overlay<'_> {
             && !self.covered
             && let Some(p) = at
         {
+            use crate::prefs::BrushCursor;
             let r = (self.brush_size * self.zoom / 2.0).max(1.5);
-            let circle = Path::circle(p, r);
-            frame.stroke(&circle, Stroke::default().with_width(2.0).with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.5)));
-            frame.stroke(&circle, Stroke::default().with_width(1.0).with_color(Color::WHITE));
-            if r < 4.0 {
+            if self.brush_cursor != BrushCursor::Precise {
+                let circle = Path::circle(p, r);
+                frame.stroke(&circle, Stroke::default().with_width(2.0).with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.5)));
+                frame.stroke(&circle, Stroke::default().with_width(1.0).with_color(Color::WHITE));
+            }
+            if r < 4.0 || self.brush_cursor != BrushCursor::Outline {
                 let c = Path::new(|b| {
                     b.move_to(p - Vector::new(5.0, 0.0));
                     b.line_to(p + Vector::new(5.0, 0.0));
                     b.move_to(p - Vector::new(0.0, 5.0));
                     b.line_to(p + Vector::new(0.0, 5.0));
                 });
+                frame.stroke(&c, Stroke::default().with_width(3.0).with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.5)));
                 frame.stroke(&c, Stroke::default().with_width(1.0).with_color(Color::WHITE));
             }
         }

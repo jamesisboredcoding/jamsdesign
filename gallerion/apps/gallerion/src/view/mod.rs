@@ -7,6 +7,7 @@ mod layer_style;
 mod dock;
 pub mod field;
 mod menus;
+mod prefs;
 
 use iced::mouse::Interaction;
 use iced::widget::{column, container, mouse_area, row, space, stack};
@@ -74,6 +75,9 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
     }
     if let Some(small) = dialog::small(app) {
         layers = layers.push(small);
+    }
+    if let Some(p) = prefs::view(app) {
+        layers = layers.push(p);
     }
     if let Some(new) = dialog::new_document(app) {
         layers = layers.push(new);

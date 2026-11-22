@@ -203,6 +203,8 @@ fn menu_bar(app: &Photo, i: usize) -> Vec<MenuEntry<'_, Message>> {
             Separator,
             item("Free Transform", "Ctrl+T", ed, Message::FreeTransform),
             Submenu("Transform", transform_entries(&s)),
+            Separator,
+            item("Preferences...", "Ctrl+K", true, Message::OpenPreferences),
         ],
         "Image" => {
             let space = app.document().map_or(BlendSpace::Perceptual, |d| d.blend_space);

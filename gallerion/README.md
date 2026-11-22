@@ -116,6 +116,10 @@ left-click in, right-click out.
       Threshold, Posterize, Invert, Desaturate. They change every layer below, through their
       mask (a selection becomes the mask), with their own opacity and blend mode; double-click
       the thumbnail to change the settings (live, one undo step). Saved in .jdp
+- [x] 6f: Edit > Preferences (Ctrl+K), saved in `~/.config/jamsdesign/gallerion.json`:
+      history states, linear blending for new images, remembering the workspace and panel
+      layout, scroll wheel zoom or scroll, painting cursor (outline, crosshair, precise), pen
+      pressure, snapping at startup, and the Remove Background model (where it is, delete it)
 - [ ] 6: PSD import, Flatpak, Pen tool
 
 ## App icon

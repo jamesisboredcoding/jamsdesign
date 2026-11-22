@@ -12,6 +12,7 @@ use jd_raster::mask::Mask;
 use jd_raster::{BlendMode, BlendSpace, Document, History, LayerId, TileGrid, TileId};
 
 use crate::adjust::{self as adj, Op, OpKind};
+use crate::prefs::{Prefs, SavedLayout};
 use crate::tablet::{self, Phase, TabletMessage};
 use crate::tool::Tool;
 use crate::transform::{self, Handle};
@@ -248,7 +249,7 @@ pub struct Panels {
     pub layers: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Panel {
     Color,
     Properties,
@@ -352,6 +353,16 @@ pub struct FieldEdit {
     pending: Option<Box<Message>>,
 }
 
+/// The open Preferences dialog.
+#[derive(Debug, Clone)]
+pub struct PrefsDialog {
+    /// The preferences when it opened (Cancel restores them).
+    pub original: Prefs,
+    /// Which section of the left-hand list is shown.
+    pub tab: u8,
+    pub pos: Point,
+}
+
 /// Free Transform values that can be typed in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransformField {
@@ -390,7 +401,7 @@ pub enum SnapTo {
 }
 
 /// Panel arrangements from the title bar's workspace switcher.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Workspace {
     /// Every panel.
     Essentials,
@@ -530,6 +541,9 @@ pub struct Photo {
     pub snap: Snap,
     /// The value box being typed into, if any.
     pub field_edit: Option<FieldEdit>,
+    /// Edit > Preferences, and the open Preferences dialog.
+    pub prefs: Prefs,
+    pub prefs_dialog: Option<PrefsDialog>,
     /// Dock panels top to bottom (hidden ones keep their place).
     pub panel_order: Vec<Panel>,
     /// Heights set by dragging the strip below a panel (others size to their content).
@@ -700,6 +714,15 @@ pub enum Message {
     SelectPixels,
     ToggleLockPixels,
     ToggleLockPosition,
+
+    // Edit > Preferences
+    OpenPreferences,
+    PrefsSet(Box<Prefs>),
+    PrefsTab(u8),
+    PrefsOk,
+    PrefsCancel,
+    /// Deletes the downloaded background removal model.
+    DeleteAiModel,
 
     // Dock panels
     PanelMeasured(Panel, f32),
@@ -974,6 +997,8 @@ impl Photo {
             workspace: Workspace::Essentials,
             snap: Snap { on: true, bounds: true, layers: true },
             field_edit: None,
+            prefs: Prefs::default(),
+            prefs_dialog: None,
             panel_order: Panel::DEFAULT_ORDER.to_vec(),
             panel_heights: HashMap::new(),
             panel_sizes: HashMap::new(),
@@ -1016,6 +1041,8 @@ impl Photo {
         if !cfg!(test) {
             app.load_presets();
         }
+        app.prefs = Prefs::load();
+        app.apply_startup_prefs();
         let args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
         let open = if args.is_empty() { Task::none() } else { Task::done(Message::Open(args)) };
         (app, Task::batch([window::oldest().map(Message::WindowOpened), open]))
@@ -1806,6 +1833,10 @@ impl Photo {
                     }
                 };
                 self.new_doc = None;
+                let mut doc = doc;
+                if self.prefs.linear_blending {
+                    doc.blend_space = BlendSpace::Linear;
+                }
                 // Untouched new documents close without asking, like Photoshop.
                 self.push_doc(doc, None);
             }
@@ -2122,10 +2153,12 @@ impl Photo {
             Message::UiDragMove(p) => match self.ui_drag {
                 Some(UiDrag::Dock) => self.dock_width = (self.window_size.width - p.x).clamp(DOCK_MIN, DOCK_MAX),
                 Some(UiDrag::Dialog(grab)) => {
-                    if let Some(d) = self.dialog.as_mut() {
-                        // Keep the title reachable.
-                        let x = (p.x - grab.x).clamp(-300.0, (self.window_size.width - 80.0).max(0.0));
-                        let y = (p.y - grab.y).clamp(0.0, (self.window_size.height - 40.0).max(0.0));
+                    // Keep the title reachable.
+                    let x = (p.x - grab.x).clamp(-300.0, (self.window_size.width - 80.0).max(0.0));
+                    let y = (p.y - grab.y).clamp(0.0, (self.window_size.height - 40.0).max(0.0));
+                    if let Some(d) = self.prefs_dialog.as_mut() {
+                        d.pos = Point::new(x, y);
+                    } else if let Some(d) = self.dialog.as_mut() {
                         d.pos = Point::new(x, y);
                     }
                 }
@@ -2161,6 +2194,37 @@ impl Photo {
                 self.ui_drag = None;
                 self.panel_drop = None;
             }
+            Message::OpenPreferences => {
+                if self.prefs_dialog.is_none() {
+                    let pos = Point::new(((self.window_size.width - 640.0) / 2.0).max(0.0), 110.0);
+                    self.prefs_dialog = Some(PrefsDialog { original: self.prefs.clone(), tab: 0, pos });
+                }
+            }
+            Message::PrefsSet(p) => {
+                self.prefs = *p;
+                self.apply_prefs();
+            }
+            Message::PrefsTab(t) => {
+                if let Some(d) = self.prefs_dialog.as_mut() {
+                    d.tab = t;
+                }
+            }
+            Message::PrefsOk => {
+                self.prefs_dialog = None;
+                if let Err(e) = self.prefs.save() {
+                    self.error(format!("Couldn't save preferences: {e}"));
+                }
+            }
+            Message::PrefsCancel => {
+                if let Some(d) = self.prefs_dialog.take() {
+                    self.prefs = d.original;
+                    self.apply_prefs();
+                }
+            }
+            Message::DeleteAiModel => match std::fs::remove_file(jd_ai::ISNET.path()) {
+                Ok(()) => self.info("Deleted the background removal model (it downloads again when needed)"),
+                Err(e) => self.error(format!("Couldn't delete the model: {e}")),
+            },
             Message::PanelMeasured(p, h) => {
                 self.panel_sizes.insert(p, h);
             }
@@ -2616,7 +2680,10 @@ impl Photo {
                     self.tablet_ready = true;
                 }
             }
-            Message::ToggleTablet => self.pen_pressure = !self.pen_pressure,
+            Message::ToggleTablet => {
+                self.pen_pressure = !self.pen_pressure;
+                self.prefs.pen_pressure = self.pen_pressure;
+            }
             Message::Tablet(TabletMessage::Unavailable(reason)) => {
                 self.tablet_allowed = false;
                 self.pen = None;
@@ -2718,14 +2785,20 @@ impl Photo {
         ])
     }
 
-    fn push_doc(&mut self, doc: Document, path: Option<PathBuf>) {
+    fn push_doc(&mut self, mut doc: Document, path: Option<PathBuf>) {
         let id = self.next_doc_id;
         self.next_doc_id += 1;
+        // Opened images (not .jdp documents, which keep their own) follow Preferences.
+        if self.prefs.linear_blending && path.as_deref().is_some_and(|p| !jd_io::is_document(p)) {
+            doc.blend_space = BlendSpace::Linear;
+        }
+        let mut history = History::new_saved();
+        history.set_limit(self.prefs.history_states.clamp(5, 1000) as usize);
         self.docs.push(OpenDoc {
             id,
             doc,
             path,
-            history: History::new_saved(),
+            history,
             zoom: Zoom::Fit,
             pan: Vector::ZERO,
             thumbs: HashMap::new(),
@@ -2764,7 +2837,10 @@ impl Photo {
                 self.confirm = Some(Confirm { doc: self.docs[i].id, then: AfterConfirm::Quit });
                 Task::none()
             }
-            None => self.with_window(window::close),
+            None => {
+                self.save_prefs_on_quit();
+                self.with_window(window::close)
+            }
         }
     }
 
@@ -3129,6 +3205,52 @@ impl Photo {
         {
             l.adjustment = Some(adj);
         }
+    }
+
+    /// Preferences that only matter when the app starts (layout, snapping, pen).
+    fn apply_startup_prefs(&mut self) {
+        self.pen_pressure = self.prefs.pen_pressure;
+        self.snap.on = self.prefs.snap;
+        if let Some(l) = self.prefs.layout.clone().filter(|_| self.prefs.remember_layout) {
+            self.workspace = l.workspace;
+            self.dock_width = l.dock_width.clamp(DOCK_MIN, DOCK_MAX);
+            let [color, properties, layers] = l.panels;
+            self.panels = Panels { color, properties, layers };
+            // Keep every panel exactly once, whatever the file says.
+            let mut order: Vec<Panel> = Vec::new();
+            for p in l.order.into_iter().chain(Panel::DEFAULT_ORDER) {
+                if !order.contains(&p) {
+                    order.push(p);
+                }
+            }
+            self.panel_order = order;
+            self.panel_heights = l.heights.iter().filter(|(_, h)| h.is_finite() && *h >= PANEL_MIN).copied().collect();
+            self.open_strip = l.history_open.then_some(0);
+        }
+        self.apply_prefs();
+    }
+
+    /// Preferences that take effect straight away.
+    fn apply_prefs(&mut self) {
+        let limit = self.prefs.history_states.clamp(5, 1000) as usize;
+        for d in &mut self.docs {
+            d.history.set_limit(limit);
+        }
+        self.pen_pressure = self.prefs.pen_pressure;
+    }
+
+    /// Saves preferences when quitting, with the current layout if it should be remembered.
+    fn save_prefs_on_quit(&mut self) {
+        self.prefs.pen_pressure = self.pen_pressure;
+        self.prefs.layout = self.prefs.remember_layout.then(|| SavedLayout {
+            workspace: self.workspace,
+            dock_width: self.dock_width,
+            panels: [self.panels.color, self.panels.properties, self.panels.layers],
+            order: self.panel_order.clone(),
+            heights: self.panel_heights.iter().map(|(p, h)| (*p, *h)).collect(),
+            history_open: self.open_strip.is_some(),
+        });
+        let _ = self.prefs.save();
     }
 
     /// Loads saved tool presets (a missing or unreadable file just means none).
@@ -3806,6 +3928,13 @@ impl Photo {
                 _ => Task::none(),
             };
         }
+        if self.prefs_dialog.is_some() {
+            return match key.as_ref() {
+                Key::Named(Named::Escape) => self.update(Message::PrefsCancel),
+                Key::Named(Named::Enter) => self.update(Message::PrefsOk),
+                _ => Task::none(),
+            };
+        }
         if self.dialog.is_some() {
             return match key.as_ref() {
                 Key::Named(Named::Escape) => self.update(Message::DialogCancel),
@@ -3843,6 +3972,7 @@ impl Photo {
                 "1" => Some(Message::ZoomTo(Zoom::Fixed(1.0))),
                 ";" | ":" if shift => Some(Message::ToggleSnap),
                 "o" => Some(Message::OpenDialog),
+                "k" => Some(Message::OpenPreferences),
                 "n" if !shift => Some(Message::NewDocDialog),
                 "a" => Some(Message::SelectAll),
                 "i" if shift => Some(Message::InvertSelection),
@@ -4212,6 +4342,34 @@ mod tests {
         let _ = app.update(Message::ToggleLockPosition);
         let _ = app.update(Message::Nudge(3.0, 0.0));
         assert_eq!(px(&app, 4, 5)[3], 255, "moving refused");
+    }
+
+    #[test]
+    fn preferences_apply_live_cancel_restores_and_layout_comes_back() {
+        let (mut app, _) = Photo::new();
+        white(&mut app, 20, 20);
+        let _ = app.update(Message::OpenPreferences);
+        let mut p = app.prefs.clone();
+        p.history_states = 5;
+        p.pen_pressure = false;
+        let _ = app.update(Message::PrefsSet(Box::new(p)));
+        assert!(!app.pen_pressure, "applies straight away");
+        for _ in 0..8 {
+            let _ = app.update(Message::AddLayer);
+        }
+        assert_eq!(app.doc().unwrap().history.labels().0.len(), 5, "history limited");
+        let _ = app.update(Message::PrefsCancel);
+        assert!(app.pen_pressure && app.prefs.history_states == 100);
+
+        // The saved layout is restored at startup (only when remembering is on).
+        app.panel_order = vec![Panel::Layers, Panel::Color, Panel::Properties];
+        app.dock_width = 400.0;
+        app.save_prefs_on_quit();
+        let saved = app.prefs.clone();
+        let (mut fresh, _) = Photo::new();
+        fresh.prefs = saved;
+        fresh.apply_startup_prefs();
+        assert_eq!((fresh.panel_order[0], fresh.dock_width), (Panel::Layers, 400.0));
     }
 
     #[test]

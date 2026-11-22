@@ -176,7 +176,7 @@ pub fn new_document(app: &Photo) -> Option<Element<'_, Message>> {
     Some(opaque(center(card).style(scrim)).into())
 }
 
-fn card_style(_: &iced::Theme) -> container::Style {
+pub(super) fn card_style(_: &iced::Theme) -> container::Style {
     container::Style {
         background: Some(BG_PANEL.into()),
         border: iced::Border { color: BORDER_SUBTLE, width: 1.0, radius: 8.0.into() },
@@ -185,7 +185,7 @@ fn card_style(_: &iced::Theme) -> container::Style {
     }
 }
 
-fn scrim(_: &iced::Theme) -> container::Style {
+pub(super) fn scrim(_: &iced::Theme) -> container::Style {
     container::Style { background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.45).into()), ..Default::default() }
 }
 
