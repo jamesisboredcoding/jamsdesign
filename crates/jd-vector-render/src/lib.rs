@@ -5,6 +5,7 @@
 //! No iced here, so export, thumbnails, tests and (later) MCP renders all work headless.
 
 pub mod pdf;
+pub mod place;
 pub mod raster;
 pub mod svg;
 mod svgin;

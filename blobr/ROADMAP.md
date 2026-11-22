@@ -160,12 +160,18 @@ CLI argument as a file to open. Names are provisional until Step 0.
         shows distances while the tab is open
   - [ ] Smart animate, scroll behaviour, prototype flows saved per page, a separate window
 - [ ] Step 7: interop and moving off Figma
-  - Full SVG import and export, PDF export
-  - Spike: one-time import of Figma files through the Figma REST API's JSON (needs a
-    personal token, and it's a handful of calls rather than one per edit)
-  - Move the suite's mockups (Photosplash, Cinematica, Blobr, the logos) into `.jdb` files in
-    the repo, so design work no longer depends on Figma
-  - Place a `.jdb` frame into Photosplash as a layer
+  - [x] SVG import (File > Import SVG, or paste SVG markup): shapes, groups, gradients,
+        strokes, images and text as outlines, through usvg (`jd_vector_render::import_svg`)
+  - [x] SVG export; PDF export with a page per frame (vector, via svg2pdf)
+  - [x] Figma import: `jd-figma` turns the REST API's file JSON into a document (frames,
+        auto layout, shapes, vectors from Figma's geometry, text, fills incl. images,
+        strokes, effects, components); `cargo run -p jd-figma --bin figma2jdb -- <file URL>
+        out.jdb` with `FIGMA_TOKEN` set fetches it (2 API calls + image downloads). Instances
+        come in as frames, component sets as frames of variants, no variables/styles
+  - [ ] Move the suite's mockups (Photosplash, Cinematica, Blobr, the logos) into `.jdb`
+        files in the repo (needs a Figma token: run figma2jdb on the mockup file)
+  - [x] `jd_vector_render::place`: a `.jdb` file's frames and one as RGBA, for Photosplash
+  - [ ] Photosplash File > Place uses it (Photosplash's side)
 
 - [ ] Step 8: MCP (`jd-mcp` + `blobr-mcp`), the final touch
   - Transport: stdio, so it can be added to Claude Code with a single command

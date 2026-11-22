@@ -2056,6 +2056,16 @@ name = "jd-core"
 version = "0.1.0"
 
 [[package]]
+name = "jd-figma"
+version = "0.1.0"
+dependencies = [
+ "jd-core",
+ "jd-vector",
+ "jd-vector-render",
+ "serde_json",
+]
+
+[[package]]
 name = "jd-gpu"
 version = "0.1.0"
 dependencies = [
