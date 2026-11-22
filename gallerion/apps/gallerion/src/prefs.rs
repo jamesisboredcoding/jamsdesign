@@ -65,6 +65,8 @@ pub struct Prefs {
     /// Grid line spacing (document pixels) and how many parts each square is split into.
     pub grid_spacing: u32,
     pub grid_subdivisions: u32,
+    /// Files opened or saved lately, newest first (the Home screen).
+    pub recent: Vec<PathBuf>,
     pub layout: Option<SavedLayout>,
 }
 
@@ -81,6 +83,7 @@ impl Default for Prefs {
             rulers: false,
             grid_spacing: 100,
             grid_subdivisions: 4,
+            recent: Vec::new(),
             layout: None,
         }
     }

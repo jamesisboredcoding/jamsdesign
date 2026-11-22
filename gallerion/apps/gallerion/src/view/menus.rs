@@ -189,6 +189,18 @@ fn menu_bar(app: &Photo, i: usize) -> Vec<MenuEntry<'_, Message>> {
         "File" => vec![
             item("New...", "Ctrl+N", true, Message::NewDocDialog),
             item("Open...", "Ctrl+O", true, Message::OpenDialog),
+            MenuEntry::Submenu("Open Recent", {
+                let mut v: Vec<_> = app
+                    .prefs
+                    .recent
+                    .iter()
+                    .take(10)
+                    .filter_map(|p| Some(item(p.file_name()?.to_str()?, "", true, Message::Open(vec![p.clone()]))))
+                    .collect();
+                v.push(Separator);
+                v.push(item("Clear Recent File List", "", !app.prefs.recent.is_empty(), Message::ClearRecent));
+                v
+            }),
             item("Place...", "", doc, Message::Place),
             Separator,
             item("Close", "Ctrl+W", doc, Message::RequestCloseDoc(app.active)),

@@ -155,7 +155,14 @@ pub fn options_bar(app: &Photo) -> Element<'_, Message> {
         tooltip::Position::Bottom,
     );
     let mut bar = row![
-        hover_tip(icon(Icon::Home, 16.0, TEXT_MUTED), "Home screen (not available yet)", tooltip::Position::Bottom),
+        hover_tip(
+            button(icon(Icon::Home, 16.0, if app.home { ICON } else { TEXT_SECONDARY }))
+                .padding(Padding::from([2, 4]))
+                .style(style::ghost(app.home))
+                .on_press(Message::ToggleHome),
+            if app.home { "Back to the document" } else { "Home screen: recent files" },
+            tooltip::Position::Bottom,
+        ),
         vline(20.0, BORDER_SUBTLE),
         presets,
     ]

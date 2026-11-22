@@ -6,6 +6,7 @@ mod dialog;
 mod layer_style;
 mod dock;
 pub mod field;
+mod home;
 mod menus;
 mod prefs;
 

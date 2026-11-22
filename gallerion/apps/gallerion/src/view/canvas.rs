@@ -8,14 +8,13 @@ use iced::keyboard;
 use iced::mouse::{self, ScrollDelta};
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke};
 use iced::widget::shader::{self, Viewport};
-use iced::widget::{Canvas, Shader, button, column, container, mouse_area, row, stack, text};
+use iced::widget::{Canvas, Shader, mouse_area, stack};
 use iced::{Color, Element, Fill, Point, Rectangle, Renderer, Theme, Vector};
 use jd_gpu::{Scene, SceneLayer, View, wgpu};
 use jd_raster::selection::{Combine, Segment};
 use jd_raster::Guide;
 use jd_raster::transform::Affine;
-use jd_ui::widget::bold;
-use jd_ui::{Icon, icon, style, tokens::*};
+use jd_ui::tokens::*;
 
 use crate::app::{Message, Pen, Photo, Shape};
 use crate::tool::Tool;
@@ -46,8 +45,8 @@ impl Ants {
 }
 
 pub fn view(app: &Photo) -> Element<'_, Message> {
-    let Some((origin, zoom)) = app.doc_origin() else {
-        return empty_state(app);
+    let Some((origin, zoom)) = app.doc_origin().filter(|_| !app.home) else {
+        return super::home::view(app);
     };
     let open = app.doc().expect("doc_origin implies a document");
     let doc = &open.doc;
@@ -182,34 +181,10 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
         .into()
 }
 
-fn empty_state(app: &Photo) -> Element<'_, Message> {
-    let message = if app.loading > 0 { "Opening…" } else { "No image open" };
-    let open = button(text("Open…").size(TEXT_SIZE).font(bold()))
-        .padding([6, 16])
-        .style(style::primary)
-        .on_press(Message::OpenDialog);
-    let new = button(text("New…").size(TEXT_SIZE))
-        .padding([6, 16])
-        .style(style::ghost(true))
-        .on_press(Message::NewDocDialog);
-    // Still report the viewport size so "fit" is right when the first image arrives.
-    let sizer = Canvas::new(Sizer { bounds: app.canvas_bounds }).width(Fill).height(Fill);
-    stack![
-        sizer,
-        container(
-            column![
-                icon(Icon::Image, 48.0, TEXT_MUTED),
-                text(message).size(TEXT_SIZE).color(TEXT_SECONDARY),
-                row![new, open].spacing(10),
-                text("Ctrl+N new · Ctrl+O open").size(TEXT_SIZE_SMALL).color(TEXT_MUTED),
-            ]
-            .spacing(10)
-            .align_x(iced::Alignment::Center),
-        )
-        .center(Fill)
-        .style(style::fill(BG_CANVAS)),
-    ]
-    .into()
+/// An invisible canvas that keeps reporting the viewport size while no document shows, so
+/// "fit" is right when the first image arrives.
+pub fn sizer(app: &Photo) -> Element<'_, Message> {
+    Canvas::new(Sizer { bounds: app.canvas_bounds }).width(Fill).height(Fill).into()
 }
 
 /// Reports the canvas bounds while no document is open.

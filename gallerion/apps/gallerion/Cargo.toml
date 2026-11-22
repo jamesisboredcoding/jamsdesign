@@ -11,6 +11,7 @@ jd-raster.workspace = true
 jd-ui.workspace = true
 iced.workspace = true
 # Rasterises the app logo for the window icon (same version iced uses).
+image.workspace = true
 resvg = { version = "0.45", default-features = false }
 jd-io.workspace = true
 jd-ai.workspace = true

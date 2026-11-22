@@ -1493,6 +1493,7 @@ dependencies = [
  "arboard",
  "iced",
  "iced_winit",
+ "image",
  "jd-ai",
  "jd-core",
  "jd-gpu",

@@ -397,6 +397,14 @@ pub struct Snap {
     pub grid: bool,
 }
 
+/// A recent file on the Home screen.
+#[derive(Debug, Clone)]
+pub struct RecentItem {
+    pub path: PathBuf,
+    pub thumb: Option<iced::widget::image::Handle>,
+    pub modified: Option<std::time::SystemTime>,
+}
+
 /// View > Rulers and View > Show: what's drawn over the canvas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Extras {
@@ -557,6 +565,10 @@ pub struct Photo {
     pub workspace: Workspace,
     pub snap: Snap,
     pub extras: Extras,
+    /// The Home screen is showing (it also shows whenever nothing is open).
+    pub home: bool,
+    /// Recent files as last read from disk, for the Home screen.
+    pub recent: Vec<RecentItem>,
     /// The value box being typed into, if any.
     pub field_edit: Option<FieldEdit>,
     /// Fingerprint of the image we last put on the system clipboard (pasting it back uses our
@@ -730,6 +742,14 @@ pub enum Message {
     // Snapping
     ToggleSnap,
     SnapTo(SnapTo),
+
+    // Home screen
+    ToggleHome,
+    /// Re-reads the recent files' thumbnails and dates.
+    RefreshRecent,
+    RecentLoaded(Vec<crate::recent::Entry>),
+    ForgetRecent(PathBuf),
+    ClearRecent,
 
     // Rulers, guides and grid
     ToggleRulers,
@@ -1062,6 +1082,8 @@ impl Photo {
             workspace: Workspace::Essentials,
             snap: Snap { on: true, bounds: true, layers: true, guides: true, grid: true },
             extras: Extras { rulers: false, guides: true, grid: false, lock_guides: false },
+            home: false,
+            recent: Vec::new(),
             field_edit: None,
             last_copy_stamp: None,
             pen_tool: Default::default(),
@@ -1113,7 +1135,8 @@ impl Photo {
         app.apply_startup_prefs();
         let args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
         let open = if args.is_empty() { Task::none() } else { Task::done(Message::Open(args)) };
-        (app, Task::batch([window::oldest().map(Message::WindowOpened), open]))
+        let recent = app.refresh_recent();
+        (app, Task::batch([window::oldest().map(Message::WindowOpened), open, recent]))
     }
 
     pub fn doc(&self) -> Option<&OpenDoc> {
@@ -1966,6 +1989,7 @@ impl Photo {
                     let open = self.docs.iter().position(|d| d.path.as_deref() == Some(p.as_path()));
                     if let Some(i) = open {
                         self.active = i;
+                        self.home = false;
                     }
                     open.is_none()
                 });
@@ -1982,8 +2006,10 @@ impl Photo {
                 self.loading = self.loading.saturating_sub(1);
                 match result {
                     Ok(doc) => {
+                        let thumb = self.remember_recent(&path, &doc);
                         self.push_doc(*doc, Some(path));
                         self.notice = None;
+                        return thumb;
                     }
                     Err(e) => self.error(format!("Couldn't open {}: {e}", file_name(&path))),
                 }
@@ -2017,13 +2043,16 @@ impl Photo {
                         d.doc.name = file_name(&path);
                         d.path = Some(path.clone());
                         self.info(format!("Saved {}", file_name(&path)));
+                        let doc_copy = self.docs[i].doc.clone();
+                        let thumb = self.remember_recent(&path, &doc_copy);
                         // Edits made while saving leave it dirty: keep asking in that case.
                         if let Some(c) = self.confirm.filter(|c| c.doc == doc)
                             && !self.docs[i].is_dirty()
                         {
                             self.confirm = None;
-                            return self.finish_close(i, c.then);
+                            return Task::batch([thumb, self.finish_close(i, c.then)]);
                         }
+                        return thumb;
                     }
                     Err(e) => {
                         self.confirm = None;
@@ -2074,6 +2103,7 @@ impl Photo {
             Message::SelectDoc(i) => {
                 if i < self.docs.len() {
                     self.active = i;
+                    self.home = false;
                     self.renaming = None;
                 }
             }
@@ -2547,6 +2577,31 @@ impl Photo {
                     SnapTo::All => (s.bounds, s.layers, s.guides, s.grid) = (true, true, true, true),
                     SnapTo::None => (s.bounds, s.layers, s.guides, s.grid) = (false, false, false, false),
                 }
+            }
+            Message::ToggleHome => {
+                self.home = !self.home && !self.docs.is_empty();
+                return self.refresh_recent();
+            }
+            Message::RefreshRecent => return self.refresh_recent(),
+            Message::RecentLoaded(entries) => {
+                self.recent = entries
+                    .into_iter()
+                    .map(|e| RecentItem {
+                        path: e.path,
+                        thumb: e.thumb.map(|(w, h, px)| iced::widget::image::Handle::from_rgba(w, h, px)),
+                        modified: e.modified,
+                    })
+                    .collect();
+            }
+            Message::ForgetRecent(path) => {
+                self.prefs.recent.retain(|p| *p != path);
+                self.recent.retain(|r| r.path != path);
+                let _ = self.prefs.save();
+            }
+            Message::ClearRecent => {
+                self.prefs.recent.clear();
+                self.recent.clear();
+                let _ = self.prefs.save();
             }
             Message::ToggleRulers => {
                 self.extras.rulers = !self.extras.rulers;
@@ -3109,6 +3164,7 @@ impl Photo {
     }
 
     fn push_doc(&mut self, mut doc: Document, path: Option<PathBuf>) {
+        self.home = false;
         let id = self.next_doc_id;
         self.next_doc_id += 1;
         // Opened images (not .jdp documents, which keep their own) follow Preferences.
@@ -3134,6 +3190,25 @@ impl Photo {
             last_selection: None,
         });
         self.active = self.docs.len() - 1;
+    }
+
+    /// Puts a file just opened or saved at the top of the recent files, and caches its
+    /// thumbnail (then shows the list again with it).
+    fn remember_recent(&mut self, path: &Path, doc: &Document) -> Task<Message> {
+        let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        crate::recent::remember(&mut self.prefs.recent, &path);
+        let _ = self.prefs.save();
+        let doc = doc.clone();
+        Task::perform(async move { crate::recent::store_thumb(path, doc) }, |_| Message::RefreshRecent)
+    }
+
+    /// Reads the recent files' thumbnails and dates off the UI thread.
+    fn refresh_recent(&self) -> Task<Message> {
+        if cfg!(test) {
+            return Task::none();
+        }
+        let paths = self.prefs.recent.clone();
+        Task::perform(async move { crate::recent::load(paths) }, Message::RecentLoaded)
     }
 
     fn close_doc(&mut self, i: usize) {
@@ -3357,6 +3432,8 @@ impl Photo {
             m,
             Message::CursorMoved(_)
                 | Message::CanvasBounds(_)
+                | Message::RefreshRecent
+                | Message::RecentLoaded(_)
                 | Message::Tablet(_)
                 | Message::TabletHandles(_)
                 | Message::WindowOpened(_)
@@ -3385,6 +3462,8 @@ impl Photo {
         matches!(
             m,
             Message::MoveBegin(_)
+                | Message::RefreshRecent
+                | Message::RecentLoaded(_)
                 | Message::MoveTo(_)
                 | Message::MoveEnd
                 | Message::TransformGrab(..)
@@ -5174,6 +5253,24 @@ mod tests {
         assert_eq!(doc.layers().len(), 4);
         assert_eq!(doc.layers()[3].pixels.pixel(49, 49), [255, 0, 0, 255]);
         assert_eq!(doc.layers()[3].pixels.pixel(49, 52)[3], 0);
+    }
+
+    #[test]
+    fn opened_files_are_remembered_and_home_toggles() {
+        let (mut app, _) = Photo::new();
+        let path = PathBuf::from("/nonexistent/a.png");
+        let _ = app.update(Message::Loaded(path.clone(), Ok(Box::new(Document::new("a.png", 10, 10)))));
+        assert_eq!(app.prefs.recent, [path.clone()]);
+        assert!(!app.home);
+        let _ = app.update(Message::ToggleHome);
+        assert!(app.home);
+        let _ = app.update(Message::Open(vec![path.clone()]));
+        assert!(!app.home, "opening an open file goes back to it");
+        let _ = app.update(Message::ToggleHome);
+        let _ = app.update(Message::SelectDoc(0));
+        assert!(!app.home);
+        let _ = app.update(Message::ForgetRecent(path));
+        assert!(app.prefs.recent.is_empty());
     }
 
     #[test]

@@ -140,6 +140,10 @@ left-click in, right-click out.
       Guides (Ctrl+;) / Grid (Ctrl+'), Lock Guides (Alt+Ctrl+;), Clear Guides; Snap To Guides
       and Grid; grid spacing and subdivisions in Preferences. Guides are undoable, follow
       crops and rotations, and are saved in .jdp
+- [x] 6k: Home screen (the Home button in the options bar, and whenever nothing is open):
+      New / Open and the recent files as thumbnails (cached in
+      `~/.cache/jamsdesign/gallerion-thumbs/` when a file is opened or saved; right-click one
+      to remove it); File > Open Recent
 - [ ] 6: PSD import, Flatpak
 
 ## App icon
