@@ -1,3 +1,0 @@
-[net]
-# libgit2 fails to clone on this machine; the git CLI works.
-git-fetch-with-cli = true

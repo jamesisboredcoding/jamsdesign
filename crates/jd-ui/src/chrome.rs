@@ -14,7 +14,7 @@ use iced::{Element, Fill, Length, Padding, Point, Size, Subscription, Task};
 use crate::icon::{Icon, icon};
 use crate::style;
 use crate::tokens::*;
-use crate::widget::{MenuEntry, menu};
+use crate::widget::{MenuEntry, menu, menu_height};
 
 /// Height of the title bar. Dropdowns open just below it.
 pub const TITLE_BAR_HEIGHT: f32 = 30.0;
@@ -258,6 +258,9 @@ pub fn resize_edges<'a, M: Clone + 'a>(map: impl Fn(Event) -> M + 'a) -> Element
 /// A popup menu at `at` (window coordinates), kept inside the window, over a click-catcher
 /// that sends `on_dismiss`. For title-bar dropdowns pass `below_title_bar`: the catcher then
 /// leaves the title bar uncovered, so clicking or hovering another title switches menus.
+/// `open_sub` and `on_hover` drive submenus as in [`menu`]; an app without submenus can pass
+/// `None` and a closure returning a no-op message.
+#[allow(clippy::too_many_arguments)]
 pub fn popup<'a, M: Clone + 'a>(
     entries: Vec<MenuEntry<'a, M>>,
     width: f32,
@@ -265,10 +268,10 @@ pub fn popup<'a, M: Clone + 'a>(
     window: Size,
     below_title_bar: bool,
     on_dismiss: M,
+    open_sub: Option<usize>,
+    on_hover: impl Fn(Option<usize>) -> M + 'a,
 ) -> Element<'a, M> {
-    let items = entries.iter().filter(|e| !matches!(e, MenuEntry::Separator)).count() as f32;
-    let seps = entries.len() as f32 - items;
-    let height = items * 27.0 + seps * 9.0 + 8.0;
+    let height = menu_height(&entries);
     let x = at.x.min(window.width - width - 4.0).max(0.0);
     let y = if at.y + height > window.height { (at.y - height).max(0.0) } else { at.y };
 
@@ -280,7 +283,14 @@ pub fn popup<'a, M: Clone + 'a>(
     } else {
         catcher.into()
     };
-    stack![catcher, pin(menu(entries, width)).x(x).y(y)].into()
+    let view = menu(entries, width, open_sub, on_hover);
+    let mut layers = stack![catcher, pin(view.main).x(x).y(y)];
+    if let Some((dy, sub)) = view.sub {
+        // Beside the menu, or on its left when there's no room on the right.
+        let sx = if x + 2.0 * width + 4.0 <= window.width { x + width - 4.0 } else { (x - width + 4.0).max(0.0) };
+        layers = layers.push(pin(sub).x(sx).y(y + dy));
+    }
+    layers.into()
 }
 
 #[cfg(test)]

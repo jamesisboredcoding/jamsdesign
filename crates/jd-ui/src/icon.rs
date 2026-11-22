@@ -35,6 +35,13 @@ icons! {
     Maximize => "maximize", Restore => "restore", Fullscreen => "fullscreen",
     ExitFullscreen => "exit-fullscreen", Image => "image", MarqueeEllipse => "marquee-ellipse",
     PolygonLasso => "polygon-lasso",
+    // Video (Cinematica)
+    MarkIn => "mark-in", MarkOut => "mark-out", GoToIn => "go-to-in", StepBack => "step-back",
+    Play => "play", Pause => "pause", StepForward => "step-forward", GoToOut => "go-to-out",
+    Insert => "insert", Overwrite => "overwrite", Lift => "lift", Extract => "extract",
+    Camera => "camera", Magnet => "magnet", Marker => "marker", Razor => "razor",
+    Ripple => "ripple", Slip => "slip", TrackSelect => "track-select", Wrench => "wrench",
+    Mic => "mic", Music => "music", List => "list", Grid => "grid", Film => "film",
 }
 
 /// Handles are built once: creating one hashes the SVG bytes, which we don't want per frame.

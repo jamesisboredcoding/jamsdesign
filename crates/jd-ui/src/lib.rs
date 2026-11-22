@@ -4,6 +4,7 @@
 pub mod icon;
 pub mod style;
 pub mod theme;
+pub mod chrome;
 pub mod widget;
 
 pub use icon::{Icon, icon};

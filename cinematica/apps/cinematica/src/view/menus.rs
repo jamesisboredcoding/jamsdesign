@@ -15,7 +15,7 @@ const WIDTH: f32 = 250.0;
 
 pub fn popup(app: &Editor) -> Option<Element<'_, Message>> {
     let (i, at) = app.chrome.menu_anchor()?;
-    Some(chrome::popup(entries(app, i), WIDTH, at, app.chrome.size, true, Message::CloseMenu))
+    Some(chrome::popup(entries(app, i), WIDTH, at, app.chrome.size, true, Message::CloseMenu, None, |_| Message::Noop))
 }
 
 fn item<'a>(label: &'a str, shortcut: &'a str, m: Option<Message>) -> MenuEntry<'a, Message> {

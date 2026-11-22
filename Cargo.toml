@@ -1,9 +1,7 @@
 # One workspace for the whole suite: shared crates in crates/, each app in its own folder.
 [workspace]
 resolver = "3"
-members = ["crates/*", "gallerion/apps/*"]
-# Cinematica still has its own workspace until it moves its crates here.
-exclude = ["cinematica"]
+members = ["crates/*", "gallerion/apps/*", "cinematica/apps/*"]
 
 [workspace.package]
 version = "0.1.0"
@@ -60,4 +58,10 @@ opt-level = 3
 opt-level = 3
 
 [profile.dev.package.jd-io]
+opt-level = 3
+
+[profile.dev.package.jd-media]
+opt-level = 3
+
+[profile.dev.package.jd-playback]
 opt-level = 3
