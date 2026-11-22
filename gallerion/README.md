@@ -14,6 +14,10 @@ cargo test --workspace
 
 ## Layout
 
+The suite is one Cargo workspace at the repository root (`Cargo.toml`, `Cargo.lock`,
+`target/`, `vendor/`). Shared crates live in the root `crates/`; this folder holds
+Gallerion's apps. Paths below are from the repository root.
+
 ```
 crates/
   jd-core     colour (linear Rgba, sRGB, HSV), no UI deps
@@ -24,13 +28,16 @@ crates/
   jd-gpu      wgpu renderer: all 24 blend modes, perceptual or linear blending, mips,
               checkerboard. tests/blend_parity.rs checks it against the CPU compositor
   jd-ui       iced theme tokens, icons (icons/*.svg), shared widgets
-apps/
+  jd-ai       on-device background removal (ONNX Runtime)
+gallerion/apps/
   gallerion/    Gallerion, the photo editor (iced 0.14)
   tablet-spike/ standalone pen test window (octotablet), handy for checking a tablet
 ```
 
 Rule: `jd-core`, `jd-raster`, `jd-io` and `jd-gpu` never depend on iced. The iced glue for
-the GPU canvas lives in `apps/gallerion/src/view/canvas.rs`.
+the GPU canvas lives in `gallerion/apps/gallerion/src/view/canvas.rs`. Shared crates are used
+by Cinematica too: a change to one must keep both apps building and `cargo test --workspace`
+passing.
 
 ## Shortcuts (Photoshop-compatible)
 
@@ -99,7 +106,7 @@ left-click in, right-click out.
 The logo is the suite artwork at `../img/gallerion.svg` (embedded at build time). It shows in
 the title bar and as the window icon. On Wayland, KDE takes the taskbar icon from a desktop
 entry matching the app id `dev.jamsdesign.Gallerion`: run `packaging/install-desktop.sh
-[binary]` once to install it for your user (defaults to `target/release/gallerion`).
+[binary]` once to install it for your user (defaults to the workspace's `../target/release/gallerion`).
 
 ## Selections and transforms
 
