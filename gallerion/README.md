@@ -125,7 +125,12 @@ left-click in, right-click out.
       combined first), group opacity, mask and effects; drag layers into and out of groups,
       collapse them (arrow or double-click the folder), Move / Free Transform a whole group,
       Merge Group (Ctrl+E on a group), duplicate and delete with contents; saved in .jdp
-- [ ] 6: PSD import, Flatpak, Pen tool
+- [x] 6h: Pen tool (P): click for corner points, drag for curves, click the first point to
+      close, Enter/Esc to finish, Backspace removes the last point, Ctrl to edit; Path
+      Selection tool (A) drags points, handles (Alt: one side) or whole shapes; Paths panel
+      (next to Layers / Channels): select, new, delete, fill, stroke with the brush, load as
+      selection (Ctrl+Enter). Paths follow crops, resizes and rotations and are saved in .jdp
+- [ ] 6: PSD import, Flatpak
 
 ## App icon
 

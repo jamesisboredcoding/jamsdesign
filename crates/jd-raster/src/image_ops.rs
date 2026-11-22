@@ -39,6 +39,7 @@ impl Document {
             return;
         }
         self.map_layers(x1 - x0, y1 - y0, |g| transform::place(g, x1 - x0, y1 - y0, -(x0 as i64), -(y0 as i64)));
+        self.map_paths(|(x, y)| (x - x0 as f32, y - y0 as f32));
     }
 
     /// Resizes the canvas without scaling pixels. New area on a locked background layer is
@@ -46,6 +47,7 @@ impl Document {
     pub fn canvas_size(&mut self, w: u32, h: u32, anchor: Anchor, fill: [u8; 3]) {
         let dx = ((w as f32 - self.width as f32) * anchor.0).round() as i64;
         let dy = ((h as f32 - self.height as f32) * anchor.1).round() as i64;
+        self.map_paths(|(x, y)| (x + dx as f32, y + dy as f32));
         let backgrounds: Vec<bool> = self.layers().iter().enumerate().map(|(i, l)| i == 0 && l.locked).collect();
         let grids: Vec<TileGrid> = self
             .layers()
@@ -76,12 +78,21 @@ impl Document {
 
     /// Scales every layer to `w`×`h` (Image Size).
     pub fn resize_image(&mut self, w: u32, h: u32) {
+        let (sx, sy) = (w as f32 / self.width as f32, h as f32 / self.height as f32);
+        self.map_paths(|(x, y)| (x * sx, y * sy));
         self.map_layers(w, h, |g| transform::resize(g, w, h));
     }
 
     /// Rotates the canvas by quarter turns clockwise (1 = 90° CW, 2 = 180°, 3 = 90° CCW).
     pub fn rotate_canvas(&mut self, quarter_turns: u32) {
         let (w, h) = (self.width, self.height);
+        let (wf, hf) = (w as f32, h as f32);
+        match quarter_turns % 4 {
+            1 => self.map_paths(|(x, y)| (hf - y, x)),
+            2 => self.map_paths(|(x, y)| (wf - x, hf - y)),
+            3 => self.map_paths(|(x, y)| (y, wf - x)),
+            _ => {}
+        }
         match quarter_turns % 4 {
             1 => self.map_layers(h, w, |g| transform::remap(g, h, w, |x, y| (y, h - 1 - x))),
             2 => self.map_layers(w, h, |g| transform::remap(g, w, h, |x, y| (w - 1 - x, h - 1 - y))),
@@ -92,6 +103,8 @@ impl Document {
 
     pub fn flip_canvas(&mut self, horizontal: bool) {
         let (w, h) = (self.width, self.height);
+        let (wf, hf) = (w as f32, h as f32);
+        self.map_paths(|(x, y)| if horizontal { (wf - x, y) } else { (x, hf - y) });
         self.map_layers(w, h, |g| {
             transform::remap(g, w, h, |x, y| if horizontal { (w - 1 - x, y) } else { (x, h - 1 - y) })
         });
@@ -145,6 +158,12 @@ impl Document {
         self.remove_layer(upper_id);
         self.set_active(lower_id);
         true
+    }
+
+    fn map_paths(&mut self, f: impl Fn((f32, f32)) -> (f32, f32) + Copy) {
+        for p in &mut self.paths {
+            p.map(f);
+        }
     }
 
     /// Merge Group: the group and everything in it become one layer in its place.
@@ -231,11 +250,14 @@ impl Document {
 
     /// Flattens to one locked "Background" over white; hidden layers are discarded.
     pub fn flatten(&mut self) {
-        let visible: Vec<&Layer> = self.layers().iter().filter(|l| l.visible).collect();
-        let merged = merge(&visible, self.blend_space, self.width, self.height, Some([255, 255, 255]));
+        // Every layer: hidden ones (and layers in hidden groups) draw nothing.
+        let all: Vec<&Layer> = self.layers().iter().collect();
+        let merged = merge(&all, self.blend_space, self.width, self.height, Some([255, 255, 255]));
         let (name, w, h) = (self.name.clone(), self.width, self.height);
         let mut flat = Document::new(name, w, h);
         flat.blend_space = self.blend_space;
+        // Paths aren't layers: they stay.
+        (flat.paths, flat.active_path) = (self.paths.clone(), self.active_path);
         let bg = flat.layers()[0].id;
         if let Some(l) = flat.layer_mut(bg) {
             l.pixels = merged;

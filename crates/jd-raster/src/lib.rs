@@ -16,6 +16,7 @@ pub mod mask;
 pub mod render;
 mod history;
 pub mod paint;
+pub mod path;
 pub mod selection;
 pub mod transform;
 mod tile;
@@ -131,6 +132,9 @@ pub struct Document {
     /// thumbnail is targeted). Only meaningful while the active layer has a mask; see
     /// [`Document::editing_mask`].
     pub mask_target: bool,
+    /// Vector paths (the Paths panel), and the one being shown and edited.
+    pub paths: Vec<path::VectorPath>,
+    pub active_path: Option<usize>,
     /// Bottom-to-top, like the compositing order. UIs usually display this reversed.
     layers: Vec<Layer>,
     active: Option<LayerId>,
@@ -164,6 +168,8 @@ impl Document {
             blend_space: BlendSpace::default(),
             selection: None,
             mask_target: false,
+            paths: Vec::new(),
+            active_path: None,
             layers: Vec::new(),
             active: None,
             next_id: 0,

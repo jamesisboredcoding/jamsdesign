@@ -140,9 +140,12 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
             || app.new_doc.is_some()
             || app.confirm.is_some()
             || app.dialog.is_some()
+            || app.prefs_dialog.is_some()
             || app.palette.is_some(),
         crop_box: app.crop_box,
         typing: app.typing.as_ref().map(|t| t.layout),
+        path: doc.active_path.and_then(|i| doc.paths.get(i)),
+        pen_open: app.pen_tool.open,
         // Where the clone source is: the set point, or (once aligned) cursor + offset.
         clone_source: app.effective_tool().clones().then(|| match (app.clone_offset, app.cursor) {
             (Some((dx, dy)), Some(c)) => Some(Point::new(c.x + dx as f32, c.y + dy as f32)),
@@ -317,6 +320,9 @@ struct Overlay<'a> {
     clone_source: Option<Point>,
     /// Text being typed: its box and caret.
     typing: Option<jd_raster::text::Layout>,
+    /// The path shown (the Paths panel's active one), and the piece the Pen is drawing.
+    path: Option<&'a jd_raster::path::VectorPath>,
+    pen_open: Option<usize>,
 }
 
 /// A marquee or lasso being dragged.
@@ -348,6 +354,8 @@ struct DragState {
     picking: bool,
     moving: bool,
     transforming: bool,
+    /// Pen / Path Selection press in progress.
+    pathing: bool,
     select: Option<SelectDrag>,
     /// Gradient line, shape box or crop box being dragged (document px).
     box_drag: Option<(Point, Point)>,
@@ -547,6 +555,10 @@ impl canvas::Program<Message> for Overlay<'_> {
                         Some(canvas::Action::request_redraw().and_capture())
                     }
                     Tool::Wand => publish(Message::Wand { at: doc, combine: self.combine(m) }),
+                    Tool::Pen | Tool::Select => {
+                        state.pathing = true;
+                        publish(Message::PathPress { at: doc, ctrl: m.command(), alt: m.alt() })
+                    }
                     Tool::Type => publish(Message::TypeClick(doc)),
                     Tool::Gradient | Tool::Shape | Tool::EllipseShape | Tool::Crop => {
                         state.box_drag = Some((doc, doc));
@@ -581,6 +593,9 @@ impl canvas::Program<Message> for Overlay<'_> {
                 }
                 if std::mem::take(&mut state.moving) {
                     return publish(Message::MoveEnd);
+                }
+                if std::mem::take(&mut state.pathing) {
+                    return publish(Message::PathRelease);
                 }
                 if std::mem::take(&mut state.transforming) {
                     return publish(Message::TransformRelease);
@@ -622,6 +637,13 @@ impl canvas::Program<Message> for Overlay<'_> {
                 }
                 let Some(p) = p else { return None };
                 let doc = self.to_doc(p);
+                if state.pathing {
+                    return publish(Message::PathDrag { at: doc, shift: m.shift() });
+                }
+                if self.tool == Tool::Pen && self.pen_open.is_some() {
+                    // The rubber band to the next point follows the pointer.
+                    return Some(canvas::Action::request_redraw());
+                }
                 if let Some(poly) = &mut state.poly {
                     poly.hover = doc;
                     return Some(canvas::Action::request_redraw());
@@ -832,6 +854,48 @@ impl canvas::Program<Message> for Overlay<'_> {
                 let r = Path::rectangle(h - Vector::new(HANDLE / 2.0, HANDLE / 2.0), iced::Size::new(HANDLE, HANDLE));
                 frame.fill(&r, Color::WHITE);
                 frame.stroke(&r, Stroke::default().with_width(1.0).with_color(ACCENT_PRIMARY));
+            }
+        }
+
+        // The active path; its points and handles while a path tool is in hand.
+        if let Some(path) = self.path {
+            let scr = |q: (f32, f32)| self.to_screen(Point::new(q.0, q.1));
+            let curves = Path::new(|b| {
+                for line in path.polylines() {
+                    let mut pts = line.into_iter().map(scr);
+                    if let Some(first) = pts.next() {
+                        b.move_to(first);
+                        for p in pts {
+                            b.line_to(p);
+                        }
+                    }
+                }
+            });
+            frame.stroke(&curves, Stroke::default().with_width(2.5).with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.45)));
+            frame.stroke(&curves, Stroke::default().with_width(1.0).with_color(Color::from_rgb8(0x5A, 0xA9, 0xFF)));
+            if matches!(self.tool, Tool::Pen | Tool::Select) {
+                // Rubber band from the last point to the pointer while drawing.
+                if self.tool == Tool::Pen
+                    && let (Some(sub), Some(c)) = (self.pen_open, cursor.position_in(bounds))
+                    && let Some(last) = path.subpaths.get(sub).and_then(|s| s.anchors.last())
+                {
+                    let band = Path::new(|b| {
+                        b.move_to(scr(last.p));
+                        b.bezier_curve_to(scr(last.h_out), c, c);
+                    });
+                    frame.stroke(&band, Stroke::default().with_width(1.0).with_color(Color::from_rgba(0.35, 0.66, 1.0, 0.7)));
+                }
+                for a in path.subpaths.iter().flat_map(|s| &s.anchors) {
+                    let p = scr(a.p);
+                    for h in [a.h_in, a.h_out].into_iter().filter(|h| *h != a.p).map(scr) {
+                        let arm = Path::line(p, h);
+                        frame.stroke(&arm, Stroke::default().with_width(1.0).with_color(Color::from_rgb8(0x5A, 0xA9, 0xFF)));
+                        frame.fill(&Path::circle(h, 3.0), Color::from_rgb8(0x5A, 0xA9, 0xFF));
+                    }
+                    let sq = Path::rectangle(p - Vector::new(3.5, 3.5), iced::Size::new(7.0, 7.0));
+                    frame.fill(&sq, Color::WHITE);
+                    frame.stroke(&sq, Stroke::default().with_width(1.0).with_color(Color::from_rgb8(0x2D, 0x7F, 0xE0)));
+                }
             }
         }
 

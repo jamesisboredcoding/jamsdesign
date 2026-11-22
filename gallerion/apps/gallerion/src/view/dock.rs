@@ -270,6 +270,53 @@ fn adjustments(app: &Photo) -> Element<'_, Message> {
 
 /// The Channels tab: the composite image's channels. Clicking one loads it as a selection
 /// (bright = selected), like Ctrl+clicking a channel in Photoshop.
+/// Paths: the document's vector paths (drawn with the Pen tool). The selected one shows on
+/// the canvas; the buttons fill, stroke or select with it.
+fn paths_panel(app: &Photo) -> Element<'_, Message> {
+    let Some(doc) = app.document() else { return label("No document open.").into() };
+    let mut list = column![].spacing(2);
+    for (i, p) in doc.paths.iter().enumerate() {
+        let selected = doc.active_path == Some(i);
+        let points: usize = p.subpaths.iter().map(|s| s.anchors.len()).sum();
+        list = list.push(
+            button(
+                row![
+                    icon(Icon::Pen, 14.0, ICON),
+                    text(&p.name).size(TEXT_SIZE).width(Fill),
+                    text(format!("{points} pts")).size(TEXT_SIZE_SMALL).color(TEXT_MUTED),
+                ]
+                .spacing(8)
+                .align_y(Vertical::Center),
+            )
+            .width(Fill)
+            .padding(Padding::from([6, 8]))
+            .style(style::row(selected))
+            .on_press(Message::SelectPath(Some(i))),
+        );
+    }
+    if doc.paths.is_empty() {
+        list = list.push(label("No paths yet: draw one with the Pen tool (P)."));
+    }
+    let has = doc.active_path.and_then(|i| doc.paths.get(i)).is_some_and(|p| !p.is_empty());
+    let mut actions = row![space::horizontal()].spacing(6).align_y(Vertical::Center);
+    for (ic, msg, tip) in [
+        (Icon::Shape, has.then_some(Message::FillPath), "Fill path with the foreground colour"),
+        (Icon::Brush, has.then_some(Message::StrokePath), "Stroke path with the brush"),
+        (Icon::Marquee, has.then_some(Message::PathToSelection), "Load path as a selection (Ctrl+Enter)"),
+        (Icon::Plus, Some(Message::NewPath), "New path"),
+        (Icon::Trash, doc.active_path.map(|_| Message::DeletePath), "Delete path"),
+    ] {
+        actions = actions.push(hover_tip(icon_button(ic, 14.0, false, msg), tip, tooltip::Position::Top));
+    }
+    column![
+        // Clicking the empty part of the list deselects the path (hides it), like Photoshop.
+        mouse_area(scrollable(list).height(Fill)).on_press(Message::SelectPath(None)),
+        container(actions).padding(Padding::from([4, 8])).style(style::fill(BG_PANEL_HEADER)),
+    ]
+    .spacing(6)
+    .into()
+}
+
 fn channels_panel(app: &Photo) -> Element<'_, Message> {
     let Some(open) = app.doc() else { return label("No document open.").into() };
     let names = ["RGB", "Red", "Green", "Blue"];
@@ -345,11 +392,12 @@ const ROW_HALF: f32 = 21.5;
 
 fn layers_panel(app: &Photo) -> Element<'_, Message> {
     if app.layers_tab != 0 {
-        return framed(Panel::Layers, &["Layers", "Channels"], app.layers_tab, Message::LayersTab, channels_panel(app), Fill);
+        let body = if app.layers_tab == 2 { paths_panel(app) } else { channels_panel(app) };
+        return framed(Panel::Layers, &["Layers", "Channels", "Paths"], app.layers_tab, Message::LayersTab, body, Fill);
     }
 
     let Some(doc) = app.document() else {
-        return framed(Panel::Layers, &["Layers", "Channels"], app.layers_tab, Message::LayersTab, label("No document open."), Fill);
+        return framed(Panel::Layers, &["Layers", "Channels", "Paths"], app.layers_tab, Message::LayersTab, label("No document open."), Fill);
     };
     let active = doc.active();
     let controls = row![
@@ -546,7 +594,7 @@ fn layers_panel(app: &Photo) -> Element<'_, Message> {
 
     // Own layout instead of `panel` so layer rows run edge to edge.
     column![
-        panel_header_grip(&["Layers", "Channels"], 0, Message::LayersTab, Message::PanelGrab(Panel::Layers), Message::OpenPanelMenu(Panel::Layers)),
+        panel_header_grip(&["Layers", "Channels", "Paths"], 0, Message::LayersTab, Message::PanelGrab(Panel::Layers), Message::OpenPanelMenu(Panel::Layers)),
         container(content).padding(Padding::ZERO.top(8)).height(Fill),
     ]
     .height(Fill)

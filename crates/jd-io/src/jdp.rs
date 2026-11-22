@@ -29,6 +29,7 @@ use std::sync::Arc;
 
 use jd_raster::adjust::Adjustment;
 use jd_raster::mask::Mask;
+use jd_raster::path::{Anchor, SubPath, VectorPath};
 use jd_raster::style::{LayerStyle, StrokePosition};
 use jd_raster::text::{Align, TextLayer};
 use jd_raster::{BlendMode, BlendSpace, Document, TILE_SIZE, Tile, TileGrid, composite};
@@ -56,6 +57,24 @@ struct Manifest {
     #[serde(default)]
     active: Option<usize>,
     layers: Vec<LayerEntry>,
+    /// Vector paths (Paths panel).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    paths: Vec<PathEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    active_path: Option<usize>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PathEntry {
+    name: String,
+    subpaths: Vec<SubPathEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SubPathEntry {
+    closed: bool,
+    /// Per anchor: x, y, in-handle x, y, out-handle x, y.
+    anchors: Vec<[f32; 6]>,
 }
 
 const TILE_ENCODING: &str = "deflate";
@@ -308,6 +327,22 @@ pub fn write<W: Write + Seek>(doc: &Document, out: W) -> Result<W, SaveError> {
         tile_encoding: TILE_ENCODING.into(),
         active: doc.layers().iter().position(|l| Some(l.id) == active),
         layers: Vec::new(),
+        paths: doc
+            .paths
+            .iter()
+            .map(|p| PathEntry {
+                name: p.name.clone(),
+                subpaths: p
+                    .subpaths
+                    .iter()
+                    .map(|s| SubPathEntry {
+                        closed: s.closed,
+                        anchors: s.anchors.iter().map(|a| [a.p.0, a.p.1, a.h_in.0, a.h_in.1, a.h_out.0, a.h_out.1]).collect(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+        active_path: doc.active_path,
     };
     // Compress every tile in parallel, then write them in order.
     let jobs: Vec<(String, &[u8])> = doc
@@ -483,6 +518,23 @@ pub fn read<R: Read + Seek>(name: impl Into<String>, input: R) -> Result<Documen
     if let Some(&id) = manifest.active.and_then(|i| ids.get(i)) {
         doc.set_active(id);
     }
+    let finite = |v: &[f32; 6]| v.iter().all(|x| x.is_finite());
+    doc.paths = manifest
+        .paths
+        .iter()
+        .map(|p| VectorPath {
+            name: p.name.clone(),
+            subpaths: p
+                .subpaths
+                .iter()
+                .map(|s| SubPath {
+                    closed: s.closed,
+                    anchors: s.anchors.iter().filter(|v| finite(v)).map(|v| Anchor { p: (v[0], v[1]), h_in: (v[2], v[3]), h_out: (v[4], v[5]) }).collect(),
+                })
+                .collect(),
+        })
+        .collect();
+    doc.active_path = manifest.active_path.filter(|&i| i < doc.paths.len());
     Ok(doc)
 }
 
@@ -574,6 +626,20 @@ mod tests {
         let back = read("t", std::io::Cursor::new(bytes)).unwrap();
         let a = |d: &Document| d.layers().iter().map(|l| l.adjustment.clone()).collect::<Vec<_>>();
         assert_eq!(a(&back), a(&doc));
+    }
+
+    #[test]
+    fn roundtrip_keeps_paths() {
+        let mut doc = Document::blank("t", 20, 20);
+        doc.add_layer("a");
+        let mut p = VectorPath::new("Work Path");
+        p.subpaths.push(SubPath { anchors: vec![Anchor::corner((1.0, 2.0)), Anchor::smooth((10.0, 5.0), (12.0, 9.5))], closed: true });
+        doc.paths.push(p);
+        doc.active_path = Some(0);
+        let bytes = write(&doc, std::io::Cursor::new(Vec::new())).unwrap().into_inner();
+        let back = read("t", std::io::Cursor::new(bytes)).unwrap();
+        assert_eq!(back.paths, doc.paths);
+        assert_eq!(back.active_path, Some(0));
     }
 
     #[test]

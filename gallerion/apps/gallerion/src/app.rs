@@ -541,6 +541,8 @@ pub struct Photo {
     pub snap: Snap,
     /// The value box being typed into, if any.
     pub field_edit: Option<FieldEdit>,
+    /// Pen / Path Selection tool state (the open piece, what a drag moves).
+    pub pen_tool: crate::pen::PenState,
     /// Edit > Preferences, and the open Preferences dialog.
     pub prefs: Prefs,
     pub prefs_dialog: Option<PrefsDialog>,
@@ -714,6 +716,22 @@ pub enum Message {
     SelectPixels,
     ToggleLockPixels,
     ToggleLockPosition,
+
+    // Pen / Path Selection tools and the Paths panel (points in document pixels)
+    PathPress { at: Point, ctrl: bool, alt: bool },
+    PathDrag { at: Point, shift: bool },
+    PathRelease,
+    /// Enter / Esc with the Pen: the open shape is done.
+    PathFinish,
+    /// Backspace with the Pen: removes the last point drawn.
+    PathUndoPoint,
+    SelectPath(Option<usize>),
+    NewPath,
+    DeletePath,
+    /// Ctrl+Enter: Load Path as Selection.
+    PathToSelection,
+    FillPath,
+    StrokePath,
 
     // Edit > Preferences
     OpenPreferences,
@@ -1007,6 +1025,7 @@ impl Photo {
             workspace: Workspace::Essentials,
             snap: Snap { on: true, bounds: true, layers: true },
             field_edit: None,
+            pen_tool: Default::default(),
             prefs: Prefs::default(),
             prefs_dialog: None,
             panel_order: Panel::DEFAULT_ORDER.to_vec(),
@@ -2017,6 +2036,7 @@ impl Photo {
             Message::Undo | Message::Redo | Message::JumpHistory(_) => {
                 self.renaming = None;
                 self.stroke = None;
+                self.pen_tool = Default::default();
                 if let Some(d) = self.doc_mut() {
                     // The name follows the file (Save As renames it), not the edit history.
                     let name = d.doc.name.clone();
@@ -2048,6 +2068,10 @@ impl Photo {
                 }
                 if t == Tool::Type {
                     self.load_fonts();
+                }
+                if t != Tool::Pen {
+                    // Switching tools finishes the shape being drawn.
+                    self.pen_tool.open = None;
                 }
                 self.tool = t;
                 self.slot_tools[t.slot()] = t;
@@ -2203,6 +2227,131 @@ impl Photo {
                 }
                 self.ui_drag = None;
                 self.panel_drop = None;
+            }
+            Message::PathPress { at, ctrl, alt } => {
+                let tol = 6.0 / self.zoom_factor();
+                let editing = self.tool == Tool::Select || ctrl;
+                let Some(d) = self.doc_mut() else { return Task::none() };
+                if editing {
+                    let grab = d.doc.active_path.and_then(|i| d.doc.paths.get(i)).and_then(|p| crate::pen::hit(p, at, tol, alt));
+                    self.pen_tool.grab = grab;
+                    if grab.is_none() && self.tool == Tool::Select {
+                        // Click on nothing: Photoshop's Path Selection deselects; keep the path.
+                        self.pen_tool.open = None;
+                    }
+                    return Task::none();
+                }
+                let mut st = self.pen_tool;
+                self.edit("Pen", None, |doc| {
+                    st.grab = Some(crate::pen::pen_click(doc, &mut st, at, tol));
+                    true
+                });
+                self.pen_tool = st;
+            }
+            Message::PathDrag { at, shift } => {
+                let Some(mut grab) = self.pen_tool.grab else { return Task::none() };
+                // One undo step for the whole drag.
+                self.edit("Edit Path", Some("path-drag"), |doc| {
+                    let Some(p) = doc.active_path.and_then(|i| doc.paths.get_mut(i)) else { return false };
+                    crate::pen::drag(p, &mut grab, at, shift);
+                    true
+                });
+                self.pen_tool.grab = Some(grab);
+            }
+            Message::PathRelease => {
+                self.pen_tool.grab = None;
+                if let Some(d) = self.doc_mut() {
+                    d.history.end_gesture();
+                }
+            }
+            Message::PathFinish => self.pen_tool.open = None,
+            Message::PathUndoPoint => {
+                let Some(sub) = self.pen_tool.open else { return Task::none() };
+                let mut emptied = false;
+                self.edit("Delete Point", None, |doc| {
+                    let Some(p) = doc.active_path.and_then(|i| doc.paths.get_mut(i)) else { return false };
+                    let Some(s) = p.subpaths.get_mut(sub) else { return false };
+                    s.anchors.pop();
+                    if s.anchors.is_empty() {
+                        p.subpaths.remove(sub);
+                        emptied = true;
+                    }
+                    true
+                });
+                if emptied {
+                    self.pen_tool.open = None;
+                }
+            }
+            Message::SelectPath(i) => {
+                self.pen_tool = Default::default();
+                if let Some(d) = self.doc_mut() {
+                    d.doc.active_path = i.filter(|&i| i < d.doc.paths.len());
+                }
+            }
+            Message::NewPath => {
+                self.pen_tool = Default::default();
+                self.edit("New Path", None, |doc| {
+                    let n = doc.paths.iter().filter(|p| p.name.starts_with("Path ")).count() + 1;
+                    doc.paths.push(jd_raster::path::VectorPath::new(format!("Path {n}")));
+                    doc.active_path = Some(doc.paths.len() - 1);
+                    true
+                });
+            }
+            Message::DeletePath => {
+                self.pen_tool = Default::default();
+                self.edit("Delete Path", None, |doc| {
+                    let Some(i) = doc.active_path.filter(|&i| i < doc.paths.len()) else { return false };
+                    doc.paths.remove(i);
+                    doc.active_path = None;
+                    true
+                });
+            }
+            Message::PathToSelection => {
+                let Some(doc) = self.document() else { return Task::none() };
+                let Some(path) = doc.active_path.and_then(|i| doc.paths.get(i)).filter(|p| !p.is_empty()) else {
+                    self.info("Draw a path with the Pen tool (P) first");
+                    return Task::none();
+                };
+                let sel = path.to_selection(doc.width, doc.height);
+                self.apply_selection("Load Path as Selection", sel, Combine::Replace);
+            }
+            Message::FillPath => {
+                let Some(doc) = self.document() else { return Task::none() };
+                let Some(path) = doc.active_path.and_then(|i| doc.paths.get(i)).filter(|p| !p.is_empty()) else { return Task::none() };
+                let area = path.to_selection(doc.width, doc.height);
+                if !self.check_layer_editable() {
+                    return Task::none();
+                }
+                let color = self.fg.to_rgba().to_srgb8();
+                self.edit("Fill Path", None, |doc| {
+                    // Inside the selection too, if there is one.
+                    let mut area = area;
+                    if let Some(sel) = &doc.selection {
+                        area.combine(sel, Combine::Intersect);
+                    }
+                    let (on_mask, color) = (doc.editing_mask(), target_color(doc, color));
+                    let Some(id) = doc.active_id() else { return false };
+                    doc.layer_mut(id).map(|l| selection::fill(l.target_mut(on_mask), &area, color)).is_some()
+                });
+            }
+            Message::StrokePath => {
+                let Some(doc) = self.document() else { return Task::none() };
+                let Some(lines) = doc.active_path.and_then(|i| doc.paths.get(i)).map(|p| p.polylines()).filter(|l| !l.is_empty()) else { return Task::none() };
+                if !self.check_layer_editable() {
+                    return Task::none();
+                }
+                // With the current brush settings, like Photoshop's Stroke Path (Brush).
+                let params = self.brush_params(false, Effect::Paint);
+                self.edit("Stroke Path", None, |doc| {
+                    for line in &lines {
+                        let Some(mut s) = Stroke::begin(doc, params) else { return false };
+                        for &(x, y) in line {
+                            s.add_point(doc, x, y, 1.0);
+                        }
+                        s.finish(doc);
+                    }
+                    true
+                });
             }
             Message::OpenPreferences => {
                 if self.prefs_dialog.is_none() {
@@ -4022,6 +4171,16 @@ impl Photo {
                 _ => {}
             }
         }
+        if self.pen_tool.open.is_some() {
+            match key.as_ref() {
+                Key::Named(Named::Escape) | Key::Named(Named::Enter) if !modifiers.command() => return self.update(Message::PathFinish),
+                Key::Named(Named::Backspace | Named::Delete) => return self.update(Message::PathUndoPoint),
+                _ => {}
+            }
+        }
+        if modifiers.command() && matches!(key.as_ref(), Key::Named(Named::Enter)) {
+            return self.update(Message::PathToSelection);
+        }
         let (cmd, shift, alt) = (modifiers.command(), modifiers.shift(), modifiers.alt());
         let msg = match key.as_ref() {
             Key::Character(c) if cmd => match c.to_lowercase().as_str() {
@@ -4464,6 +4623,47 @@ mod tests {
         assert_eq!(app.document().unwrap().layer(bg).unwrap().parent, Some(g));
         let _ = app.update(Message::Ungroup);
         assert!(app.document().unwrap().layers().iter().all(|l| l.parent.is_none() && !l.is_group()));
+    }
+
+    #[test]
+    fn pen_paths_select_fill_stroke_and_undo() {
+        let (mut app, _) = Photo::new();
+        white(&mut app, 100, 100);
+        let _ = app.update(Message::SelectTool(Tool::Pen));
+        let click = |app: &mut Photo, x: f32, y: f32| {
+            let _ = app.update(Message::PathPress { at: Point::new(x, y), ctrl: false, alt: false });
+            let _ = app.update(Message::PathRelease);
+        };
+        for (x, y) in [(10.0, 10.0), (90.0, 10.0), (90.0, 90.0), (10.0, 90.0), (10.0, 10.0)] {
+            click(&mut app, x, y);
+        }
+        let doc = app.document().unwrap();
+        assert_eq!(doc.paths.len(), 1);
+        assert!(doc.paths[0].subpaths[0].closed, "clicking the first point closes it");
+        assert!(app.pen_tool.open.is_none());
+
+        let _ = app.update(Message::PathToSelection);
+        assert_eq!(app.document().unwrap().selection.as_ref().map(|s| s.get(50, 50)), Some(255));
+        let _ = app.update(Message::Deselect);
+        let _ = app.update(Message::FillPath);
+        assert_eq!(px(&app, 50, 50), [0, 0, 0, 255], "filled with the foreground");
+        assert_eq!(px(&app, 5, 5), [255, 255, 255, 255]);
+        let _ = app.update(Message::Undo);
+        app.fg = Hsv { h: 0.0, s: 1.0, v: 1.0 };
+        app.brush.size = 4.0;
+        app.brush.hardness = 1.0;
+        let _ = app.update(Message::StrokePath);
+        assert_eq!(px(&app, 50, 10), [255, 0, 0, 255], "stroked along the edge");
+        assert_eq!(px(&app, 50, 50), [255, 255, 255, 255]);
+
+        // Ctrl+drag a corner point with the Pen: one undo step for the drag.
+        let _ = app.update(Message::PathPress { at: Point::new(90.0, 90.0), ctrl: true, alt: false });
+        let _ = app.update(Message::PathDrag { at: Point::new(80.0, 85.0), shift: false });
+        let _ = app.update(Message::PathDrag { at: Point::new(70.0, 80.0), shift: false });
+        let _ = app.update(Message::PathRelease);
+        assert_eq!(app.document().unwrap().paths[0].subpaths[0].anchors[2].p, (70.0, 80.0));
+        let _ = app.update(Message::Undo);
+        assert_eq!(app.document().unwrap().paths[0].subpaths[0].anchors[2].p, (90.0, 90.0));
     }
 
     #[test]
