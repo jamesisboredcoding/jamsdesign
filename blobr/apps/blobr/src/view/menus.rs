@@ -1,0 +1,101 @@
+//! Title-bar dropdowns. Items that aren't implemented yet are listed (disabled) with Figma's
+//! shortcuts, so the menus double as a map of what's coming.
+
+use iced::Element;
+use jd_ui::chrome;
+use jd_ui::widget::MenuEntry;
+use jd_vector::ExportFormat;
+
+use crate::app::{Blobr, Message};
+
+pub const MENUS: &[&str] = &["File", "Edit", "View", "Object", "Text", "Arrange", "Plugins", "Window", "Help"];
+pub const MENU_COUNT: usize = MENUS.len();
+
+const WIDTH: f32 = 260.0;
+
+pub fn popup(app: &Blobr) -> Option<Element<'_, Message>> {
+    let (i, at) = app.chrome.menu_anchor()?;
+    Some(chrome::popup(entries(app, i), WIDTH, at, app.chrome.size, true, Message::CloseMenu, None, |_| Message::Noop))
+}
+
+fn item<'a>(label: &'a str, shortcut: &'a str, m: Option<Message>) -> MenuEntry<'a, Message> {
+    MenuEntry::Item(label, shortcut, m.map(|m| Message::Menu(Box::new(m))))
+}
+
+/// Not implemented yet: shown disabled.
+fn todo<'a>(label: &'a str, shortcut: &'a str) -> MenuEntry<'a, Message> {
+    item(label, shortcut, None)
+}
+
+fn entries(app: &Blobr, menu: usize) -> Vec<MenuEntry<'_, Message>> {
+    use MenuEntry::Separator;
+    let sel = !app.selection.is_empty();
+    let on = |cond: bool, m: Message| cond.then_some(m);
+    match MENUS[menu] {
+        "File" => vec![
+            item("New", "Ctrl+N", Some(Message::New)),
+            item("Open...", "Ctrl+O", Some(Message::Open)),
+            Separator,
+            item("Save", "Ctrl+S", Some(Message::Save)),
+            item("Save As...", "Ctrl+Shift+S", Some(Message::SaveAs)),
+            Separator,
+            item("Export as PNG...", "Ctrl+Shift+E", Some(Message::Export(ExportFormat::Png))),
+            item("Export as SVG...", "", Some(Message::Export(ExportFormat::Svg))),
+            Separator,
+            item("Quit", "Ctrl+Q", Some(Message::Quit)),
+        ],
+        "Edit" => vec![
+            item("Undo", "Ctrl+Z", on(app.ed.history.can_undo(), Message::Undo)),
+            item("Redo", "Ctrl+Shift+Z", on(app.ed.history.can_redo(), Message::Redo)),
+            Separator,
+            todo("Cut", "Ctrl+X"),
+            todo("Copy", "Ctrl+C"),
+            todo("Paste", "Ctrl+V"),
+            item("Duplicate", "Ctrl+D", on(sel, Message::Duplicate)),
+            item("Delete", "Delete", on(sel, Message::Delete)),
+            Separator,
+            item("Select All", "Ctrl+A", Some(Message::SelectAll)),
+            item("Select None", "Ctrl+Shift+A", on(sel, Message::Deselect)),
+        ],
+        "View" => vec![
+            item("Zoom In", "Ctrl++", Some(Message::ZoomIn)),
+            item("Zoom Out", "Ctrl+-", Some(Message::ZoomOut)),
+            item("Zoom to 100%", "Shift+0", Some(Message::Zoom100)),
+            item("Zoom to Fit", "Shift+1", Some(Message::ZoomFit)),
+            item("Zoom to Selection", "Shift+2", on(sel, Message::ZoomSelection)),
+            Separator,
+            todo("Rulers", "Shift+R"),
+            todo("Pixel Grid", "Shift+'"),
+            Separator,
+            item("Full Screen", "F11", Some(Message::Chrome(chrome::Event::ToggleFullscreen))),
+        ],
+        "Object" => vec![
+            todo("Group Selection", "Ctrl+G"),
+            todo("Frame Selection", "Ctrl+Alt+G"),
+            item("Add Auto Layout", "Shift+A", on(sel, Message::ToggleAutoLayout)),
+            Separator,
+            item("Create Component", "Ctrl+Alt+K", on(sel, Message::CreateComponent)),
+            item("Detach Instance", "Ctrl+Alt+B", on(sel, Message::Detach)),
+            item("Reset All Overrides", "", on(sel, Message::ResetOverrides)),
+            Separator,
+            todo("Boolean Groups", ""),
+            todo("Flatten Selection", "Ctrl+E"),
+            todo("Outline Stroke", "Ctrl+Shift+O"),
+        ],
+        "Text" => vec![todo("Bold", "Ctrl+B"), todo("Italic", "Ctrl+I"), todo("Underline", "Ctrl+U"), Separator, todo("Text Styles...", "")],
+        "Arrange" => vec![
+            todo("Bring to Front", "Ctrl+]"),
+            todo("Bring Forward", "Ctrl+Shift+]"),
+            todo("Send Backward", "Ctrl+Shift+["),
+            todo("Send to Back", "Ctrl+["),
+            Separator,
+            todo("Align Left", "Alt+A"),
+            todo("Align Center", "Alt+H"),
+            todo("Align Right", "Alt+D"),
+        ],
+        "Plugins" => vec![todo("Manage Plugins...", "")],
+        "Window" => vec![todo("Layers", "Alt+1"), todo("Assets", "Alt+2"), todo("Design", "")],
+        "Help" => vec![todo("Keyboard Shortcuts", "Ctrl+Shift+?"), todo("About Blobr", "")],
+        _ => Vec::new(),
+    }
+}

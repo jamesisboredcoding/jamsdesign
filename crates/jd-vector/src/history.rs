@@ -125,6 +125,26 @@ impl Editor {
         Ok(done)
     }
 
+    /// Like [`apply`](Self::apply), but consecutive batches with the same `gesture` key (every
+    /// step of one drag) make a single undo step. Call [`end_gesture`](Self::end_gesture) when
+    /// the gesture ends.
+    pub fn apply_gesture(
+        &mut self,
+        label: &str,
+        gesture: &str,
+        ops: &[crate::Op],
+        measure: &dyn crate::TextMeasure,
+    ) -> Result<crate::Applied, crate::OpError> {
+        let before = self.doc.clone();
+        let done = self.doc.apply(ops, measure)?;
+        self.history.record(label, &before, Some(gesture));
+        Ok(done)
+    }
+
+    pub fn end_gesture(&mut self) {
+        self.history.end_gesture();
+    }
+
     pub fn undo(&mut self) -> Option<String> {
         self.history.undo(&mut self.doc)
     }
@@ -154,6 +174,22 @@ mod tests {
         assert!(!ed.history.is_dirty());
         assert_eq!(ed.redo().as_deref(), Some("Add frame"));
         assert_eq!(ed.doc.len(), 3);
+    }
+
+    #[test]
+    fn a_drag_is_one_undo_step() {
+        let mut ed = Editor::new(Document::new());
+        let p = ed.doc.pages()[0];
+        let r = ed.apply("Add", &[Op::create(p, NodeSpec::rect("R", 5.0, 5.0))], &ApproxMeasure).unwrap().created[0];
+        for x in 1..=5 {
+            let patch = crate::Patch { x: Some(x as f64 * 10.0), ..crate::Patch::default() };
+            ed.apply_gesture("Move", "drag", &[Op::set(r, patch)], &ApproxMeasure).unwrap();
+        }
+        ed.end_gesture();
+        assert_eq!(ed.doc.node(r).unwrap().props.x, 50.0);
+        assert_eq!(ed.undo().as_deref(), Some("Move"));
+        assert_eq!(ed.doc.node(r).unwrap().props.x, 0.0, "the whole drag undid at once");
+        assert_eq!(ed.undo().as_deref(), Some("Add"));
     }
 
     #[test]

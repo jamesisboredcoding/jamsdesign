@@ -92,14 +92,23 @@ CLI argument as a file to open. Names are provisional until Step 0.
   - [x] Paint, text and effect styles
   - [ ] Acceptance: an example builds the Blobr main-window mockup, components included, as
         a `.jdb` and renders it to PNG
-- [ ] Step 3: the app, viewing
-  - Window, menus, toolbar and panels laid out like the mockup, built from `jd-ui` (theme
-    tokens, icons, panel tabs) so it matches Photosplash and Cinematica
-  - Open/save `.jdb`, document tabs, recent files, unsaved-changes prompts
-  - GPU canvas: zoom, pan, pixel-snapped rendering of frames and their labels
-  - Pages list, layer tree (expand, select, rename, hide, lock), click to select, Design panel
-    showing the selection's properties
-- [ ] Step 4: editing tools
+- [ ] Step 3: the app, viewing (`cargo run -p blobr -- file.jdb`)
+  - [x] Window, menus, toolbar and panels laid out like the mockup, built from `jd-ui` (theme
+        tokens, icons, panel tabs) so it matches Photosplash and Cinematica
+  - [x] Open/save/save as `.jdb`, PNG/SVG export of the selection
+  - [ ] Document tabs, recent files, unsaved-changes prompts
+  - [x] Canvas: tiny-skia render of the visible region at screen resolution, redrawn only when
+        the document, camera or window changes; zoom (Ctrl+scroll, Shift+0/1/2), pan (scroll,
+        Space, middle drag, Hand), frame labels, hover and selection outlines
+  - [ ] Cache shaped text if dragging lags on text-heavy pages; GPU later if needed
+  - [x] Pages list (add, switch), layer tree (expand, select, hide, lock); clicks pick a
+        frame's children, Ctrl picks the deepest layer, double-click goes one level deeper
+  - [x] Design panel showing (and editing) the selection: name, position, size, rotation,
+        radius, sizing, auto layout, opacity, text, fills, strokes, instance properties and
+        variants; errors from refused ops go to the status bar
+  - [ ] Rename in the layer tree, multi-selection editing
+- [ ] Step 4: editing tools (started: move/resize by drag as one undo step, Frame, Rectangle,
+      Ellipse and Text by drag, marquee, nudge, duplicate, delete)
   - Move, resize and rotate with handles; Frame (with device presets), Rectangle, Ellipse,
     Line, Pen (bezier editing) and Text tools; Hand and Zoom
   - Snapping, smart guides and spacing measurements (as in the mockup)

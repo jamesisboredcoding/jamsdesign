@@ -1,0 +1,17 @@
+[package]
+name = "blobr"
+description = "Blobr, the jamsdesign interface and vector design app."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+jd-core.workspace = true
+jd-ui.workspace = true
+jd-vector = { path = "../../../crates/jd-vector" }
+jd-vector-render = { path = "../../../crates/jd-vector-render" }
+iced.workspace = true
+rfd.workspace = true
+kurbo = "0.11"
+# Rasterises the app logo for the window icon (same version iced uses).
+resvg = { version = "0.45", default-features = false }

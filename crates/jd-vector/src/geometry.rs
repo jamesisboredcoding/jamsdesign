@@ -147,7 +147,7 @@ fn hits(node: &Node, local: Point, slop: f64) -> bool {
 }
 
 impl Document {
-    /// Visible nodes under `point` (page coordinates), topmost first. A child comes before
+    /// Visible, unlocked nodes under `point` (page coordinates), topmost first. A child comes before
     /// its parent, so the first entry is the deepest node drawn on top. Children outside a
     /// clipping frame don't count. `slop` is how close (in page units) a click must be to a
     /// line to hit it.
@@ -161,7 +161,8 @@ impl Document {
 
     fn collect_at(&self, id: NodeId, point: Point, slop: f64, out: &mut Vec<NodeId>) {
         let Some(n) = self.node(id) else { return };
-        if !n.props.visible {
+        // Hidden and locked layers (and what's in them) can't be clicked.
+        if !n.props.visible || n.props.locked {
             return;
         }
         let local = self.world_transform(id).inverse() * point;
