@@ -15,12 +15,16 @@ const WIDTH: f32 = 260.0;
 /// The open popup (and its submenu), over a click-catcher that closes it.
 pub fn popup(app: &Photo) -> Option<Element<'_, Message>> {
     let p = app.popup?;
+    if p.kind == PopupKind::Font {
+        return Some(font_list(app, p.at));
+    }
     let (entries, width) = match p.kind {
         PopupKind::Context => (context(app), WIDTH),
         PopupKind::MenuBar(i) => (menu_bar(app, i), WIDTH),
         PopupKind::ToolSlot(slot) => (tool_slot(slot), 220.0),
         PopupKind::Layer(_) => (layer_menu(app), WIDTH),
         PopupKind::Workspace => (workspaces(app), 200.0),
+        PopupKind::Font => return None,
     };
     let height = menu_height(&entries);
     // Keep the menu inside the window.
@@ -321,6 +325,54 @@ fn menu_bar(app: &Photo, i: usize) -> Vec<MenuEntry<'_, Message>> {
         ],
         _ => vec![item("Nothing here yet", "", false, Message::Noop)],
     }
+}
+
+/// The Type tool's font list: every name drawn in its own font, with a filter on top.
+fn font_list(app: &Photo, at: iced::Point) -> Element<'_, Message> {
+    use iced::widget::{button, container, scrollable, text, text_input};
+    use jd_ui::tokens::*;
+    let filter = app.font_filter.to_lowercase();
+    let mut list = column![].spacing(1);
+    let mut shown = 0;
+    for &name in app.fonts.iter().filter(|f| filter.is_empty() || f.to_lowercase().contains(&filter)) {
+        let current = name == app.type_opts.family;
+        list = list.push(
+            button(text(name).size(16).font(iced::Font::with_name(name)))
+                .width(Fill)
+                .padding(iced::Padding::from([4, 10]))
+                .style(jd_ui::style::row(current))
+                .on_press(Message::Menu(Box::new(Message::TypeFamily(name.to_owned())))),
+        );
+        shown += 1;
+    }
+    if shown == 0 {
+        list = list.push(container(text("No matching fonts").size(TEXT_SIZE).color(TEXT_MUTED)).padding(10));
+    }
+    let card = container(
+        column![
+            text_input("Filter fonts", &app.font_filter)
+                .id(crate::view::FONT_FILTER)
+                .size(TEXT_SIZE)
+                .padding(iced::Padding::from([6, 8]))
+                .on_input(Message::FontFilter),
+            scrollable(list).height(380),
+        ]
+        .spacing(6)
+        .width(300),
+    )
+    .padding(6)
+    .style(|_| container::Style {
+        background: Some(BG_PANEL_HEADER.into()),
+        border: iced::Border { color: BORDER_SUBTLE, width: 1.0, radius: 6.0.into() },
+        shadow: iced::Shadow { color: iced::Color::from_rgba(0.0, 0.0, 0.0, 0.5), offset: iced::Vector::new(0.0, 6.0), blur_radius: 18.0 },
+        ..Default::default()
+    });
+    let x = at.x.min(app.window_size.width - 316.0).max(0.0);
+    stack![
+        mouse_area(space().width(Fill).height(Fill)).on_press(Message::ClosePopup).on_right_press(Message::ClosePopup),
+        pin(card).x(x).y(at.y),
+    ]
+    .into()
 }
 
 /// Right-click on a layer row.

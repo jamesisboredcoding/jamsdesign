@@ -279,20 +279,45 @@ pub fn options_bar(app: &Photo) -> Element<'_, Message> {
     } else if tool == Tool::Type {
         use jd_raster::text::Align;
         let o = &app.type_opts;
-        let fonts: Element<'_, Message> = if app.fonts.is_empty() {
-            label("Fonts load when you first click with the Type tool").into()
-        } else {
-            pick_list(app.fonts.as_slice(), Some(o.family.clone()), Message::TypeFamily)
-                .text_size(TEXT_SIZE_SMALL)
-                .padding(Padding::from([3, 6]))
-                .width(190)
-                .style(style::pick_list)
-                .into()
+        // The font button shows the font's name in that font; it opens the font list.
+        let family = app.fonts.iter().copied().find(|f| *f == o.family);
+        let face = family.map_or(iced::Font::default(), iced::Font::with_name);
+        let open = matches!(app.popup, Some(p) if p.kind == PopupKind::Font);
+        let fonts = button(
+            row![
+                text(if o.family.is_empty() { "Default font" } else { o.family.as_str() }).size(14).font(face).width(Fill),
+                icon(Icon::Chevron, 10.0, TEXT_SECONDARY),
+            ]
+            .spacing(6)
+            .align_y(Vertical::Center),
+        )
+        .width(200)
+        .padding(Padding::from([4, 8]))
+        .style(style::ghost(open))
+        .on_press(Message::OpenPopup(PopupKind::Font, Point::new(app.options_pointer.x - 30.0, TOOLBAR_TOP - 2.0)));
+        let face_toggle = |label: &'static str, font: iced::Font, on: bool, msg: Message, tip: &'static str| {
+            hover_tip(
+                button(container(text(label).size(16).font(font).color(if on { TEXT_PRIMARY } else { TEXT_SECONDARY })).center(18))
+                    .padding(Padding::from([2, 5]))
+                    .style(style::ghost(on))
+                    .on_press(msg),
+                tip,
+                tooltip::Position::Bottom,
+            )
+        };
+        let bold_font = iced::Font { weight: iced::font::Weight::Bold, ..iced::Font::default() };
+        let italic_font = iced::Font { style: iced::font::Style::Italic, ..iced::Font::default() };
+        let align = |ic: Icon, on: bool, a: Align, tip: &'static str| {
+            hover_tip(
+                button(icon(ic, 16.0, if on { TEXT_PRIMARY } else { ICON })).padding(4).style(style::ghost(on)).on_press(Message::TypeAlign(a)),
+                tip,
+                tooltip::Position::Bottom,
+            )
         };
         bar = bar
             .push(fonts)
-            .push(toggle("B", o.bold, Message::TypeBold, "Bold"))
-            .push(toggle("I", o.italic, Message::TypeItalic, "Italic"))
+            .push(face_toggle("B", bold_font, o.bold, Message::TypeBold, "Bold"))
+            .push(face_toggle("I", italic_font, o.italic, Message::TypeItalic, "Italic"))
             .push(vline(20.0, BORDER_SUBTLE))
             .push(labeled(
                 "Size:",
@@ -304,9 +329,11 @@ pub fn options_bar(app: &Photo) -> Element<'_, Message> {
                 .align_y(Vertical::Center),
             ))
             .push(vline(20.0, BORDER_SUBTLE))
-            .push(toggle("Left", o.align == Align::Left, Message::TypeAlign(Align::Left), "Left align text"))
-            .push(toggle("Center", o.align == Align::Center, Message::TypeAlign(Align::Center), "Center text"))
-            .push(toggle("Right", o.align == Align::Right, Message::TypeAlign(Align::Right), "Right align text"))
+            .push(row![
+                align(Icon::AlignLeft, o.align == Align::Left, Align::Left, "Left align text"),
+                align(Icon::AlignCenter, o.align == Align::Center, Align::Center, "Center text"),
+                align(Icon::AlignRight, o.align == Align::Right, Align::Right, "Right align text"),
+            ].spacing(2))
             .push(vline(20.0, BORDER_SUBTLE))
             .push(label(if app.typing.is_some() {
                 "Typing · Ctrl+Enter or another tool to commit · Esc to cancel"
@@ -345,12 +372,9 @@ pub fn options_bar(app: &Photo) -> Element<'_, Message> {
 }
 
 fn options_container<'a>(bar: iced::widget::Row<'a, Message>) -> Element<'a, Message> {
-    container(bar)
-        .height(38)
-        .width(Fill)
-        .padding(Padding::from([0, 10]))
-        .align_y(Vertical::Center)
-        .style(style::fill(BG_PANEL))
+    // Tracks the pointer so popups (the font list) open under what was clicked.
+    mouse_area(container(bar).height(38).width(Fill).padding(Padding::from([0, 10])).align_y(Vertical::Center).style(style::fill(BG_PANEL)))
+        .on_move(Message::OptionsPointer)
         .into()
 }
 

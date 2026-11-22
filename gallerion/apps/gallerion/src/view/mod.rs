@@ -21,6 +21,9 @@ use jd_ui::{
 pub use canvas::Ants;
 pub use chrome::TOOLBAR_TOP;
 
+/// Id of the font list's filter field.
+pub const FONT_FILTER: &str = "font-filter";
+
 /// Id of the command-search text field.
 pub const PALETTE_INPUT: &str = "command-palette";
 
@@ -39,7 +42,7 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
         vline(Fill, BORDER_DEFAULT),
         dock::strip_panel(app),
         chrome::collapsed_panels(app),
-        vline(Fill, BORDER_DEFAULT),
+        dock_handle(app),
         dock::view(app),
     ]
     .height(Fill);
@@ -77,7 +80,37 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
     if let Some(confirm) = dialog::confirm(app) {
         layers = layers.push(confirm);
     }
+    // While dragging the dock edge or a dialog, follow the pointer anywhere in the window.
+    if let Some(drag) = app.ui_drag {
+        let cursor = match drag {
+            crate::app::UiDrag::Dock => iced::mouse::Interaction::ResizingHorizontally,
+            crate::app::UiDrag::Dialog(_) => iced::mouse::Interaction::Grabbing,
+        };
+        layers = layers.push(
+            iced::widget::mouse_area(iced::widget::space().width(Fill).height(Fill))
+                .on_move(Message::UiDragMove)
+                .on_release(Message::UiDragEnd)
+                .interaction(cursor),
+        );
+    }
     layers.into()
+}
+
+/// The border between the canvas and the dock; drag it to resize the dock.
+fn dock_handle(app: &Photo) -> Element<'_, Message> {
+    if !(app.panels.color || app.panels.properties || app.panels.layers) {
+        return vline(Fill, BORDER_DEFAULT).into();
+    }
+    let active = app.ui_drag == Some(crate::app::UiDrag::Dock);
+    iced::widget::mouse_area(
+        container(vline(Fill, if active { jd_ui::tokens::ACCENT_PRIMARY } else { BORDER_DEFAULT }))
+            .width(5)
+            .height(Fill)
+            .center_x(5),
+    )
+    .on_press(Message::DockResizeStart)
+    .interaction(iced::mouse::Interaction::ResizingHorizontally)
+    .into()
 }
 
 /// Invisible grab strips along the window edges. Without system decorations the compositor

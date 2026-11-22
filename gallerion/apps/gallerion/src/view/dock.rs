@@ -28,7 +28,7 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
         return space().into();
     }
     // Tracks the pointer so the layer right-click menu opens where you clicked.
-    mouse_area(container(col).width(300).height(Fill).style(style::fill(BG_PANEL)))
+    mouse_area(container(col).width(app.dock_width).height(Fill).style(style::fill(BG_PANEL)))
         .on_move(Message::DockPointer)
         .into()
 }
@@ -116,9 +116,86 @@ fn properties_panel(app: &Photo) -> Element<'_, Message> {
         .spacing(8)
         .into(),
         (0, None) => label("No layer selected").into(),
-        _ => label("Adjustment layers arrive in milestone 5.").into(),
+        _ => adjustments(app),
     };
     panel(&["Properties", "Adjustments"], app.props_tab, Message::PropsTab, content, Shrink)
+}
+
+/// The Adjustments tab: every adjustment and filter one click away (they apply to the active
+/// layer, like the Image and Filter menus; adjustment layers aren't there yet).
+fn adjustments(app: &Photo) -> Element<'_, Message> {
+    use crate::adjust::OpKind::*;
+    let editable = app.document().and_then(|d| d.active()).is_some_and(|l| !l.locked);
+    let items = [
+        ("Brightness/Contrast", BrightnessContrast),
+        ("Levels", Levels),
+        ("Curves", Curves),
+        ("Hue/Saturation", HueSaturation),
+        ("Threshold", Threshold),
+        ("Posterize", Posterize),
+        ("Invert", Invert),
+        ("Desaturate", Desaturate),
+        ("Gaussian Blur", GaussianBlur),
+        ("Box Blur", BoxBlur),
+        ("Sharpen", Sharpen),
+        ("Unsharp Mask", UnsharpMask),
+        ("High Pass", HighPass),
+        ("Add Noise", AddNoise),
+        ("Mosaic", Mosaic),
+    ];
+    let mut grid = column![].spacing(4);
+    for pair in items.chunks(2) {
+        let mut r = row![].spacing(4);
+        for &(name, kind) in pair {
+            r = r.push(
+                button(text(name).size(TEXT_SIZE_SMALL))
+                    .width(Fill)
+                    .padding(Padding::from([5, 8]))
+                    .style(style::ghost(false))
+                    .on_press_maybe(editable.then_some(Message::OpenOp(kind))),
+            );
+        }
+        grid = grid.push(r);
+    }
+    column![
+        grid,
+        label(if editable { "Applies to the active layer (Ctrl+Z undoes)." } else { "Select an unlocked layer to adjust." }),
+    ]
+    .spacing(8)
+    .into()
+}
+
+/// The Channels tab: the composite image's channels. Clicking one loads it as a selection
+/// (bright = selected), like Ctrl+clicking a channel in Photoshop.
+fn channels_panel(app: &Photo) -> Element<'_, Message> {
+    let Some(open) = app.doc() else { return label("No document open.").into() };
+    let names = ["RGB", "Red", "Green", "Blue"];
+    let mut list = column![];
+    for (i, name) in names.iter().enumerate() {
+        let thumb: Element<'_, Message> = match open.channel_thumbs.get(i) {
+            Some(h) => image(h.clone()).width(40).height(28).content_fit(iced::ContentFit::Contain).into(),
+            None => space().width(40).into(),
+        };
+        let row = row![
+            container(thumb).width(40).height(28).center_x(40).center_y(28).style(|_| container::Style {
+                background: Some(iced::Color::from_rgb8(0xD8, 0xD8, 0xD8).into()),
+                border: iced::Border { color: BORDER_SUBTLE, width: 1.0, radius: 2.0.into() },
+                ..Default::default()
+            }),
+            text(*name).size(TEXT_SIZE).width(Fill),
+        ]
+        .spacing(10)
+        .align_y(Vertical::Center);
+        list = list.push(
+            tooltip(
+                button(row).width(Fill).height(40).padding(Padding::from([0, 10])).style(style::row(false)).on_press(Message::LoadChannel(i as u8)),
+                container(text("Load as selection").size(TEXT_SIZE_SMALL)).padding(6).style(style::input),
+                tooltip::Position::Left,
+            ),
+        );
+        list = list.push(hline(BORDER_DEFAULT));
+    }
+    column![list, container(label("Click a channel to select by its brightness.")).padding(10)].into()
 }
 
 fn blend_picker<'a>(mode: BlendMode) -> Element<'a, Message> {
@@ -135,18 +212,12 @@ const ROW_HALF: f32 = 21.5;
 
 fn layers_panel(app: &Photo) -> Element<'_, Message> {
     if app.layers_tab != 0 {
-        return panel(
-            &["Layers", "Channels", "Paths"],
-            app.layers_tab,
-            Message::LayersTab,
-            label("Coming with the pixel engine."),
-            Fill,
-        );
+        return panel(&["Layers", "Channels"], app.layers_tab, Message::LayersTab, channels_panel(app), Fill);
     }
 
     let Some(doc) = app.document() else {
         return panel(
-            &["Layers", "Channels", "Paths"],
+            &["Layers", "Channels"],
             app.layers_tab,
             Message::LayersTab,
             label("No document open."),
@@ -277,7 +348,7 @@ fn layers_panel(app: &Photo) -> Element<'_, Message> {
 
     // Own layout instead of `panel` so layer rows run edge to edge.
     column![
-        panel_header(&["Layers", "Channels", "Paths"], 0, Message::LayersTab),
+        panel_header(&["Layers", "Channels"], 0, Message::LayersTab),
         container(content).padding(Padding::ZERO.top(8)).height(Fill),
     ]
     .height(Fill)

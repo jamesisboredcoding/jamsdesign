@@ -834,14 +834,16 @@ impl canvas::Program<Message> for Overlay<'_> {
             return mouse::Interaction::Idle;
         }
         let Some(p) = cursor.position_in(bounds) else { return mouse::Interaction::default() };
+        // The closed hand only while something is actually being dragged.
+        if self.transform.is_some_and(|t| t.grabbing) {
+            return mouse::Interaction::Grabbing;
+        }
         if let Some(t) = &self.transform
             && t.kind == Kind::Free
         {
-            if t.grabbing {
-                return mouse::Interaction::Grabbing;
-            }
             return match self.hit_transform(t, p) {
-                Handle::Inside => mouse::Interaction::Move,
+                // Photoshop shows its plain arrow inside the box.
+                Handle::Inside => mouse::Interaction::Idle,
                 Handle::Corner(i) if i % 2 == 0 => mouse::Interaction::ResizingDiagonallyDown,
                 Handle::Corner(_) => mouse::Interaction::ResizingDiagonallyUp,
                 Handle::Edge(i) if i % 2 == 0 => mouse::Interaction::ResizingVertically,
@@ -854,7 +856,7 @@ impl canvas::Program<Message> for Overlay<'_> {
             Tool::Hand => mouse::Interaction::Grab,
             Tool::Zoom => mouse::Interaction::ZoomIn,
             Tool::Type => mouse::Interaction::Text,
-            Tool::Move => mouse::Interaction::Move,
+            Tool::Move => mouse::Interaction::Idle,
             _ => mouse::Interaction::Crosshair,
         }
     }

@@ -74,6 +74,9 @@ pub struct OpenDoc {
     pub pan: Vector,
     /// Layers panel thumbnails, rebuilt when a layer's tiles change.
     pub thumbs: HashMap<LayerId, (Vec<TileId>, image::Handle)>,
+    /// Channels panel thumbnails (RGB, R, G, B) and what they were made from.
+    pub channel_thumbs: Vec<image::Handle>,
+    pub channel_key: u64,
     pub saving: bool,
     /// End of the last stroke in this document, for Shift+click straight lines.
     pub last_paint: Option<Point>,
@@ -178,6 +181,8 @@ pub struct Dialog {
     pub original: Option<StyleOriginal>,
     /// Layer Style: which entry of the left-hand list is shown.
     pub fx_tab: u8,
+    /// Top-left corner on screen (dialogs can be dragged by their title).
+    pub pos: Point,
 }
 
 impl Dialog {
@@ -223,6 +228,8 @@ pub enum PopupKind {
     Layer(LayerId),
     /// The workspace switcher in the title bar.
     Workspace,
+    /// The Type tool's font list.
+    Font,
 }
 
 /// Type tool settings (the options bar); applied to new text and to the text being edited.
@@ -245,6 +252,20 @@ pub struct Typing {
     pub created: bool,
     pub layout: jd_raster::text::Layout,
 }
+
+/// A drag of a piece of the interface (not the image): the pointer is followed by a
+/// window-wide layer until the button is released.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum UiDrag {
+    /// The edge between the canvas and the panel dock.
+    Dock,
+    /// A dialog by its title; the pointer's offset from the dialog's top-left corner.
+    Dialog(Vector),
+}
+
+/// Panel dock width limits.
+pub const DOCK_MIN: f32 = 220.0;
+pub const DOCK_MAX: f32 = 640.0;
 
 /// View > Snap and Snap To.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -401,10 +422,19 @@ pub struct Photo {
     pub panels: Panels,
     pub workspace: Workspace,
     pub snap: Snap,
+    pub dock_width: f32,
+    pub ui_drag: Option<UiDrag>,
+    /// Pointer over a dialog's title row (its local position), to start a drag from it.
+    pub title_grab: Point,
     pub type_opts: TypeOptions,
     pub typing: Option<Typing>,
-    /// Installed font families (loaded the first time the Type tool is chosen).
-    pub fonts: Vec<String>,
+    /// Installed font families (loaded the first time the Type tool is chosen). Leaked once
+    /// so the menu can draw each name in its own font (iced wants `'static` family names).
+    pub fonts: Vec<&'static str>,
+    /// Filter typed into the font list.
+    pub font_filter: String,
+    /// Pointer over the options bar, to open the font list under it.
+    pub options_pointer: Point,
     /// Command search (search icon / Ctrl+F): the query, while open.
     pub palette: Option<String>,
     /// Pointer over the dock, to place the layer right-click menu.
@@ -517,10 +547,22 @@ pub enum Message {
     // Type tool
     TypeClick(Point),
     TypeFamily(String),
+    FontFilter(String),
+    OptionsPointer(Point),
     TypeSize(f32),
     TypeBold,
     TypeItalic,
     TypeAlign(jd_raster::text::Align),
+
+    /// Channels panel: load channel (0 = RGB composite, 1..3 = R, G, B) as a selection.
+    LoadChannel(u8),
+
+    // Dragging parts of the interface
+    DockResizeStart,
+    DialogDragStart,
+    DialogTitlePointer(Point),
+    UiDragMove(Point),
+    UiDragEnd,
 
     // Snapping
     ToggleSnap,
@@ -748,9 +790,14 @@ impl Photo {
             panels: Panels { color: true, properties: true, layers: true },
             workspace: Workspace::Essentials,
             snap: Snap { on: true, bounds: true, layers: true },
+            dock_width: 300.0,
+            ui_drag: None,
+            title_grab: Point::ORIGIN,
             type_opts: TypeOptions { family: String::new(), size: 48.0, bold: false, italic: false, align: jd_raster::text::Align::Left },
             typing: None,
             fonts: Vec::new(),
+            font_filter: String::new(),
+            options_pointer: Point::ORIGIN,
             palette: None,
             dock_pointer: Point::ORIGIN,
             clone_source: None,
@@ -892,7 +939,11 @@ impl Photo {
                 | Message::TypeSize(_)
                 | Message::TypeBold
                 | Message::TypeItalic
-                | Message::TypeAlign(_) => {}
+                | Message::TypeAlign(_)
+                | Message::FontFilter(_)
+                | Message::OpenPopup(PopupKind::Font, _)
+                | Message::ClosePopup
+                | Message::Menu(_) => {}
                 ref m if !Self::keeps_transform(m) => self.commit_typing(),
                 _ => {}
             }
@@ -1059,7 +1110,9 @@ impl Photo {
                 }
             }
             Message::MoveTo(at) => {
+                let tol = self.snap_tolerance();
                 if let Some(t) = self.transform.as_mut() {
+                    t.snap_tolerance = tol;
                     t.drag(at, false, false);
                 }
             }
@@ -1087,8 +1140,7 @@ impl Photo {
                 }
             }
             Message::TransformDrag { at, shift, alt } => {
-                // About 6 screen pixels, whatever the zoom.
-                let tol = if self.snap.on { 6.0 / self.zoom_factor().max(0.01) } else { 0.0 };
+                let tol = self.snap_tolerance();
                 if let Some(t) = self.transform.as_mut() {
                     t.snap_tolerance = tol;
                     t.drag(at, shift, alt);
@@ -1331,10 +1383,13 @@ impl Photo {
                     return Task::none();
                 }
                 let aspect = doc.width as f32 / doc.height as f32;
+                // Near the top, centred (Photoshop places its dialogs there too).
+                let card_w = if kind == DialogKind::BlendingOptions { 660.0 } else { 400.0 };
+                let pos = Point::new(((self.window_size.width - card_w) / 2.0).max(0.0), 110.0);
                 if kind == DialogKind::BlendingOptions && !self.check_layer_editable() {
                     return Task::none();
                 }
-                self.dialog = Some(Dialog { kind, a, b, constrain: true, aspect, anchor: (1, 1), original, fx_tab: 0 });
+                self.dialog = Some(Dialog { kind, a, b, constrain: true, aspect, anchor: (1, 1), original, fx_tab: 0, pos });
             }
             Message::DialogA(ref v) | Message::DialogB(ref v) => {
                 let first = matches!(message, Message::DialogA(_));
@@ -1674,7 +1729,16 @@ impl Photo {
                 self.slot_tools[t.slot()] = t;
                 self.popup = None;
             }
-            Message::OpenPopup(kind, at) => self.popup = Some(Popup { kind, at, sub: None }),
+            Message::OpenPopup(kind, at) => {
+                self.popup = Some(Popup { kind, at, sub: None });
+                if kind == PopupKind::Font {
+                    self.load_fonts();
+                    self.font_filter.clear();
+                    return operation::focus(crate::view::FONT_FILTER);
+                }
+            }
+            Message::FontFilter(f) => self.font_filter = f,
+            Message::OptionsPointer(p) => self.options_pointer = p,
             Message::PopupSub(sub) => {
                 if let Some(p) = self.popup.as_mut() {
                     p.sub = sub;
@@ -1697,6 +1761,44 @@ impl Photo {
                 return self.update(*m);
             }
             Message::DockPointer(p) => self.dock_pointer = p,
+            Message::DockResizeStart => self.ui_drag = Some(UiDrag::Dock),
+            Message::DialogTitlePointer(p) => self.title_grab = p,
+            Message::DialogDragStart => {
+                // The title row sits inside the card's 20px padding.
+                self.ui_drag = Some(UiDrag::Dialog(Vector::new(self.title_grab.x + 20.0, self.title_grab.y + 20.0)));
+            }
+            Message::UiDragMove(p) => match self.ui_drag {
+                Some(UiDrag::Dock) => self.dock_width = (self.window_size.width - p.x).clamp(DOCK_MIN, DOCK_MAX),
+                Some(UiDrag::Dialog(grab)) => {
+                    if let Some(d) = self.dialog.as_mut() {
+                        // Keep the title reachable.
+                        let x = (p.x - grab.x).clamp(-300.0, (self.window_size.width - 80.0).max(0.0));
+                        let y = (p.y - grab.y).clamp(0.0, (self.window_size.height - 40.0).max(0.0));
+                        d.pos = Point::new(x, y);
+                    }
+                }
+                None => {}
+            },
+            Message::UiDragEnd => self.ui_drag = None,
+            Message::LoadChannel(c) => self.edit("Load Selection", None, |doc| {
+                let flat = jd_raster::composite::flatten(doc);
+                // Coverage = the channel's brightness (RGB: luminosity), scaled by opacity.
+                let mask: Vec<u8> = flat
+                    .chunks_exact(4)
+                    .flat_map(|p| {
+                        let v = match c {
+                            1 => p[0] as f32,
+                            2 => p[1] as f32,
+                            3 => p[2] as f32,
+                            _ => 0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32,
+                        };
+                        [0, 0, 0, (v * p[3] as f32 / 255.0 + 0.5) as u8]
+                    })
+                    .collect();
+                let sel = Selection::from_alpha(&jd_raster::TileGrid::from_rgba8(doc.width, doc.height, &mask));
+                doc.selection = (!sel.is_empty()).then_some(sel);
+                true
+            }),
             Message::TypeClick(at) => self.type_click(at),
             Message::TypeFamily(f) => {
                 self.type_opts.family = f.clone();
@@ -1802,8 +1904,8 @@ impl Photo {
             }
             Message::OpenLayerMenu(id) => {
                 let _ = self.update(Message::SelectLayer(id));
-                // The dock is the rightmost 300px, below the toolbar line.
-                let at = Point::new(self.window_size.width - 300.0 + self.dock_pointer.x, crate::view::TOOLBAR_TOP + self.dock_pointer.y);
+                // The dock is the rightmost `dock_width` px, below the toolbar line.
+                let at = Point::new(self.window_size.width - self.dock_width + self.dock_pointer.x, crate::view::TOOLBAR_TOP + self.dock_pointer.y);
                 self.popup = Some(Popup { kind: PopupKind::Layer(id), at, sub: None });
             }
             Message::SelectPixels => self.edit("Select Pixels", None, |doc| {
@@ -2084,6 +2186,8 @@ impl Photo {
             zoom: Zoom::Fit,
             pan: Vector::ZERO,
             thumbs: HashMap::new(),
+            channel_thumbs: Vec::new(),
+            channel_key: 0,
             saving: false,
             last_paint: None,
             ants: Default::default(),
@@ -2332,6 +2436,14 @@ impl Photo {
                 | Message::MenuTitle(_)
                 | Message::PopupSub(_)
                 | Message::DockPointer(_)
+                | Message::DockResizeStart
+                | Message::DialogDragStart
+                | Message::DialogTitlePointer(_)
+                | Message::UiDragMove(_)
+                | Message::UiDragEnd
+                | Message::LoadChannel(_)
+                | Message::FontFilter(_)
+                | Message::OptionsPointer(_)
                 | Message::ToggleSnap
                 | Message::TypeFamily(_)
                 | Message::TypeSize(_)
@@ -2410,14 +2522,14 @@ impl Photo {
         if !self.fonts.is_empty() {
             return;
         }
-        self.fonts = jd_raster::text::families();
+        self.fonts = jd_raster::text::families().into_iter().map(|f| &*Box::leak(f.into_boxed_str())).collect();
         if self.type_opts.family.is_empty() {
             let preferred = ["Noto Sans", "Inter", "DejaVu Sans", "Liberation Sans", "Cantarell"];
             self.type_opts.family = preferred
                 .iter()
-                .find(|p| self.fonts.iter().any(|f| f == *p))
+                .find(|p| self.fonts.contains(p))
                 .map(|p| p.to_string())
-                .or_else(|| self.fonts.first().cloned())
+                .or_else(|| self.fonts.first().map(|f| f.to_string()))
                 .unwrap_or_default();
         }
     }
@@ -2549,6 +2661,11 @@ impl Photo {
             }
         }
         Task::none()
+    }
+
+    /// Snap distance in document pixels: about 6 screen pixels at any zoom (0 when off).
+    fn snap_tolerance(&self) -> f32 {
+        if self.snap.on { 6.0 / self.zoom_factor().max(0.01) } else { 0.0 }
     }
 
     /// What moved or transformed content can snap to: the canvas edges and centre, and the
@@ -2787,6 +2904,29 @@ impl Photo {
             live.insert(layer.id, (ids, handle));
         }
         d.thumbs = live;
+
+        // Channel thumbnails, only while the Channels tab is showing.
+        if self.layers_tab == 1 {
+            let mut key: u64 = 0xcbf2_9ce4_8422_2325;
+            let mut mix = |v: u64| key = (key ^ v).wrapping_mul(0x0100_0000_01b3);
+            for l in d.doc.layers() {
+                mix(jd_raster::text::signature(&l.pixels));
+                mix(l.visible as u64 | (l.opacity.to_bits() as u64) << 1 | (l.blend as u64) << 40);
+                for b in format!("{:?}", l.style).bytes() {
+                    mix(b as u64);
+                }
+            }
+            if key != d.channel_key || d.channel_thumbs.is_empty() {
+                let (w, h, px) = jd_raster::composite::thumbnail(&d.doc, 40, None);
+                let mut thumbs = vec![image::Handle::from_rgba(w, h, px.clone())];
+                for c in 0..3 {
+                    let grey: Vec<u8> = px.chunks_exact(4).flat_map(|p| [p[c], p[c], p[c], p[3]]).collect();
+                    thumbs.push(image::Handle::from_rgba(w, h, grey));
+                }
+                d.channel_thumbs = thumbs;
+                d.channel_key = key;
+            }
+        }
     }
 
     fn with_window(&self, f: impl FnOnce(window::Id) -> Task<Message>) -> Task<Message> {
@@ -3839,6 +3979,52 @@ mod tests {
         let _ = app.update(Message::TypeClick(Point::new(250.0, 110.0)));
         let _ = app.update(Message::SelectTool(Tool::Brush));
         assert_eq!(app.document().unwrap().layers().len(), n);
+    }
+
+    #[test]
+    fn dock_resizes_and_dialogs_drag() {
+        let (mut app, _) = Photo::new();
+        white(&mut app, 20, 20);
+        app.window_size = Size::new(1600.0, 900.0);
+        let _ = app.update(Message::DockResizeStart);
+        let _ = app.update(Message::UiDragMove(Point::new(1200.0, 400.0)));
+        assert_eq!(app.dock_width, 400.0);
+        let _ = app.update(Message::UiDragMove(Point::new(10.0, 400.0)));
+        assert_eq!(app.dock_width, DOCK_MAX, "clamped");
+        let _ = app.update(Message::UiDragEnd);
+        assert!(app.ui_drag.is_none());
+
+        let _ = app.update(Message::ShowDialog(DialogKind::BlendingOptions));
+        let _ = app.update(Message::DialogTitlePointer(Point::new(50.0, 5.0)));
+        let _ = app.update(Message::DialogDragStart);
+        let _ = app.update(Message::UiDragMove(Point::new(300.0, 200.0)));
+        assert_eq!(app.dialog.as_ref().unwrap().pos, Point::new(230.0, 175.0));
+    }
+
+    #[test]
+    fn move_tool_snaps_too() {
+        let (mut app, _) = Photo::new();
+        white(&mut app, 200, 200);
+        let _ = app.update(Message::AddLayer);
+        let id = app.document().unwrap().active_id().unwrap();
+        app.docs[0].doc.layer_mut(id).unwrap().pixels.set_pixel(50, 50, [0, 0, 0, 255]);
+        let _ = app.update(Message::MoveBegin(Point::new(50.0, 50.0)));
+        let _ = app.update(Message::MoveTo(Point::new(197.0, 50.0)));
+        assert_eq!(app.transform.as_ref().unwrap().corners()[1].x, 200.0, "right edge snapped to the canvas edge");
+    }
+
+    #[test]
+    fn load_channel_selects_by_brightness() {
+        let (mut app, _) = Photo::new();
+        let mut px = [0u8, 0, 0, 255].repeat(4);
+        px[0..4].copy_from_slice(&[255, 0, 0, 255]);
+        app.docs.clear();
+        app.push_doc(Document::from_rgba8("c", 2, 2, &px), None);
+        let _ = app.update(Message::LoadChannel(1));
+        let sel = app.document().unwrap().selection.clone().unwrap();
+        assert_eq!((sel.get(0, 0), sel.get(1, 0)), (255, 0));
+        let _ = app.update(Message::LoadChannel(2));
+        assert!(app.document().unwrap().selection.is_none(), "no green anywhere");
     }
 
     #[test]

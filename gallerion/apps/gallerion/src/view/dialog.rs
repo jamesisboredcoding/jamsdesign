@@ -260,7 +260,11 @@ pub fn small(app: &Photo) -> Option<Element<'_, Message>> {
     };
     let card = container(
         column![
-            text(title).size(15).font(bold()),
+            // Drag the title row to move the dialog.
+            iced::widget::mouse_area(row![text(title).size(15).font(bold()), space::horizontal()])
+                .on_move(Message::DialogTitlePointer)
+                .on_press(Message::DialogDragStart)
+                .interaction(iced::mouse::Interaction::Grab),
             body,
             row![
                 space::horizontal(),
@@ -276,5 +280,5 @@ pub fn small(app: &Photo) -> Option<Element<'_, Message>> {
     .style(card_style);
     // Blending Options keeps the image fully visible for its live preview.
     let backdrop = if d.kind == DialogKind::BlendingOptions { |_: &iced::Theme| container::Style::default() } else { scrim };
-    Some(opaque(center(card).style(backdrop)).into())
+    Some(opaque(container(iced::widget::pin(card).x(d.pos.x).y(d.pos.y)).width(iced::Fill).height(iced::Fill).style(backdrop)).into())
 }
