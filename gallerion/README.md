@@ -135,6 +135,11 @@ left-click in, right-click out.
       new centred layer (or a new document when none is open), image files copied in a file
       manager are placed (or opened), and text pastes into text fields. Pasting Gallerion's
       own copy keeps its position and layer
+- [x] 6j: rulers (View > Rulers, Ctrl+R), guides dragged out of them (Alt: the other way),
+      moved with the Move tool and deleted by dropping them back on a ruler; View > Show >
+      Guides (Ctrl+;) / Grid (Ctrl+'), Lock Guides (Alt+Ctrl+;), Clear Guides; Snap To Guides
+      and Grid; grid spacing and subdivisions in Preferences. Guides are undoable, follow
+      crops and rotations, and are saved in .jdp
 - [ ] 6: PSD import, Flatpak
 
 ## App icon
@@ -174,8 +179,9 @@ Try it: `cargo run -p jd-io --example demo_doc -- demo.jdp base.jpg top.jpg`
   (Crop works like Photoshop with "Delete Cropped Pixels" off), but canvas rotate/flip,
   Image Size, merges and flatten only see the canvas and drop it. Shapes are
   raster (not editable vector layers). Spot Healing runs when the stroke ends and blocks
-  the UI briefly on big strokes (about 0.5 s for a 240 px blob). Snapping has no grid or
-  guides yet.
+  the UI briefly on big strokes (about 0.5 s for a 240 px blob). Guides can't be placed by
+  number (no View > New Guide dialog) and the ruler origin can't be moved; rulers are in
+  pixels only.
 - Layer styles: effects are rendered on the CPU and cached, so painting on a large styled
   layer is slower; effects hide while the layer is being moved or transformed and come back
   on commit. Shadow and glow use normal blending (Photoshop defaults to Multiply/Screen).

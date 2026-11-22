@@ -60,6 +60,11 @@ pub struct Prefs {
     pub pen_pressure: bool,
     /// Snapping (View > Snap) at startup.
     pub snap: bool,
+    /// View > Rulers (remembered, like Photoshop).
+    pub rulers: bool,
+    /// Grid line spacing (document pixels) and how many parts each square is split into.
+    pub grid_spacing: u32,
+    pub grid_subdivisions: u32,
     pub layout: Option<SavedLayout>,
 }
 
@@ -73,6 +78,9 @@ impl Default for Prefs {
             brush_cursor: BrushCursor::Outline,
             pen_pressure: true,
             snap: true,
+            rulers: false,
+            grid_spacing: 100,
+            grid_subdivisions: 4,
             layout: None,
         }
     }
@@ -87,7 +95,16 @@ fn path() -> Option<PathBuf> {
     Some(base.join("jamsdesign").join("gallerion.json"))
 }
 
+/// Grid spacing limits (px) and subdivision limits, for the Preferences boxes.
+pub const GRID_RANGE: std::ops::RangeInclusive<f32> = 2.0..=2000.0;
+pub const SUBDIVISION_RANGE: std::ops::RangeInclusive<f32> = 1.0..=20.0;
+
 impl Prefs {
+    /// Distance between the finest grid lines (subdivisions), document pixels.
+    pub fn grid_step(&self) -> f32 {
+        self.grid_spacing.max(1) as f32 / self.grid_subdivisions.max(1) as f32
+    }
+
     /// The saved preferences (defaults if there are none). Tests never read the real file.
     pub fn load() -> Self {
         if cfg!(test) {

@@ -62,6 +62,15 @@ struct Manifest {
     paths: Vec<PathEntry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     active_path: Option<usize>,
+    /// Ruler guides.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    guides: Vec<GuideEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GuideEntry {
+    vertical: bool,
+    pos: f32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -343,6 +352,7 @@ pub fn write<W: Write + Seek>(doc: &Document, out: W) -> Result<W, SaveError> {
             })
             .collect(),
         active_path: doc.active_path,
+        guides: doc.guides.iter().map(|g| GuideEntry { vertical: g.vertical, pos: g.pos }).collect(),
     };
     // Compress every tile in parallel, then write them in order.
     let jobs: Vec<(String, &[u8])> = doc
@@ -535,6 +545,7 @@ pub fn read<R: Read + Seek>(name: impl Into<String>, input: R) -> Result<Documen
         })
         .collect();
     doc.active_path = manifest.active_path.filter(|&i| i < doc.paths.len());
+    doc.guides = manifest.guides.iter().filter(|g| g.pos.is_finite()).map(|g| jd_raster::Guide { vertical: g.vertical, pos: g.pos }).collect();
     Ok(doc)
 }
 
@@ -636,10 +647,12 @@ mod tests {
         p.subpaths.push(SubPath { anchors: vec![Anchor::corner((1.0, 2.0)), Anchor::smooth((10.0, 5.0), (12.0, 9.5))], closed: true });
         doc.paths.push(p);
         doc.active_path = Some(0);
+        doc.guides = vec![jd_raster::Guide { vertical: true, pos: 7.5 }];
         let bytes = write(&doc, std::io::Cursor::new(Vec::new())).unwrap().into_inner();
         let back = read("t", std::io::Cursor::new(bytes)).unwrap();
         assert_eq!(back.paths, doc.paths);
         assert_eq!(back.active_path, Some(0));
+        assert_eq!(back.guides, doc.guides);
     }
 
     #[test]

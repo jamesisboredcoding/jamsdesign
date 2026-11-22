@@ -12,6 +12,7 @@ use iced::widget::{Canvas, Shader, button, column, container, mouse_area, row, s
 use iced::{Color, Element, Fill, Point, Rectangle, Renderer, Theme, Vector};
 use jd_gpu::{Scene, SceneLayer, View, wgpu};
 use jd_raster::selection::{Combine, Segment};
+use jd_raster::Guide;
 use jd_raster::transform::Affine;
 use jd_ui::widget::bold;
 use jd_ui::{Icon, icon, style, tokens::*};
@@ -161,6 +162,11 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
         typing: app.typing.as_ref().map(|t| t.layout),
         path: doc.active_path.and_then(|i| doc.paths.get(i)),
         pen_open: app.pen_tool.open,
+        rulers: app.extras.rulers,
+        guides: app.extras.guides.then_some(doc.guides.as_slice()),
+        guides_locked: app.extras.lock_guides,
+        grid: app.extras.grid.then(|| (app.prefs.grid_spacing.max(1) as f32, app.prefs.grid_step())),
+        doc_size: (doc.width as f32, doc.height as f32),
         // Where the clone source is: the set point, or (once aligned) cursor + offset.
         clone_source: app.effective_tool().clones().then(|| match (app.clone_offset, app.cursor) {
             (Some((dx, dy)), Some(c)) => Some(Point::new(c.x + dx as f32, c.y + dy as f32)),
@@ -338,6 +344,31 @@ struct Overlay<'a> {
     /// The path shown (the Paths panel's active one), and the piece the Pen is drawing.
     path: Option<&'a jd_raster::path::VectorPath>,
     pen_open: Option<usize>,
+    /// View > Rulers; the guides (None: hidden) and whether they're locked; the grid's line
+    /// spacing and finest step (None: hidden). All in document pixels.
+    rulers: bool,
+    guides: Option<&'a [Guide]>,
+    guides_locked: bool,
+    grid: Option<(f32, f32)>,
+    doc_size: (f32, f32),
+}
+
+/// A guide being dragged: out of a ruler (`index` None) or an existing one.
+#[derive(Debug, Clone, Copy)]
+struct GuideDrag {
+    index: Option<usize>,
+    guide: Guide,
+    /// Over its ruler or off the canvas: letting go there deletes it.
+    discard: bool,
+}
+
+/// Ruler thickness (screen px).
+pub const RULER: f32 = 18.0;
+/// How close (screen px) the pointer must be to grab a guide.
+const GUIDE_HIT: f32 = 4.0;
+
+fn guide_color() -> Color {
+    Color::from_rgb8(0x2E, 0xE6, 0xFF)
 }
 
 /// A marquee or lasso being dragged.
@@ -374,6 +405,7 @@ struct DragState {
     select: Option<SelectDrag>,
     /// Gradient line, shape box or crop box being dragged (document px).
     box_drag: Option<(Point, Point)>,
+    guide: Option<GuideDrag>,
     modifiers: keyboard::Modifiers,
 }
 
@@ -416,6 +448,47 @@ impl Overlay<'_> {
         } else {
             [d.start.x, d.start.y, d.start.x + dx, d.start.y + dy]
         }
+    }
+
+    /// Which ruler (if shown) is at screen point `p`: Some(true) the left one (vertical
+    /// guides), Some(false) the top one.
+    fn on_ruler(&self, p: Point) -> Option<bool> {
+        if !self.rulers {
+            return None;
+        }
+        if p.x < RULER {
+            Some(true)
+        } else if p.y < RULER {
+            Some(false)
+        } else {
+            None
+        }
+    }
+
+    /// The guide under screen point `p` that can be dragged (Move tool, guides shown and not
+    /// locked).
+    fn hit_guide(&self, p: Point) -> Option<usize> {
+        if self.tool != Tool::Move || self.guides_locked || self.transform.is_some() {
+            return None;
+        }
+        let guides = self.guides?;
+        guides.iter().position(|g| {
+            let s = self.to_screen(Point::new(g.pos, g.pos));
+            if g.vertical { (s.x - p.x).abs() <= GUIDE_HIT } else { (s.y - p.y).abs() <= GUIDE_HIT }
+        })
+    }
+
+    /// A guide dragged to screen point `p` (None: off the canvas). Whole pixels, like Photoshop.
+    fn drag_guide(&self, g: &mut GuideDrag, p: Option<Point>, bounds: Rectangle) {
+        let Some(p) = p else {
+            g.discard = true;
+            return;
+        };
+        let d = self.to_doc(p);
+        g.guide.pos = if g.guide.vertical { d.x } else { d.y }.round();
+        let outside = p.x < 0.0 || p.y < 0.0 || p.x > bounds.width || p.y > bounds.height;
+        let over_ruler = self.rulers && if g.guide.vertical { p.x < RULER } else { p.y < RULER };
+        g.discard = outside || over_ruler;
     }
 
     fn hit_transform(&self, t: &TransformView, p: Point) -> Handle {
@@ -525,6 +598,24 @@ impl canvas::Program<Message> for Overlay<'_> {
                     return None;
                 }
                 let doc = self.to_doc(p);
+                // Out of a ruler comes a new guide (Alt: the other way round, like Photoshop).
+                if let Some(vertical) = self.on_ruler(p) {
+                    if p.x < RULER && p.y < RULER {
+                        return Some(canvas::Action::request_redraw().and_capture());
+                    }
+                    let vertical = vertical != m.alt();
+                    let mut g = GuideDrag { index: None, guide: Guide { vertical, pos: 0.0 }, discard: true };
+                    self.drag_guide(&mut g, Some(p), bounds);
+                    g.discard = true;
+                    state.guide = Some(g);
+                    return Some(canvas::Action::request_redraw().and_capture());
+                }
+                if let Some(i) = self.hit_guide(p)
+                    && let Some(&guide) = self.guides.and_then(|g| g.get(i))
+                {
+                    state.guide = Some(GuideDrag { index: Some(i), guide, discard: false });
+                    return Some(canvas::Action::request_redraw().and_capture());
+                }
                 // Free Transform handles take every click while open.
                 if let Some(t) = &self.transform
                     && t.kind == Kind::Free
@@ -602,6 +693,14 @@ impl canvas::Program<Message> for Overlay<'_> {
                 if state.panning.take().is_some() {
                     return Some(canvas::Action::request_redraw().and_capture());
                 }
+                if let Some(g) = state.guide.take() {
+                    return match (g.index, g.discard) {
+                        // Pulled out and put straight back: nothing.
+                        (None, true) => Some(canvas::Action::request_redraw().and_capture()),
+                        (index, true) => publish(Message::SetGuide { index, guide: None }),
+                        (index, false) => publish(Message::SetGuide { index, guide: Some(g.guide) }),
+                    };
+                }
                 state.picking = false;
                 if std::mem::take(&mut state.painting) {
                     return publish(Message::StrokeEnd);
@@ -649,6 +748,11 @@ impl canvas::Program<Message> for Overlay<'_> {
                 if let (Some(last), Some(p)) = (state.panning, p) {
                     state.panning = Some(p);
                     return publish(Message::PanBy(p - last));
+                }
+                if let Some(mut g) = state.guide {
+                    self.drag_guide(&mut g, p, bounds);
+                    state.guide = Some(g);
+                    return Some(canvas::Action::request_redraw().and_capture());
                 }
                 let Some(p) = p else { return None };
                 let doc = self.to_doc(p);
@@ -731,6 +835,16 @@ impl canvas::Program<Message> for Overlay<'_> {
         }
 
         let mut frame = Frame::new(renderer, bounds.size());
+
+        if let Some((spacing, step)) = self.grid {
+            self.draw_grid(&mut frame, bounds, spacing, step);
+        }
+        let dragged = state.guide.and_then(|g| g.index);
+        for (i, g) in self.guides.unwrap_or_default().iter().enumerate() {
+            if Some(i) != dragged {
+                self.draw_guide(&mut frame, bounds, *g, guide_color());
+            }
+        }
 
         // Marquee / lasso being dragged, polygonal lasso being clicked out.
         if let Some(d) = &state.select {
@@ -942,6 +1056,14 @@ impl canvas::Program<Message> for Overlay<'_> {
                 frame.stroke(&c, Stroke::default().with_width(1.0).with_color(Color::WHITE));
             }
         }
+        if let Some(g) = state.guide {
+            // Faded when letting go would delete it.
+            let c = if g.discard { Color { a: 0.35, ..guide_color() } } else { guide_color() };
+            self.draw_guide(&mut frame, bounds, g.guide, c);
+        }
+        if self.rulers {
+            self.draw_rulers(&mut frame, bounds, cursor.position_in(bounds));
+        }
         layers.push(frame.into_geometry());
         layers
     }
@@ -955,6 +1077,16 @@ impl canvas::Program<Message> for Overlay<'_> {
             return mouse::Interaction::Idle;
         }
         let Some(p) = cursor.position_in(bounds) else { return mouse::Interaction::default() };
+        let guide_cursor = |vertical: bool| if vertical { mouse::Interaction::ResizingHorizontally } else { mouse::Interaction::ResizingVertically };
+        if let Some(g) = state.guide {
+            return guide_cursor(g.guide.vertical);
+        }
+        if self.on_ruler(p).is_some() {
+            return mouse::Interaction::Idle;
+        }
+        if let Some(g) = self.hit_guide(p).and_then(|i| self.guides?.get(i)) {
+            return guide_cursor(g.vertical);
+        }
         // The closed hand only while something is actually being dragged.
         if self.transform.is_some_and(|t| t.grabbing) {
             return mouse::Interaction::Grabbing;
@@ -979,6 +1111,140 @@ impl canvas::Program<Message> for Overlay<'_> {
             Tool::Type => mouse::Interaction::Text,
             Tool::Move => mouse::Interaction::Idle,
             _ => mouse::Interaction::Crosshair,
+        }
+    }
+}
+
+impl Overlay<'_> {
+    /// A guide across the whole view.
+    fn draw_guide(&self, frame: &mut Frame, bounds: Rectangle, g: Guide, color: Color) {
+        let s = self.to_screen(Point::new(g.pos, g.pos));
+        let line = if g.vertical {
+            Path::line(Point::new(s.x.round() + 0.5, 0.0), Point::new(s.x.round() + 0.5, bounds.height))
+        } else {
+            Path::line(Point::new(0.0, s.y.round() + 0.5), Point::new(bounds.width, s.y.round() + 0.5))
+        };
+        frame.stroke(&line, Stroke::default().with_width(1.0).with_color(color));
+    }
+
+    /// Grid lines over the document (finer subdivisions fainter); skipped where they'd be
+    /// closer together than a few screen pixels.
+    fn draw_grid(&self, frame: &mut Frame, bounds: Rectangle, spacing: f32, step: f32) {
+        let (w, h) = self.doc_size;
+        let a = self.to_screen(Point::ORIGIN);
+        let b = self.to_screen(Point::new(w, h));
+        let (x0, y0) = (a.x.max(0.0), a.y.max(0.0));
+        let (x1, y1) = (b.x.min(bounds.width), b.y.min(bounds.height));
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        for (every, alpha) in [(step, 0.18), (spacing, 0.45)] {
+            if every * self.zoom < 6.0 || (every == spacing && step == spacing && alpha < 0.3) {
+                continue;
+            }
+            let lines = Path::new(|p| {
+                let first = |lo: f32, origin: f32| ((lo - origin) / self.zoom / every).floor().max(0.0) as u32;
+                let mut i = first(x0, a.x);
+                while (i as f32 * every) <= w {
+                    let x = (a.x + i as f32 * every * self.zoom).round() + 0.5;
+                    if x > x1 + 1.0 {
+                        break;
+                    }
+                    p.move_to(Point::new(x, y0));
+                    p.line_to(Point::new(x, y1));
+                    i += 1;
+                }
+                let mut i = first(y0, a.y);
+                while (i as f32 * every) <= h {
+                    let y = (a.y + i as f32 * every * self.zoom).round() + 0.5;
+                    if y > y1 + 1.0 {
+                        break;
+                    }
+                    p.move_to(Point::new(x0, y));
+                    p.line_to(Point::new(x1, y));
+                    i += 1;
+                }
+            });
+            frame.stroke(&lines, Stroke::default().with_width(1.0).with_color(Color::from_rgba(0.6, 0.6, 0.6, alpha)));
+        }
+    }
+
+    /// Rulers along the top and left edges, in document pixels, with a mark at the pointer.
+    fn draw_rulers(&self, frame: &mut Frame, bounds: Rectangle, pointer: Option<Point>) {
+        let tick = Color::from_rgb8(0x8A, 0x8A, 0x8A);
+        frame.fill_rectangle(Point::ORIGIN, iced::Size::new(bounds.width, RULER), BG_PANEL_HEADER);
+        frame.fill_rectangle(Point::ORIGIN, iced::Size::new(RULER, bounds.height), BG_PANEL_HEADER);
+        // Numbered every `major` document px: the smallest "nice" step at least 50 px apart.
+        let major = [1.0, 2.0, 5.0, 10.0, 20.0, 25.0, 50.0, 100.0, 200.0, 250.0, 500.0, 1000.0, 2000.0, 2500.0, 5000.0, 10000.0, 20000.0, 50000.0]
+            .into_iter()
+            .find(|s| s * self.zoom >= 50.0)
+            .unwrap_or(100000.0f32);
+        let minor = major / if (major / 10.0).fract() == 0.0 && major * self.zoom >= 100.0 { 10.0 } else { 5.0 };
+        let mut ticks = Vec::new();
+        for vertical in [false, true] {
+            // Along x for the top ruler, along y for the left one.
+            let (origin, len) = if vertical { (self.origin.y, bounds.height) } else { (self.origin.x, bounds.width) };
+            let first = ((RULER - origin) / self.zoom / minor).floor() as i64;
+            let last = ((len - origin) / self.zoom / minor).ceil() as i64;
+            for i in first..=last {
+                let v = i as f32 * minor;
+                let at = (origin + v * self.zoom).round() + 0.5;
+                if at < RULER {
+                    continue;
+                }
+                let numbered = (v / major).round() * major == v;
+                let size = if numbered { RULER } else if ((v / (major / 2.0)).round() * (major / 2.0) - v).abs() < 1e-3 { 7.0 } else { 4.0 };
+                ticks.push(if vertical {
+                    (Point::new(RULER - size, at), Point::new(RULER, at))
+                } else {
+                    (Point::new(at, RULER - size), Point::new(at, RULER))
+                });
+                if numbered {
+                    let label = format!("{}", v as i64);
+                    if vertical {
+                        // One digit per line, like Photoshop's left ruler.
+                        for (k, ch) in label.chars().enumerate() {
+                            frame.fill_text(canvas::Text {
+                                content: ch.to_string(),
+                                position: Point::new(3.0, at + 2.0 + k as f32 * 9.0),
+                                color: TEXT_MUTED,
+                                size: 9.0.into(),
+                                ..Default::default()
+                            });
+                        }
+                    } else {
+                        frame.fill_text(canvas::Text {
+                            content: label,
+                            position: Point::new(at + 3.0, 2.0),
+                            color: TEXT_MUTED,
+                            size: 9.0.into(),
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+        }
+        let path = Path::new(|p| {
+            for (a, b) in &ticks {
+                p.move_to(*a);
+                p.line_to(*b);
+            }
+            // Edges against the canvas.
+            p.move_to(Point::new(RULER - 0.5, RULER));
+            p.line_to(Point::new(RULER - 0.5, bounds.height));
+            p.move_to(Point::new(RULER, RULER - 0.5));
+            p.line_to(Point::new(bounds.width, RULER - 0.5));
+        });
+        frame.stroke(&path, Stroke::default().with_width(1.0).with_color(tick));
+        frame.fill_rectangle(Point::ORIGIN, iced::Size::new(RULER, RULER), BG_PANEL_HEADER);
+        if let Some(c) = pointer {
+            let mark = Path::new(|p| {
+                p.move_to(Point::new(c.x.round() + 0.5, 0.0));
+                p.line_to(Point::new(c.x.round() + 0.5, RULER));
+                p.move_to(Point::new(0.0, c.y.round() + 0.5));
+                p.line_to(Point::new(RULER, c.y.round() + 0.5));
+            });
+            frame.stroke(&mark, Stroke::default().with_width(1.0).with_color(Color::from_rgba(1.0, 1.0, 1.0, 0.7)));
         }
     }
 }

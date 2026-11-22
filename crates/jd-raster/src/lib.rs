@@ -119,6 +119,14 @@ impl Layer {
     }
 }
 
+/// A guide dragged out of a ruler: a vertical line at x = `pos`, or a horizontal one at
+/// y = `pos` (document pixels).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Guide {
+    pub vertical: bool,
+    pub pos: f32,
+}
+
 #[derive(Debug, Clone)]
 pub struct Document {
     pub name: String,
@@ -135,6 +143,8 @@ pub struct Document {
     /// Vector paths (the Paths panel), and the one being shown and edited.
     pub paths: Vec<path::VectorPath>,
     pub active_path: Option<usize>,
+    /// Ruler guides (View > Guides).
+    pub guides: Vec<Guide>,
     /// Bottom-to-top, like the compositing order. UIs usually display this reversed.
     layers: Vec<Layer>,
     active: Option<LayerId>,
@@ -170,6 +180,7 @@ impl Document {
             mask_target: false,
             paths: Vec::new(),
             active_path: None,
+            guides: Vec::new(),
             layers: Vec::new(),
             active: None,
             next_id: 0,

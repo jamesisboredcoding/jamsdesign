@@ -160,9 +160,15 @@ impl Document {
         true
     }
 
+    /// Moves the paths and guides with the canvas.
     fn map_paths(&mut self, f: impl Fn((f32, f32)) -> (f32, f32) + Copy) {
         for p in &mut self.paths {
             p.map(f);
+        }
+        // Guides too: two points on the line show where (and which way) it ends up.
+        for g in &mut self.guides {
+            let (a, b) = if g.vertical { (f((g.pos, 0.0)), f((g.pos, 1.0))) } else { (f((0.0, g.pos)), f((1.0, g.pos))) };
+            *g = if (a.0 - b.0).abs() < 1e-3 { crate::Guide { vertical: true, pos: a.0 } } else { crate::Guide { vertical: false, pos: a.1 } };
         }
     }
 
@@ -257,7 +263,7 @@ impl Document {
         let mut flat = Document::new(name, w, h);
         flat.blend_space = self.blend_space;
         // Paths aren't layers: they stay.
-        (flat.paths, flat.active_path) = (self.paths.clone(), self.active_path);
+        (flat.paths, flat.active_path, flat.guides) = (self.paths.clone(), self.active_path, self.guides.clone());
         let bg = flat.layers()[0].id;
         if let Some(l) = flat.layer_mut(bg) {
             l.pixels = merged;
@@ -349,6 +355,14 @@ mod tests {
         let mut f = doc();
         f.flip_canvas(true);
         assert_eq!(f.layers()[0].pixels.pixel(0, 2), [39, 2, 0, 255]);
+
+        // Guides follow: a vertical one turns horizontal with the canvas.
+        let mut g = doc();
+        g.guides = vec![crate::Guide { vertical: true, pos: 12.0 }, crate::Guide { vertical: false, pos: 5.0 }];
+        g.rotate_canvas(1);
+        assert_eq!(g.guides, [crate::Guide { vertical: false, pos: 12.0 }, crate::Guide { vertical: true, pos: 15.0 }]);
+        g.crop([0, 2, 20, 30]);
+        assert_eq!(g.guides[0].pos, 10.0);
     }
 
     #[test]

@@ -8,9 +8,9 @@ use jd_ui::widget::{bold, label};
 use jd_ui::{style, tokens::*};
 
 use crate::app::{Message, Photo};
-use crate::prefs::{BrushCursor, HISTORY_RANGE, Prefs};
+use crate::prefs::{BrushCursor, GRID_RANGE, HISTORY_RANGE, Prefs, SUBDIVISION_RANGE};
 
-const SECTIONS: [&str; 3] = ["General", "Tools", "Background Removal"];
+const SECTIONS: [&str; 4] = ["General", "Tools", "Guides & Grid", "Background Removal"];
 
 impl std::fmt::Display for BrushCursor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -111,6 +111,46 @@ fn tools<'a>(p: &Prefs) -> Element<'a, Message> {
     .into()
 }
 
+fn grid<'a>(app: &'a Photo, p: &Prefs) -> Element<'a, Message> {
+    let setter = |set: fn(&mut Prefs, u32)| {
+        let p = p.clone();
+        move |v: f32| {
+            let mut n = p.clone();
+            set(&mut n, v.round() as u32);
+            Message::PrefsSet(Box::new(n))
+        }
+    };
+    let spacing = super::field::number_live(
+        app,
+        "prefs-grid",
+        format!("{} px", p.grid_spacing),
+        80,
+        1.0,
+        GRID_RANGE,
+        setter(|p, v| p.grid_spacing = v),
+    );
+    let parts = super::field::number_live(
+        app,
+        "prefs-subdiv",
+        p.grid_subdivisions.to_string(),
+        80,
+        1.0,
+        SUBDIVISION_RANGE,
+        setter(|p, v| p.grid_subdivisions = v),
+    );
+    column![
+        text("Grid").size(TEXT_SIZE).font(bold()),
+        row![text("Gridline every").size(TEXT_SIZE).width(Fill), spacing].align_y(Vertical::Center),
+        row![text("Subdivisions").size(TEXT_SIZE).width(Fill), parts].align_y(Vertical::Center),
+        label("View > Show > Grid (Ctrl+') shows it. Snapping lands on every subdivision."),
+        space().height(4),
+        text("Guides").size(TEXT_SIZE).font(bold()),
+        label("Drag from a ruler (View > Rulers, Ctrl+R) to add one. Move them with the Move tool; drag one back onto a ruler to delete it."),
+    ]
+    .spacing(8)
+    .into()
+}
+
 fn background_removal<'a>() -> Element<'a, Message> {
     let model = &jd_ai::ISNET;
     let installed = model.is_installed();
@@ -146,7 +186,8 @@ pub fn view(app: &Photo) -> Option<Element<'_, Message>> {
     }
     let body = match d.tab {
         1 => tools(p),
-        2 => background_removal(),
+        2 => grid(app, p),
+        3 => background_removal(),
         _ => general(app, p),
     };
     let card = container(

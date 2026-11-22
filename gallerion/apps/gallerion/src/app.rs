@@ -393,12 +393,26 @@ pub struct Snap {
     pub on: bool,
     pub bounds: bool,
     pub layers: bool,
+    pub guides: bool,
+    pub grid: bool,
+}
+
+/// View > Rulers and View > Show: what's drawn over the canvas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Extras {
+    pub rulers: bool,
+    pub guides: bool,
+    pub grid: bool,
+    /// Guides can't be dragged (View > Lock Guides).
+    pub lock_guides: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SnapTo {
     Bounds,
     Layers,
+    Guides,
+    Grid,
     All,
     None,
 }
@@ -542,6 +556,7 @@ pub struct Photo {
     pub panels: Panels,
     pub workspace: Workspace,
     pub snap: Snap,
+    pub extras: Extras,
     /// The value box being typed into, if any.
     pub field_edit: Option<FieldEdit>,
     /// Fingerprint of the image we last put on the system clipboard (pasting it back uses our
@@ -715,6 +730,15 @@ pub enum Message {
     // Snapping
     ToggleSnap,
     SnapTo(SnapTo),
+
+    // Rulers, guides and grid
+    ToggleRulers,
+    ToggleGuides,
+    ToggleGrid,
+    LockGuides,
+    ClearGuides,
+    /// Adds (`index` None), moves or (`guide` None) deletes a guide.
+    SetGuide { index: Option<usize>, guide: Option<jd_raster::Guide> },
 
     // Layers panel right-click menu
     OpenLayerMenu(LayerId),
@@ -1036,7 +1060,8 @@ impl Photo {
             last_filter: None,
             panels: Panels { color: true, properties: true, layers: true },
             workspace: Workspace::Essentials,
-            snap: Snap { on: true, bounds: true, layers: true },
+            snap: Snap { on: true, bounds: true, layers: true, guides: true, grid: true },
+            extras: Extras { rulers: false, guides: true, grid: false, lock_guides: false },
             field_edit: None,
             last_copy_stamp: None,
             pen_tool: Default::default(),
@@ -1128,7 +1153,7 @@ impl Photo {
         match d.zoom {
             Zoom::Fixed(z) => z,
             Zoom::Fit => {
-                let margin = 60.0;
+                let margin = 60.0 + self.ruler_space();
                 let zx = (self.viewport.width - margin).max(1.0) / d.doc.width as f32;
                 let zy = (self.viewport.height - margin).max(1.0) / d.doc.height as f32;
                 zx.min(zy).min(1.0)
@@ -1144,10 +1169,17 @@ impl Photo {
     }
 
     fn origin_for(&self, d: &OpenDoc, z: f32, pan: Vector) -> Point {
+        // Centred in what the rulers leave free.
+        let r = self.ruler_space();
         Point::new(
-            self.viewport.width / 2.0 - d.doc.width as f32 * z / 2.0 + pan.x,
-            self.viewport.height / 2.0 - d.doc.height as f32 * z / 2.0 + pan.y,
+            r + (self.viewport.width - r) / 2.0 - d.doc.width as f32 * z / 2.0 + pan.x,
+            r + (self.viewport.height - r) / 2.0 - d.doc.height as f32 * z / 2.0 + pan.y,
         )
+    }
+
+    /// Room the rulers take along the top and left of the canvas (logical px).
+    fn ruler_space(&self) -> f32 {
+        if self.extras.rulers { crate::view::canvas::RULER } else { 0.0 }
     }
 
     fn info(&mut self, text: impl Into<String>) {
@@ -2510,9 +2542,44 @@ impl Photo {
                 match t {
                     SnapTo::Bounds => s.bounds = !s.bounds,
                     SnapTo::Layers => s.layers = !s.layers,
-                    SnapTo::All => (s.bounds, s.layers) = (true, true),
-                    SnapTo::None => (s.bounds, s.layers) = (false, false),
+                    SnapTo::Guides => s.guides = !s.guides,
+                    SnapTo::Grid => s.grid = !s.grid,
+                    SnapTo::All => (s.bounds, s.layers, s.guides, s.grid) = (true, true, true, true),
+                    SnapTo::None => (s.bounds, s.layers, s.guides, s.grid) = (false, false, false, false),
                 }
+            }
+            Message::ToggleRulers => {
+                self.extras.rulers = !self.extras.rulers;
+                self.prefs.rulers = self.extras.rulers;
+                let _ = self.prefs.save();
+            }
+            Message::ToggleGuides => self.extras.guides = !self.extras.guides,
+            Message::ToggleGrid => self.extras.grid = !self.extras.grid,
+            Message::LockGuides => self.extras.lock_guides = !self.extras.lock_guides,
+            Message::ClearGuides => self.edit("Clear Guides", None, |doc| !std::mem::take(&mut doc.guides).is_empty()),
+            Message::SetGuide { index, guide } => {
+                let label = match (index, guide) {
+                    (None, _) => "New Guide",
+                    (Some(_), Some(_)) => "Move Guide",
+                    (Some(_), None) => "Delete Guide",
+                };
+                // A new guide shows the guides (they may have been hidden).
+                self.extras.guides = true;
+                self.edit(label, None, |doc| match (index, guide) {
+                    (None, Some(g)) => {
+                        doc.guides.push(g);
+                        true
+                    }
+                    (Some(i), Some(g)) if i < doc.guides.len() && doc.guides[i] != g => {
+                        doc.guides[i] = g;
+                        true
+                    }
+                    (Some(i), None) if i < doc.guides.len() => {
+                        doc.guides.remove(i);
+                        true
+                    }
+                    _ => false,
+                });
             }
             Message::SetCloneSource(at) => {
                 self.clone_source = Some(at);
@@ -3365,6 +3432,10 @@ impl Photo {
                 | Message::FontFilter(_)
                 | Message::OptionsPointer(_)
                 | Message::ToggleSnap
+                | Message::ToggleRulers
+                | Message::ToggleGuides
+                | Message::ToggleGrid
+                | Message::LockGuides
                 | Message::TypeFamily(_)
                 | Message::TypeSize(_)
                 | Message::TypeBold
@@ -3472,6 +3543,7 @@ impl Photo {
     fn apply_startup_prefs(&mut self) {
         self.pen_pressure = self.prefs.pen_pressure;
         self.snap.on = self.prefs.snap;
+        self.extras.rulers = self.prefs.rulers;
         if let Some(l) = self.prefs.layout.clone().filter(|_| self.prefs.remember_layout) {
             self.workspace = l.workspace;
             self.dock_width = l.dock_width.clamp(DOCK_MIN, DOCK_MAX);
@@ -3874,6 +3946,17 @@ impl Photo {
                     add(b.map(|v| v as f32));
                 }
             }
+        }
+        if self.snap.guides && self.extras.guides {
+            for g in &doc.guides {
+                if g.vertical { lines.x.push(g.pos) } else { lines.y.push(g.pos) }
+            }
+        }
+        if self.snap.grid && self.extras.grid {
+            let step = self.prefs.grid_step();
+            let lines_to = |n: u32| (0..=(n as f32 / step) as u32).map(move |i| i as f32 * step);
+            lines.x.extend(lines_to(doc.width));
+            lines.y.extend(lines_to(doc.height));
         }
         lines
     }
@@ -4305,6 +4388,10 @@ impl Photo {
                 "0" => Some(Message::ZoomTo(Zoom::Fit)),
                 "1" => Some(Message::ZoomTo(Zoom::Fixed(1.0))),
                 ";" | ":" if shift => Some(Message::ToggleSnap),
+                ";" if alt => Some(Message::LockGuides),
+                ";" => Some(Message::ToggleGuides),
+                "'" => Some(Message::ToggleGrid),
+                "r" if !shift && !alt => Some(Message::ToggleRulers),
                 "o" => Some(Message::OpenDialog),
                 "g" if shift => Some(Message::Ungroup),
                 "g" => Some(Message::GroupLayers),
@@ -5087,6 +5174,32 @@ mod tests {
         assert_eq!(doc.layers().len(), 4);
         assert_eq!(doc.layers()[3].pixels.pixel(49, 49), [255, 0, 0, 255]);
         assert_eq!(doc.layers()[3].pixels.pixel(49, 52)[3], 0);
+    }
+
+    #[test]
+    fn guides_add_move_delete_undo_and_snap() {
+        use jd_raster::Guide;
+        let (mut app, _) = Photo::new();
+        white(&mut app, 200, 100);
+        let v = |pos| Some(Guide { vertical: true, pos });
+        let _ = app.update(Message::SetGuide { index: None, guide: v(50.0) });
+        let _ = app.update(Message::SetGuide { index: Some(0), guide: v(80.0) });
+        assert_eq!(app.document().unwrap().guides, [Guide { vertical: true, pos: 80.0 }]);
+        let layer = app.document().unwrap().active_id().unwrap();
+        let lines = app.snap_lines(app.document().unwrap(), layer);
+        assert!(lines.x.contains(&80.0));
+        // Hidden guides don't snap; the grid does once shown (every subdivision).
+        app.extras.guides = false;
+        app.extras.grid = true;
+        let lines = app.snap_lines(app.document().unwrap(), layer);
+        assert!(!lines.x.contains(&80.0) && lines.x.contains(&75.0) && lines.y.contains(&100.0));
+
+        let _ = app.update(Message::SetGuide { index: Some(0), guide: None });
+        assert!(app.document().unwrap().guides.is_empty());
+        let _ = app.update(Message::Undo);
+        assert_eq!(app.document().unwrap().guides.len(), 1);
+        let _ = app.update(Message::ClearGuides);
+        assert!(app.document().unwrap().guides.is_empty());
     }
 
     #[test]
