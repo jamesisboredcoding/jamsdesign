@@ -140,6 +140,8 @@ left-click in, right-click out.
       Guides (Ctrl+;) / Grid (Ctrl+'), Lock Guides (Alt+Ctrl+;), Clear Guides; Snap To Guides
       and Grid; grid spacing and subdivisions in Preferences. Guides are undoable, follow
       crops and rotations, and are saved in .jdp
+- [x] 6l: layer masks: Alt+click the mask thumbnail to see the mask alone (again to go back),
+      Ctrl+\\ targets the mask and Ctrl+2 the layer
 - [x] 6k: Home screen (the Home button in the options bar, and whenever nothing is open):
       New / Open and the recent files as thumbnails (cached in
       `~/.cache/jamsdesign/photosplash-thumbs/` when a file is opened or saved; right-click one
@@ -191,16 +193,15 @@ Try it: `cargo run -p jd-io --example demo_doc -- demo.jdp base.jpg top.jpg`
   on commit. Shadow and glow use normal blending (Photoshop defaults to Multiply/Screen).
   Not yet: Bevel, Inner Shadow/Glow, Satin, Gradient/Pattern Overlay.
 - Remove Background works on the active layer and hides the background with a layer mask
-  (it replaces a mask the layer already had).
+  (it replaces a mask the layer already had). It takes about 1.5 s per image on a 12-core
+  CPU; complex hair/fur edges are softer than remove.bg. The download has no progress bar yet.
 - Groups: inside a group that isn't plain Pass Through (another blend mode, or opacity /
   mask / effects on the group), Move and Free Transform show the result when committed
   rather than while dragging. Copying a group to another document isn't supported yet.
 - Paths: no Convert Point / Add or Delete Anchor tools, no vector shape layers, no Make Work
   Path from a selection; the Pen's last point can only be removed while drawing.
-- Layer masks: no Alt+click to view the mask alone, no Ctrl+\\ / Ctrl+2 shortcuts to switch
-  target, and masks are always linked (moving a selection inside a mask isn't supported).
-  It takes about 1.5 s per image on a 12-core CPU; complex hair/fur edges are softer than
-  remove.bg. The download has no progress bar yet.
+- Layer masks are always linked (moving a selection inside a mask isn't supported), and there's
+  no red overlay view (Photoshop's \\ key).
 - Type: point text only (no text boxes or wrapping), the caret is always at the end (no
   arrow keys or selecting part of the text), one style per layer. Painting on, filtering or
   free-transforming a text layer turns it into plain pixels without asking. Move and Ctrl+T refuse on a locked layer (unlock it first).

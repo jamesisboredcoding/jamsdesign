@@ -565,6 +565,9 @@ pub struct Photo {
     pub workspace: Workspace,
     pub snap: Snap,
     pub extras: Extras,
+    /// The mask shown alone on the canvas (Alt+click on its thumbnail), while that layer is
+    /// active.
+    pub mask_view: Option<LayerId>,
     /// The Home screen is showing (it also shows whenever nothing is open).
     pub home: bool,
     /// Recent files as last read from disk, for the Home screen.
@@ -838,6 +841,8 @@ pub enum Message {
     /// A press on a layer's thumbnail (`true`: its mask's): selects the layer and what edits
     /// go to; Ctrl loads it as a selection, Shift switches a mask off and on.
     ThumbPress(LayerId, bool),
+    /// Edits go to the active layer's mask (Ctrl+Backslash) or its pixels (Ctrl+2).
+    TargetMask(bool),
     DuplicateInto(usize),
     About,
 
@@ -1084,6 +1089,7 @@ impl Photo {
             extras: Extras { rulers: false, guides: true, grid: false, lock_guides: false },
             home: false,
             recent: Vec::new(),
+            mask_view: None,
             field_edit: None,
             last_copy_stamp: None,
             pen_tool: Default::default(),
@@ -2715,8 +2721,35 @@ impl Photo {
                 self.mask_op(op);
             }
             Message::LayerMask(op) => self.mask_op(op),
+            Message::TargetMask(on_mask) => {
+                let has_mask = self.document().and_then(|d| d.active()).is_some_and(|l| l.mask.is_some());
+                if let Some(d) = self.doc_mut()
+                    && (has_mask || !on_mask)
+                {
+                    d.doc.mask_target = on_mask;
+                }
+                if !on_mask {
+                    self.mask_view = None;
+                }
+            }
             Message::ThumbPress(id, on_mask) => {
                 let m = self.modifiers;
+                // Alt+click on a mask: show the mask alone (again: back to the image).
+                if on_mask && m.alt() && !m.command() {
+                    let _ = self.update(Message::LayerPress(id));
+                    self.layer_drag = None;
+                    self.mask_view = if self.mask_view == Some(id) { None } else { Some(id) };
+                    if let Some(d) = self.doc_mut() {
+                        d.doc.mask_target = true;
+                    }
+                    if self.mask_view.is_some() {
+                        self.info("Showing the layer mask. Alt+click its thumbnail again to go back.");
+                    }
+                    return Task::none();
+                }
+                if !on_mask {
+                    self.mask_view = None;
+                }
                 if m.command() {
                     // Ctrl+click: load the layer's opacity, or its mask, as the selection.
                     self.edit("Load Selection", None, |doc| {
@@ -4470,6 +4503,8 @@ impl Photo {
                 ";" if alt => Some(Message::LockGuides),
                 ";" => Some(Message::ToggleGuides),
                 "'" => Some(Message::ToggleGrid),
+                "\\" => Some(Message::TargetMask(true)),
+                "2" => Some(Message::TargetMask(false)),
                 "r" if !shift && !alt => Some(Message::ToggleRulers),
                 "o" => Some(Message::OpenDialog),
                 "g" if shift => Some(Message::Ungroup),
@@ -5318,6 +5353,31 @@ mod tests {
         let _ = app.update(Message::ToggleHome);
         let _ = app.update(Message::Open(vec![PathBuf::from("Cargo.toml")]));
         assert_eq!((app.loading, app.docs.len(), app.active, app.home), (0, 2, 1, false));
+    }
+
+    #[test]
+    fn mask_view_and_target_shortcuts() {
+        let (mut app, _) = Photo::new();
+        white(&mut app, 40, 40);
+        let _ = app.update(Message::AddLayer);
+        let id = app.document().unwrap().active_id().unwrap();
+        let _ = app.update(Message::TargetMask(true));
+        assert!(!app.document().unwrap().mask_target, "no mask to target yet");
+        let _ = app.update(Message::LayerMask(MaskOp::RevealAll));
+        let _ = app.update(Message::TargetMask(false));
+        assert!(!app.document().unwrap().editing_mask());
+        let _ = app.update(Message::TargetMask(true));
+        assert!(app.document().unwrap().editing_mask());
+
+        app.modifiers = keyboard::Modifiers::ALT;
+        let _ = app.update(Message::ThumbPress(id, true));
+        assert_eq!(app.mask_view, Some(id));
+        let _ = app.update(Message::ThumbPress(id, true));
+        assert_eq!(app.mask_view, None);
+        let _ = app.update(Message::ThumbPress(id, true));
+        app.modifiers = keyboard::Modifiers::empty();
+        let _ = app.update(Message::TargetMask(false));
+        assert_eq!(app.mask_view, None, "back to the layer leaves the mask view");
     }
 
     #[test]

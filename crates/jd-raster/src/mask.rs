@@ -110,6 +110,38 @@ impl Mask {
         (tw, th, out)
     }
 
+    /// The mask as opaque greys over the canvas (viewing the mask alone, Alt+click on its
+    /// thumbnail). Tiles are cached, so unchanged parts keep their ids from call to call.
+    pub fn view(&self) -> TileGrid {
+        let mut out = TileGrid::empty(self.pixels.width(), self.pixels.height());
+        let mut cache = VIEW_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if cache.len() > 2048 {
+            cache.clear();
+        }
+        for ty in 0..out.rows() {
+            for tx in 0..out.cols() {
+                let src = self.pixels.tile(tx, ty);
+                let key = (src.map(|t| t.id().raw()), self.default);
+                let tile = cache
+                    .entry(key)
+                    .or_insert_with(|| match src {
+                        None => solid(self.default),
+                        Some(t) => {
+                            let mut data = t.data().to_vec();
+                            for p in data.chunks_exact_mut(4) {
+                                let v = value(p, self.default);
+                                p.copy_from_slice(&[v, v, v, 255]);
+                            }
+                            Arc::new(Tile::new(data.into_boxed_slice()))
+                        }
+                    })
+                    .clone();
+                out.set_tile(tx, ty, Some(tile));
+            }
+        }
+        out
+    }
+
     /// Cache key part for the mask's contents.
     fn tile_key(&self, tx: i32, ty: i32) -> Option<u64> {
         self.pixels.tile_at(tx, ty).map(|t| t.id().raw())
@@ -130,6 +162,9 @@ fn mask_tile(px: &Tile, m: Option<&Tile>, default: u8) -> Option<Arc<Tile>> {
     }
     any.then(|| Arc::new(Tile::new(data.into_boxed_slice())))
 }
+
+/// Grey tiles for [`Mask::view`], by (mask tile, default).
+static VIEW_CACHE: LazyLock<Mutex<HashMap<(Option<u64>, u8), Arc<Tile>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 type Key = (u64, Option<u64>, u8);
 
@@ -237,5 +272,17 @@ mod tests {
         assert_eq!((back.get(20, 30), back.get(21, 30), back.get(0, 0)), (255, 100, 0));
         let hide = Mask::from_selection(&sel, true);
         assert_eq!((hide.value_at(20, 30), hide.value_at(0, 0)), (0, 255));
+    }
+
+    #[test]
+    fn view_shows_greys_and_reuses_tiles() {
+        let mut m = Mask::new(300, 10, 255);
+        m.pixels.set_pixel(5, 5, [0, 0, 0, 255]);
+        let v = m.view();
+        assert_eq!(v.pixel(5, 5), [0, 0, 0, 255]);
+        assert_eq!(v.pixel(6, 5), [255, 255, 255, 255]);
+        assert_eq!(v.pixel(290, 5), [255, 255, 255, 255]);
+        let again = m.view();
+        assert_eq!(v.tile(0, 0).unwrap().id(), again.tile(0, 0).unwrap().id());
     }
 }

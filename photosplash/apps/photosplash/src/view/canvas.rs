@@ -124,6 +124,23 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
         }
     }
 
+    // Viewing a layer mask alone: just its greys.
+    if let Some(mask) = app
+        .mask_view
+        .filter(|&id| doc.active_id() == Some(id))
+        .and_then(|id| doc.layer(id))
+        .and_then(|l| l.mask.as_ref())
+    {
+        let mut d = jd_raster::Document::blank("mask", doc.width, doc.height);
+        let id = d.add_layer("mask");
+        if let Some(l) = d.layer_mut(id) {
+            l.pixels = mask.view();
+        }
+        let retain = std::mem::take(&mut scene.retain);
+        scene = Scene::from_document(&d);
+        scene.retain = retain;
+    }
+
     let pixels = Shader::new(Pixels { scene: Arc::new(scene), origin, zoom }).width(Fill).height(Fill);
 
     let overlay = Canvas::new(Overlay {
