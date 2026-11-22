@@ -7,6 +7,7 @@ pub mod blend;
 pub mod composite;
 pub mod filter;
 pub mod gradient;
+pub mod group;
 pub mod heal;
 pub mod style;
 pub mod text;
@@ -50,9 +51,45 @@ pub struct Layer {
     /// Set on adjustment layers: instead of pixels, they show the layers below adjusted
     /// (see [`render`]).
     pub adjustment: Option<adjust::Adjustment>,
+    /// The group this layer is in (see [`group`]).
+    pub parent: Option<LayerId>,
+    /// Set on groups (they have no pixels of their own; see [`render`]).
+    pub group: Option<Group>,
+}
+
+/// A layer group's own settings (its opacity, blend mode, mask... are the layer's).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Group {
+    /// Photoshop's "Pass Through" blend mode: the layers inside blend with everything below
+    /// as if they weren't grouped. Otherwise they're combined first, then blended as one
+    /// layer with the group's blend mode.
+    pub pass_through: bool,
+    /// Expanded in the layers panel.
+    pub open: bool,
 }
 
 impl Layer {
+    /// An empty, visible, normal layer.
+    pub fn new(id: LayerId, name: String, width: u32, height: u32) -> Self {
+        Self {
+            id,
+            name,
+            visible: true,
+            locked: false,
+            lock_pixels: false,
+            lock_position: false,
+            opacity: 1.0,
+            blend: BlendMode::Normal,
+            pixels: TileGrid::empty(width, height),
+            style: style::LayerStyle::default(),
+            text: None,
+            mask: None,
+            adjustment: None,
+            parent: None,
+            group: None,
+        }
+    }
+
     /// What the layer looks like: its pixels plus its effects (cached; the pixels themselves
     /// when it has none). Everything that draws or flattens layers uses this.
     pub fn rendered(&self) -> std::borrow::Cow<'_, TileGrid> {
@@ -137,21 +174,9 @@ impl Document {
     pub fn add_layer(&mut self, name: impl Into<String>) -> LayerId {
         let id = LayerId(self.next_id);
         self.next_id += 1;
-        let layer = Layer {
-            id,
-            name: name.into(),
-            visible: true,
-            locked: false,
-            lock_pixels: false,
-            lock_position: false,
-            opacity: 1.0,
-            blend: BlendMode::Normal,
-            pixels: TileGrid::empty(self.width, self.height),
-            style: style::LayerStyle::default(),
-            text: None,
-            mask: None,
-            adjustment: None,
-        };
+        let mut layer = Layer::new(id, name.into(), self.width, self.height);
+        // Next to the active layer, in the same group (above a group, outside it).
+        layer.parent = self.active().and_then(|a| a.parent);
         let index = self
             .active
             .and_then(|a| self.index_of(a))
@@ -162,43 +187,51 @@ impl Document {
         id
     }
 
-    /// Copies a layer (sharing its tiles) above itself and makes the copy active.
+    /// Copies a layer (sharing its tiles) above itself and makes the copy active. A group is
+    /// copied with everything inside it.
     pub fn duplicate_layer(&mut self, id: LayerId) -> Option<LayerId> {
         let index = self.index_of(id)?;
-        let mut copy = self.layers[index].clone();
-        copy.id = LayerId(self.next_id);
-        self.next_id += 1;
-        copy.name = format!("{} copy", copy.name);
-        copy.locked = false;
-        let new_id = copy.id;
-        self.layers.insert(index + 1, copy);
+        let block = self.block(index);
+        let mut copies: Vec<Layer> = self.layers[block.clone()].to_vec();
+        // New ids, with the copies' groups pointing at the copied groups.
+        let mut ids = std::collections::HashMap::new();
+        for l in &mut copies {
+            let new = LayerId(self.next_id);
+            self.next_id += 1;
+            ids.insert(l.id, new);
+            l.id = new;
+        }
+        for l in &mut copies {
+            l.parent = l.parent.map(|p| ids.get(&p).copied().unwrap_or(p));
+        }
+        let top = copies.last_mut().expect("a block has its layer");
+        top.name = format!("{} copy", top.name);
+        top.locked = false;
+        let new_id = top.id;
+        let at = *block.end() + 1;
+        for (k, l) in copies.into_iter().enumerate() {
+            self.layers.insert(at + k, l);
+        }
         self.active = Some(new_id);
+        self.mask_target = false;
         Some(new_id)
     }
 
-    /// Moves a layer up (+1, towards the top) or down (-1). Returns whether it moved.
-    pub fn move_layer(&mut self, id: LayerId, delta: isize) -> bool {
-        let Some(index) = self.index_of(id) else { return false };
-        let target = index as isize + delta;
-        if target < 0 || target >= self.layers.len() as isize {
-            return false;
-        }
-        let layer = self.layers.remove(index);
-        self.layers.insert(target as usize, layer);
-        true
-    }
-
-    /// Removes a layer. The last remaining layer can't be removed.
+    /// Removes a layer (a group with everything inside it). The last remaining layer can't be
+    /// removed. Returns the removed layer itself.
     pub fn remove_layer(&mut self, id: LayerId) -> Option<Layer> {
-        if self.layers.len() <= 1 {
+        let index = self.index_of(id)?;
+        let block = self.block(index);
+        if block.clone().count() >= self.layers.len() {
             return None;
         }
-        let index = self.index_of(id)?;
-        let removed = self.layers.remove(index);
-        if self.active == Some(id) {
-            self.active = Some(self.layers[index.saturating_sub(1)].id);
+        let start = *block.start();
+        let mut removed: Vec<Layer> = self.layers.drain(block).collect();
+        if self.active.is_none_or(|a| self.index_of(a).is_none()) {
+            self.active = Some(self.layers[start.saturating_sub(1).min(self.layers.len() - 1)].id);
+            self.mask_target = false;
         }
-        Some(removed)
+        removed.pop()
     }
 
     /// Bottom-to-top.

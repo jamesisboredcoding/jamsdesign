@@ -6,7 +6,12 @@ use crate::blend;
 use crate::composite::{self, BlendSpace};
 use crate::selection::{self, Selection};
 use crate::transform::{self, content_bounds};
-use crate::{BlendMode, Document, Layer, TileGrid};
+use crate::{BlendMode, Document, Layer, LayerId, TileGrid};
+
+/// Each layer's group, by id (from before layers were removed).
+fn all_parents(layers: &[&Layer]) -> std::collections::HashMap<LayerId, Option<LayerId>> {
+    layers.iter().map(|l| (l.id, l.parent)).collect()
+}
 
 /// Where the old image sits when the canvas grows or shrinks: (0, 0) top-left, (0.5, 0.5)
 /// centre, (1, 1) bottom-right.
@@ -97,8 +102,9 @@ impl Document {
         let bounds = self
             .layers()
             .iter()
-            .filter(|l| l.visible)
-            .filter_map(|l| content_bounds(&l.rendered()))
+            .zip(self.rendered_layers())
+            .filter(|(l, _)| l.visible)
+            .filter_map(|(_, look)| content_bounds(&look))
             .reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]);
         match bounds {
             Some(b) if b != [0, 0, self.width, self.height] => {
@@ -113,12 +119,17 @@ impl Document {
     /// layer's name, opacity and blend mode, like Photoshop.
     pub fn merge_down(&mut self) -> bool {
         let Some(i) = self.active_id().and_then(|id| self.layers().iter().position(|l| l.id == id)) else { return false };
+        // On a group this is Merge Group (like Photoshop).
+        if self.layers()[i].is_group() {
+            return self.merge_group(self.layers()[i].id);
+        }
         if i == 0 {
             return false;
         }
         let (lower, upper) = (&self.layers()[i - 1], &self.layers()[i]);
-        // Like Photoshop, nothing merges into an adjustment layer.
-        if lower.adjustment.is_some() {
+        // Like Photoshop, nothing merges into an adjustment layer or a group, and the bottom
+        // layer of a group has nothing below it in the group.
+        if lower.adjustment.is_some() || lower.is_group() || lower.parent != upper.parent {
             return false;
         }
         let base = Layer { opacity: 1.0, blend: BlendMode::Normal, visible: true, ..lower.clone() };
@@ -136,19 +147,76 @@ impl Document {
         true
     }
 
-    /// Merges all visible layers into one (Shift+Ctrl+E); hidden layers stay.
+    /// Merge Group: the group and everything in it become one layer in its place.
+    pub fn merge_group(&mut self, id: LayerId) -> bool {
+        let Some(g) = self.index_of_layer(id) else { return false };
+        let block = self.block(g);
+        let group = self.layers()[g].clone();
+        let Some(info) = group.group else { return false };
+        let (space, w, h) = (self.blend_space, self.width, self.height);
+        let (pixels, blend, opacity) = if info.pass_through {
+            // Its layers blend as if ungrouped: combine them (with the group's opacity and mask).
+            let members: Vec<&Layer> = self.layers()[block.clone()].iter().collect();
+            (merge(&members, space, w, h, None), BlendMode::Normal, 1.0)
+        } else {
+            // Combined first anyway: that image, keeping the group's blend mode and opacity.
+            let look = self.rendered_layers_unhidden(g);
+            (look, group.blend, group.opacity)
+        };
+        let mut layer = crate::Layer::new(id, group.name.clone(), w, h);
+        (layer.pixels, layer.blend, layer.opacity, layer.visible, layer.parent) = (pixels, blend, opacity, group.visible, group.parent);
+        self.layers.splice(block, [layer]);
+        self.set_active(id);
+        true
+    }
+
+    /// The look of layer `index` as if it and the groups around it were visible.
+    fn rendered_layers_unhidden(&self, index: usize) -> TileGrid {
+        let mut d = self.clone();
+        let id = self.layers()[index].id;
+        let mut cur = Some(id);
+        while let Some(c) = cur {
+            let l = d.layer_mut(c).expect("exists");
+            l.visible = true;
+            cur = l.parent;
+        }
+        // Its look is computed inside any combined group around it too; lift it out.
+        if let Some(l) = d.layer_mut(id) {
+            l.parent = None;
+        }
+        d.rendered_layers()[index].clone().into_owned()
+    }
+
+    /// Merges all visible layers into one (Shift+Ctrl+E); hidden layers (and layers in
+    /// hidden groups) stay.
     pub fn merge_visible(&mut self) -> bool {
-        let visible: Vec<&Layer> = self.layers().iter().filter(|l| l.visible).collect();
-        if visible.len() < 2 {
+        let shown: Vec<LayerId> = self.layers().iter().filter(|l| self.effectively_visible(l.id)).map(|l| l.id).collect();
+        if shown.len() < 2 {
             return false;
         }
-        let merged = merge(&visible, self.blend_space, self.width, self.height, None);
-        let keep = visible[0].id;
-        let drop: Vec<_> = visible[1..].iter().map(|l| l.id).collect();
-        for id in drop {
-            self.remove_layer(id);
+        let all: Vec<&Layer> = self.layers().iter().collect();
+        let merged = merge(&all, self.blend_space, self.width, self.height, None);
+        let parents = all_parents(&all);
+        // Keep the lowest shown pixel layer (any layer if there's none), drop the other shown ones.
+        let keep = shown
+            .iter()
+            .copied()
+            .find(|id| self.layer(*id).is_some_and(|l| !l.is_group() && l.adjustment.is_none()))
+            .unwrap_or(shown[0]);
+        self.layers.retain(|l| l.id == keep || !shown.contains(&l.id));
+        // Layers whose group went away move up to the nearest group that's still there.
+        let ids: std::collections::HashSet<LayerId> = self.layers.iter().map(|l| l.id).collect();
+        for l in &mut self.layers {
+            while let Some(p) = l.parent {
+                if ids.contains(&p) {
+                    break;
+                }
+                l.parent = parents.get(&p).copied().flatten();
+            }
         }
         if let Some(l) = self.layer_mut(keep) {
+            l.parent = None;
+            l.group = None;
             l.pixels = merged;
             l.style = Default::default();
             l.mask = None;

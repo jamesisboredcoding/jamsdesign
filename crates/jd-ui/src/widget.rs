@@ -200,6 +200,7 @@ pub fn panel_header_grip<'a, M: Clone + 'a>(
 /// show that edits go to the mask (Photoshop's targeted thumbnail).
 #[allow(clippy::too_many_arguments)]
 pub fn layer_row<'a, M: Clone + 'a>(
+    indent: f32,
     name: impl Into<Element<'a, M>>,
     thumb: impl Into<Element<'a, M>>,
     mask: Option<Element<'a, M>>,
@@ -241,7 +242,8 @@ pub fn layer_row<'a, M: Clone + 'a>(
         })
     };
 
-    let mut body = row![frame(thumb.into(), !mask_targeted)].spacing(8).height(Fill).align_y(Vertical::Center);
+    // `indent`: layers inside groups sit further right, like Photoshop.
+    let mut body = row![space().width(indent), frame(thumb.into(), !mask_targeted)].spacing(8).height(Fill).align_y(Vertical::Center);
     if let Some(mask) = mask {
         body = body.push(frame(mask, mask_targeted));
     }

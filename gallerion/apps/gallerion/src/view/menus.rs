@@ -76,6 +76,10 @@ struct State {
     clip: bool,
     can_merge_down: bool,
     reselect: bool,
+    /// The active layer is a group or in one.
+    in_group: bool,
+    /// "Merge Down", or "Merge Group" on a group.
+    merge_label: &'static str,
 }
 
 fn state(app: &Photo) -> State {
@@ -88,8 +92,15 @@ fn state(app: &Photo) -> State {
         undo: app.doc().is_some_and(|d| d.history.can_undo()),
         redo: app.doc().is_some_and(|d| d.history.can_redo()),
         clip: app.clipboard.is_some(),
-        can_merge_down: index.is_some_and(|i| i > 0),
+        // Like Photoshop: a group merges into one layer; otherwise the layer below must be a
+        // pixel layer in the same group.
+        can_merge_down: d.zip(index).is_some_and(|(d, i)| {
+            let l = d.layers();
+            l[i].is_group() || (i > 0 && !l[i - 1].is_group() && l[i - 1].adjustment.is_none() && l[i - 1].parent == l[i].parent)
+        }),
+        merge_label: if d.and_then(|d| d.active()).is_some_and(|l| l.is_group()) { "Merge Group" } else { "Merge Down" },
         reselect: app.doc().is_some_and(|d| d.last_selection.is_some()),
+        in_group: d.and_then(|d| d.active()).is_some_and(|l| l.is_group() || l.parent.is_some()),
     }
 }
 
@@ -159,7 +170,7 @@ fn context(app: &Photo) -> Vec<MenuEntry<'_, Message>> {
             Separator,
             item("New Layer", "Shift+Ctrl+N", true, Message::AddLayer),
             item("Duplicate Layer", "Ctrl+J", true, Message::DuplicateLayer),
-            item("Merge Down", "Ctrl+E", s.can_merge_down, Message::MergeDown),
+            item(s.merge_label, "Ctrl+E", s.can_merge_down, Message::MergeDown),
             Separator,
             item("Free Transform", "Ctrl+T", s.editable, Message::FreeTransform),
             MenuEntry::Submenu("Transform", transform_entries(&s)),
@@ -250,8 +261,12 @@ fn menu_bar(app: &Photo, i: usize) -> Vec<MenuEntry<'_, Message>> {
         }
         "Layer" => vec![
             item("New Layer", "Shift+Ctrl+N", doc, Message::AddLayer),
+            item("New Group", "", doc, Message::NewGroup),
             item("Duplicate Layer", "Ctrl+J", doc, Message::DuplicateLayer),
             item("Delete Layer", "", doc, Message::DeleteLayer),
+            Separator,
+            item("Group Layers", "Ctrl+G", doc && s.editable, Message::GroupLayers),
+            item("Ungroup Layers", "Shift+Ctrl+G", s.in_group, Message::Ungroup),
             Separator,
             item("Layer via Copy", "Ctrl+J", sel, Message::LayerVia { cut: false }),
             item("Layer via Cut", "Shift+Ctrl+J", sel && s.editable, Message::LayerVia { cut: true }),
@@ -278,7 +293,7 @@ fn menu_bar(app: &Photo, i: usize) -> Vec<MenuEntry<'_, Message>> {
             Submenu("Layer Mask", mask_menu(app, doc, sel)),
             Submenu("New Adjustment Layer", new_adjustment(app)),
             Separator,
-            item("Merge Down", "Ctrl+E", s.can_merge_down, Message::MergeDown),
+            item(s.merge_label, "Ctrl+E", s.can_merge_down, Message::MergeDown),
             item("Merge Visible", "Shift+Ctrl+E", doc, Message::MergeVisible),
             item("Flatten Image", "", doc, Message::Flatten),
         ],
@@ -453,13 +468,16 @@ fn layer_menu(app: &Photo) -> Vec<MenuEntry<'_, Message>> {
         Submenu("Duplicate Into", others)
     });
     entries.extend([
-        item("Delete Layer", "", s.doc && !locked, Message::DeleteLayer),
+        item(if layer.is_some_and(|l| l.is_group()) { "Delete Group" } else { "Delete Layer" }, "", s.doc && !locked, Message::DeleteLayer),
+        Separator,
+        item("Group Layers", "Ctrl+G", s.doc && !locked, Message::GroupLayers),
+        item("Ungroup Layers", "Shift+Ctrl+G", s.in_group, Message::Ungroup),
         Separator,
         item("Rename Layer", "", id.is_some(), id.map_or(Message::Noop, Message::StartRename)),
         item(if visible { "Hide Layer" } else { "Show Layer" }, "", id.is_some(), id.map_or(Message::Noop, Message::ToggleVisible)),
         item(if locked { "Unlock Layer" } else { "Lock Layer" }, "", id.is_some(), Message::ToggleLock),
         Separator,
-        item("Merge Down", "Ctrl+E", s.can_merge_down, Message::MergeDown),
+        item(s.merge_label, "Ctrl+E", s.can_merge_down, Message::MergeDown),
         item("Merge Visible", "Shift+Ctrl+E", s.doc, Message::MergeVisible),
         item("Flatten Image", "", s.doc, Message::Flatten),
     ]);

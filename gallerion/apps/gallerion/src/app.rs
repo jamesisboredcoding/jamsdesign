@@ -186,8 +186,8 @@ pub struct LayerDrag {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DropTarget {
     /// Between rows: reorder. The insertion slot in stack order (0 = below the bottom layer,
-    /// `len` = above the top one).
-    Slot(usize),
+    /// `len` = above the top one), and the group it lands in.
+    Slot(usize, Option<LayerId>),
     /// Onto a document tab: switches to it; dropping copies the layer there.
     Tab(usize),
     Canvas,
@@ -850,6 +850,16 @@ pub enum Message {
     MoveLayer(isize),
     LayerOpacity(f32),
     LayerBlend(BlendMode),
+    /// A group's "Pass Through" blend mode.
+    GroupPassThrough,
+    /// Layer > New > Group (the Layers panel's folder button).
+    NewGroup,
+    /// Ctrl+G: puts the active layer into a new group.
+    GroupLayers,
+    /// Shift+Ctrl+G.
+    Ungroup,
+    /// Expands or collapses a group in the Layers panel.
+    ToggleGroupOpen(LayerId),
     ToggleLock,
     ToggleLockOf(LayerId),
     StartRename(LayerId),
@@ -1646,9 +1656,9 @@ impl Photo {
             }),
             Message::ArrangeEnd(front) => self.edit(if front { "Bring to Front" } else { "Send to Back" }, None, |doc| {
                 let Some(id) = doc.active_id() else { return false };
-                let Some(i) = doc.layers().iter().position(|l| l.id == id) else { return false };
-                let delta = if front { (doc.layers().len() - 1 - i) as isize } else { -(i as isize) };
-                delta != 0 && doc.move_layer(id, delta)
+                // As far as it goes within its group.
+                let n = doc.layers().len() as isize;
+                doc.move_layer(id, if front { n } else { -n })
             }),
             Message::LastFilter => {
                 if let Some(op) = self.last_filter.clone()
@@ -2597,8 +2607,48 @@ impl Photo {
             }),
             Message::LayerBlend(b) => self.edit_layer("Blend Mode", None, |l| {
                 l.blend = b;
+                if let Some(g) = l.group.as_mut() {
+                    g.pass_through = false;
+                }
                 true
             }),
+            Message::GroupPassThrough => self.edit_layer("Blend Mode", None, |l| {
+                let Some(g) = l.group.as_mut() else { return false };
+                g.pass_through = true;
+                // Drawn normally when its layers need combining (opacity, mask...).
+                l.blend = BlendMode::Normal;
+                true
+            }),
+            Message::NewGroup => self.edit("New Group", None, |doc| {
+                let n = doc.layers().iter().filter(|l| l.is_group()).count() + 1;
+                doc.add_group(format!("Group {n}"));
+                true
+            }),
+            Message::GroupLayers => {
+                if self.document().and_then(|d| d.active()).is_some_and(|l| l.locked) {
+                    self.error("The layer is locked");
+                    return Task::none();
+                }
+                self.edit("Group Layers", None, |doc| {
+                    let Some(id) = doc.active_id() else { return false };
+                    let n = doc.layers().iter().filter(|l| l.is_group()).count() + 1;
+                    doc.group_layer(id, format!("Group {n}")).is_some()
+                });
+            }
+            Message::Ungroup => self.edit("Ungroup Layers", None, |doc| {
+                let Some(active) = doc.active() else { return false };
+                // On a layer inside a group: ungroups that group.
+                let id = if active.is_group() { active.id } else { match active.parent { Some(p) => p, None => return false } };
+                doc.ungroup(id)
+            }),
+            Message::ToggleGroupOpen(id) => {
+                // Not an edit (Photoshop doesn't undo expanding a group).
+                if let Some(d) = self.doc_mut()
+                    && let Some(g) = d.doc.layer_mut(id).and_then(|l| l.group.as_mut())
+                {
+                    g.open = !g.open;
+                }
+            }
             Message::ToggleLock => self.edit("Lock", None, |doc| {
                 let Some(id) = doc.active_id() else { return false };
                 doc.layer_mut(id).map(|l| l.locked = !l.locked).is_some()
@@ -2895,21 +2945,16 @@ impl Photo {
         let Some(src) = self.doc_index(drag.doc) else { return };
         let into_other = self.active != src;
         match drag.target {
-            Some(DropTarget::Slot(slot)) if !into_other => {
+            Some(DropTarget::Slot(slot, parent)) if !into_other => {
                 let doc = &self.docs[src].doc;
                 let Some(from) = doc.layers().iter().position(|l| l.id == drag.layer) else { return };
-                // Removing the layer first shifts the slots above it down by one.
-                let to = if slot > from { slot - 1 } else { slot };
-                if to == from {
-                    return;
-                }
                 if doc.layers()[from].locked {
                     self.error("The layer is locked");
                     return;
                 }
-                self.edit("Move Layer", None, |doc| doc.move_layer(drag.layer, to as isize - from as isize));
+                self.edit("Move Layer", None, |doc| doc.move_block(drag.layer, slot, parent));
             }
-            Some(DropTarget::Tab(_) | DropTarget::Canvas | DropTarget::Slot(_)) if into_other => {
+            Some(DropTarget::Tab(_) | DropTarget::Canvas | DropTarget::Slot(..)) if into_other => {
                 self.copy_layer_into(drag.doc, drag.layer);
             }
             _ => {}
@@ -2921,6 +2966,10 @@ impl Photo {
     fn copy_layer_into(&mut self, src_doc: u64, layer: LayerId) {
         let Some(src) = self.doc_index(src_doc) else { return };
         let Some(layer) = self.docs[src].doc.layer(layer).cloned() else { return };
+        if layer.is_group() {
+            self.error("Copying a group to another document isn't supported yet: copy its layers");
+            return;
+        }
         self.edit("Duplicate Layer", None, |doc| {
             let pixels = centred(&layer.pixels, doc.width, doc.height);
             let mask = layer.mask.as_ref().map(|m| Mask { pixels: centred(&m.pixels, doc.width, doc.height), ..m.clone() });
@@ -3150,6 +3199,7 @@ impl Photo {
 
     /// Errors (and returns false) if the active layer can't be edited.
     fn check_layer_editable(&mut self) -> bool {
+        let on_mask = self.document().is_some_and(|d| d.editing_mask());
         match self.document().and_then(|d| d.active()) {
             None => false,
             Some(l) if l.locked => {
@@ -3162,6 +3212,10 @@ impl Photo {
             }
             Some(l) if l.adjustment.is_some() && l.mask.is_none() => {
                 self.error("Adjustment layers have no pixels: add a mask to paint on");
+                false
+            }
+            Some(l) if l.is_group() && !on_mask => {
+                self.error("Groups have no pixels: select a layer inside the group");
                 false
             }
             Some(_) => true,
@@ -3549,7 +3603,8 @@ impl Photo {
             add([0.0, 0.0, doc.width as f32, doc.height as f32]);
         }
         if self.snap.layers {
-            for l in doc.layers().iter().filter(|l| l.visible && l.id != moving) {
+            // Not to itself (nor, for a group, to what's inside it).
+            for l in doc.layers().iter().filter(|l| doc.effectively_visible(l.id) && !doc.is_within(l.id, moving)) {
                 if let Some(b) = jd_raster::transform::content_bounds(&l.pixels) {
                     add(b.map(|v| v as f32));
                 }
@@ -3628,6 +3683,10 @@ impl Photo {
         }
         if layer.adjustment.is_some() && layer.mask.is_none() {
             self.error("Adjustment layers have no pixels: add a mask to paint on");
+            return;
+        }
+        if layer.is_group() && !self.document().is_some_and(|d| d.editing_mask()) {
+            self.error("Groups have no pixels: select a layer inside the group (or its mask)");
             return;
         }
         if !layer.visible {
@@ -3972,6 +4031,8 @@ impl Photo {
                 "1" => Some(Message::ZoomTo(Zoom::Fixed(1.0))),
                 ";" | ":" if shift => Some(Message::ToggleSnap),
                 "o" => Some(Message::OpenDialog),
+                "g" if shift => Some(Message::Ungroup),
+                "g" => Some(Message::GroupLayers),
                 "k" => Some(Message::OpenPreferences),
                 "n" if !shift => Some(Message::NewDocDialog),
                 "a" => Some(Message::SelectAll),
@@ -4370,6 +4431,39 @@ mod tests {
         fresh.prefs = saved;
         fresh.apply_startup_prefs();
         assert_eq!((fresh.panel_order[0], fresh.dock_width), (Panel::Layers, 400.0));
+    }
+
+    #[test]
+    fn groups_from_the_app() {
+        let (mut app, _) = Photo::new();
+        white(&mut app, 40, 20);
+        let _ = app.update(Message::AddLayer);
+        let a = app.document().unwrap().active_id().unwrap();
+        app.docs[0].doc.layer_mut(a).unwrap().pixels.set_pixel(5, 5, [255, 0, 0, 255]);
+        let _ = app.update(Message::GroupLayers);
+        let g = app.document().unwrap().active_id().unwrap();
+        assert!(app.document().unwrap().active().unwrap().is_group());
+        assert_eq!(app.document().unwrap().layer(a).unwrap().parent, Some(g));
+        // Painting the group itself is refused; moving it moves what's inside.
+        let _ = app.update(Message::Fill(true));
+        assert_eq!(flat(&app, 1, 1), [255, 255, 255, 255]);
+        let _ = app.update(Message::Nudge(2.0, 0.0));
+        assert_eq!(flat(&app, 7, 5), [255, 0, 0, 255]);
+        // Hide it, then Pass Through / Normal both keep the look of a single normal layer.
+        let _ = app.update(Message::ToggleVisible(g));
+        assert_eq!(flat(&app, 7, 5), [255, 255, 255, 255]);
+        let _ = app.update(Message::ToggleVisible(g));
+        let _ = app.update(Message::LayerBlend(BlendMode::Normal));
+        assert!(app.document().unwrap().layer(g).unwrap().group.is_some_and(|x| !x.pass_through));
+        assert_eq!(flat(&app, 7, 5), [255, 0, 0, 255]);
+        // Drag the background into the group, then ungroup.
+        let bg = app.document().unwrap().layers()[0].id;
+        app.docs[0].doc.layer_mut(bg).unwrap().locked = false;
+        app.layer_drag = Some(LayerDrag { doc: app.docs[0].id, layer: bg, target: Some(DropTarget::Slot(2, Some(g))) });
+        let _ = app.update(Message::PointerReleased);
+        assert_eq!(app.document().unwrap().layer(bg).unwrap().parent, Some(g));
+        let _ = app.update(Message::Ungroup);
+        assert!(app.document().unwrap().layers().iter().all(|l| l.parent.is_none() && !l.is_group()));
     }
 
     #[test]
@@ -4876,7 +4970,7 @@ mod tests {
         let bottom = app.document().unwrap().layers()[0].id;
         // Reorder: drag the top layer onto the bottom row (it's unlocked by `white`).
         let _ = app.update(Message::LayerPress(top));
-        let _ = app.update(Message::DragOver(DropTarget::Slot(0)));
+        let _ = app.update(Message::DragOver(DropTarget::Slot(0, None)));
         let _ = app.update(Message::PointerReleased);
         assert_eq!(app.document().unwrap().layers()[0].id, top);
         assert!(app.layer_drag.is_none());
@@ -5025,18 +5119,18 @@ mod tests {
         let order = |app: &Photo| app.document().unwrap().layers().iter().map(|l| l.id).collect::<Vec<_>>();
         // Bottom layer into slot 2 (between the middle and the top layer).
         let _ = app.update(Message::LayerPress(ids[0]));
-        let _ = app.update(Message::DragOver(DropTarget::Slot(2)));
+        let _ = app.update(Message::DragOver(DropTarget::Slot(2, None)));
         let _ = app.update(Message::PointerReleased);
         assert_eq!(order(&app), vec![ids[1], ids[0], ids[2]]);
         // Top layer into slot 1 (just above the bottom one).
         let _ = app.update(Message::LayerPress(ids[2]));
-        let _ = app.update(Message::DragOver(DropTarget::Slot(1)));
+        let _ = app.update(Message::DragOver(DropTarget::Slot(1, None)));
         let _ = app.update(Message::PointerReleased);
         assert_eq!(order(&app), vec![ids[1], ids[2], ids[0]]);
         // Dropping right next to itself does nothing (and adds no undo step).
         let depth = app.doc().unwrap().history.depth();
         let _ = app.update(Message::LayerPress(ids[2]));
-        let _ = app.update(Message::DragOver(DropTarget::Slot(2)));
+        let _ = app.update(Message::DragOver(DropTarget::Slot(2, None)));
         let _ = app.update(Message::PointerReleased);
         assert_eq!(app.doc().unwrap().history.depth(), depth);
     }

@@ -68,6 +68,12 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
         let m = t.affine().as_array();
         let tiles = |g: &jd_raster::TileGrid| g.iter_all().map(|(x, y, t)| ([x, y], t.clone())).collect::<Vec<_>>();
         let mask = doc.layers()[i].mask.as_ref().filter(|m| m.enabled);
+        if !t.members.is_empty() {
+            // A group: everything in it moves (its combined look too, if it has one).
+            for j in doc.block(i) {
+                scene.layers[j].transform = m;
+            }
+        }
         match &t.base {
             Some(base) => {
                 // The mask stays put while selected pixels move.

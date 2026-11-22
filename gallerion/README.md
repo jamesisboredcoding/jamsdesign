@@ -120,6 +120,11 @@ left-click in, right-click out.
       history states, linear blending for new images, remembering the workspace and panel
       layout, scroll wheel zoom or scroll, painting cursor (outline, crosshair, precise), pen
       pressure, snapping at startup, and the Remove Background model (where it is, delete it)
+- [x] 6g: layer groups: the folder button / Layer > New Group, Ctrl+G groups the active
+      layer, Shift+Ctrl+G ungroups; Pass Through (default) or any blend mode (the group is
+      combined first), group opacity, mask and effects; drag layers into and out of groups,
+      collapse them (arrow or double-click the folder), Move / Free Transform a whole group,
+      Merge Group (Ctrl+E on a group), duplicate and delete with contents; saved in .jdp
 - [ ] 6: PSD import, Flatpak, Pen tool
 
 ## App icon

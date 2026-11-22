@@ -94,6 +94,23 @@ struct LayerEntry {
     /// Adjustment layers: what they do to the layers below.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     adjustment: Option<AdjustmentEntry>,
+    /// Index (in `layers`) of the group this layer is in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parent: Option<usize>,
+    /// Set on groups.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    group: Option<GroupEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GroupEntry {
+    pass_through: bool,
+    #[serde(default = "yes")]
+    open: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// An adjustment as `kind` plus its numbers (see `from_adjustment` for the layout).
@@ -341,6 +358,8 @@ pub fn write<W: Write + Seek>(doc: &Document, out: W) -> Result<W, SaveError> {
                 y: t.y,
             }),
             adjustment: layer.adjustment.as_ref().map(AdjustmentEntry::from_adjustment),
+            parent: layer.parent.and_then(|p| doc.layers().iter().position(|l| l.id == p)),
+            group: layer.group.map(|g| GroupEntry { pass_through: g.pass_through, open: g.open }),
             mask: layer.mask.as_ref().map(|m| MaskEntry {
                 default: m.default,
                 enabled: m.enabled,
@@ -437,6 +456,7 @@ pub fn read<R: Read + Seek>(name: impl Into<String>, input: R) -> Result<Documen
         layer.pixels = grid;
         layer.mask = mask;
         layer.adjustment = entry.adjustment.as_ref().and_then(AdjustmentEntry::to_adjustment);
+        layer.group = entry.group.as_ref().map(|g| jd_raster::Group { pass_through: g.pass_through, open: g.open });
         if let Some(style) = &entry.style {
             layer.style = style.to_style();
         }
@@ -448,6 +468,14 @@ pub fn read<R: Read + Seek>(name: impl Into<String>, input: R) -> Result<Documen
             layer.text = Some(text);
         }
         ids.push(id);
+    }
+    // Groups, now that every layer has its id. A parent must be a group that comes later
+    // (above), or the file is treated as flat there.
+    for (i, entry) in manifest.layers.iter().enumerate() {
+        let parent = entry.parent.filter(|&p| p > i && manifest.layers.get(p).is_some_and(|e| e.group.is_some()));
+        if let (Some(p), Some(l)) = (parent, doc.layer_mut(ids[i])) {
+            l.parent = Some(ids[p]);
+        }
     }
     if ids.is_empty() {
         doc.add_layer("Background");
@@ -546,6 +574,21 @@ mod tests {
         let back = read("t", std::io::Cursor::new(bytes)).unwrap();
         let a = |d: &Document| d.layers().iter().map(|l| l.adjustment.clone()).collect::<Vec<_>>();
         assert_eq!(a(&back), a(&doc));
+    }
+
+    #[test]
+    fn roundtrip_keeps_groups() {
+        let mut doc = Document::blank("t", 20, 20);
+        let a = doc.add_layer("a");
+        let g = doc.group_layer(a, "G").unwrap();
+        doc.layer_mut(g).unwrap().group = Some(jd_raster::Group { pass_through: false, open: false });
+        doc.add_layer("top");
+        let bytes = write(&doc, std::io::Cursor::new(Vec::new())).unwrap().into_inner();
+        let back = read("t", std::io::Cursor::new(bytes)).unwrap();
+        let l = back.layers();
+        assert_eq!(l[0].parent, Some(l[1].id));
+        assert_eq!(l[1].group, Some(jd_raster::Group { pass_through: false, open: false }));
+        assert_eq!(l[2].parent, None);
     }
 
     #[test]

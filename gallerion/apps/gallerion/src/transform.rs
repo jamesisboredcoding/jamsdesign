@@ -77,6 +77,8 @@ pub struct Session {
     pub content: TileGrid,
     /// The layer's mask, transformed along with a whole layer (Photoshop's linked mask).
     pub mask: Option<TileGrid>,
+    /// Moving a group: every layer inside it (pixels and mask), transformed together.
+    pub members: Vec<(LayerId, TileGrid, Option<TileGrid>)>,
     /// The selection at the start; it's transformed along with the pixels.
     pub selection: Option<Selection>,
     /// Content box before transforming: x0, y0, x1, y1 in document pixels.
@@ -105,6 +107,39 @@ impl Session {
         if doc.selection.is_some() && doc.editing_mask() {
             return Err("Moving part of a layer mask isn't supported yet (deselect to move the whole layer)");
         }
+        if layer.is_group() {
+            if doc.selection.is_some() {
+                return Err("Deselect to move a group (it moves everything inside it)");
+            }
+            let index = doc.index_of_layer(layer.id).ok_or("No layer selected")?;
+            let members: Vec<(LayerId, TileGrid, Option<TileGrid>)> = doc.layers()[doc.block(index)]
+                .iter()
+                .filter(|l| !l.is_group() && l.adjustment.is_none())
+                .map(|l| (l.id, l.pixels.clone(), l.mask.as_ref().map(|m| m.pixels.clone())))
+                .collect();
+            let [x0, y0, x1, y1] = members
+                .iter()
+                .filter_map(|(_, p, _)| jd_raster::transform::content_bounds_all(p))
+                .reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])])
+                .ok_or("Nothing to transform here")?;
+            let bounds = [x0 as f32, y0 as f32, x1 as f32, y1 as f32];
+            return Ok(Self {
+                doc: doc_id,
+                layer: layer.id,
+                kind,
+                mask: None,
+                members,
+                base: None,
+                content: TileGrid::empty(doc.width, doc.height),
+                selection: None,
+                bounds,
+                params: Params { center: centre(bounds), angle: 0.0, sx: 1.0, sy: 1.0 },
+                grab: None,
+                snap: SnapLines::default(),
+                snap_tolerance: 0.0,
+                guides: Vec::new(),
+            });
+        }
         let (base, content) = match &doc.selection {
             Some(sel) => {
                 let content = selection::extract(&layer.pixels, sel);
@@ -122,6 +157,7 @@ impl Session {
             layer: layer.id,
             kind,
             mask: if doc.selection.is_none() { layer.mask.as_ref().map(|m| m.pixels.clone()) } else { None },
+            members: Vec::new(),
             base,
             content,
             selection: doc.selection.clone(),
@@ -303,6 +339,16 @@ impl Session {
     /// Applies the transform to the document's layer (and selection).
     pub fn commit(&self, doc: &mut Document) {
         let m = self.affine();
+        if !self.members.is_empty() {
+            for (id, pixels, mask) in &self.members {
+                let Some(l) = doc.layer_mut(*id) else { continue };
+                l.pixels = jd_raster::transform::transform_grid(pixels, &m);
+                if let (Some(lm), Some(grid)) = (l.mask.as_mut(), mask) {
+                    lm.pixels = jd_raster::transform::transform_grid(grid, &m);
+                }
+            }
+            return;
+        }
         let moved = jd_raster::transform::transform_grid(&self.content, &m);
         let Some(layer) = doc.layer_mut(self.layer) else { return };
         layer.pixels = match &self.base {

@@ -191,7 +191,7 @@ fn properties_panel(app: &Photo) -> Element<'_, Message> {
                 .style(style::slider),
             row![
                 label("Blend").width(Fill),
-                blend_picker(layer.blend),
+                blend_picker(Some(layer)),
             ]
             .align_y(Vertical::Center),
         ]
@@ -301,13 +301,43 @@ fn channels_panel(app: &Photo) -> Element<'_, Message> {
     column![list, container(label("Click a channel to select by its brightness.")).padding(10)].into()
 }
 
-fn blend_picker<'a>(mode: BlendMode) -> Element<'a, Message> {
-    pick_list(BlendMode::ALL, Some(mode), Message::LayerBlend)
-        .text_size(TEXT_SIZE_SMALL)
-        .padding(Padding::from([3, 6]))
-        .width(140)
-        .style(style::pick_list)
-        .into()
+/// A blend mode choice; groups also offer Pass Through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BlendChoice {
+    PassThrough,
+    Mode(BlendMode),
+}
+
+impl std::fmt::Display for BlendChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BlendChoice::PassThrough => f.write_str("Pass Through"),
+            BlendChoice::Mode(m) => m.fmt(f),
+        }
+    }
+}
+
+fn blend_picker<'a>(layer: Option<&jd_raster::Layer>) -> Element<'a, Message> {
+    let group = layer.and_then(|l| l.group);
+    let mut options: Vec<BlendChoice> = Vec::with_capacity(BlendMode::ALL.len() + 1);
+    if group.is_some() {
+        options.push(BlendChoice::PassThrough);
+    }
+    options.extend(BlendMode::ALL.iter().map(|m| BlendChoice::Mode(*m)));
+    let current = match (group, layer) {
+        (Some(g), _) if g.pass_through => BlendChoice::PassThrough,
+        (_, Some(l)) => BlendChoice::Mode(l.blend),
+        _ => BlendChoice::Mode(BlendMode::Normal),
+    };
+    pick_list(options, Some(current), |c| match c {
+        BlendChoice::PassThrough => Message::GroupPassThrough,
+        BlendChoice::Mode(m) => Message::LayerBlend(m),
+    })
+    .text_size(TEXT_SIZE_SMALL)
+    .padding(Padding::from([3, 6]))
+    .width(140)
+    .style(style::pick_list)
+    .into()
 }
 
 /// Half a layer row's height (2px slot line + 40px row + 1px divider).
@@ -323,7 +353,7 @@ fn layers_panel(app: &Photo) -> Element<'_, Message> {
     };
     let active = doc.active();
     let controls = row![
-        blend_picker(active.map_or(BlendMode::Normal, |l| l.blend)),
+        blend_picker(active),
         space::horizontal(),
         label("Opacity:"),
         super::field::number(app, "layer-opacity", format!("{:.0}%", active.map_or(100.0, |l| l.opacity * 100.0)), 52, 100.0, 0.0..=1.0, Message::LayerOpacity),
@@ -361,8 +391,45 @@ fn layers_panel(app: &Photo) -> Element<'_, Message> {
     let open = app.doc().expect("document() implies doc()");
     let active_id = doc.active_id();
     let mut list = column![];
-    // Top of the stack first, like every layers panel.
-    for layer in doc.layers().iter().rev() {
+    // Rows shown, top of the stack first (like every layers panel), skipping what's inside
+    // collapsed groups. Drop targets: the upper half of a row means "above it"; the lower
+    // half "below it", which for an open group is the top of its contents.
+    let layers = doc.layers();
+    let collapsed = |l: &jd_raster::Layer| {
+        let mut cur = l.parent;
+        while let Some(p) = cur {
+            match doc.layer(p) {
+                Some(g) if g.group.is_some_and(|g| !g.open) => return true,
+                Some(g) => cur = g.parent,
+                None => return false,
+            }
+        }
+        false
+    };
+    let rows: Vec<(usize, &jd_raster::Layer)> = layers.iter().enumerate().rev().filter(|(_, l)| !collapsed(l)).collect();
+    let upper = |i: usize| DropTarget::Slot(i + 1, layers[i].parent);
+    let lower = |i: usize| match layers[i].group {
+        Some(g) if g.open => DropTarget::Slot(i, Some(layers[i].id)),
+        _ => DropTarget::Slot(*doc.block(i).start(), layers[i].parent),
+    };
+    // The drop target being hovered, unless dropping there changes nothing.
+    let target = app.layer_drag.and_then(|d| match d.target {
+        Some(DropTarget::Slot(slot, parent)) if d.doc == open.id => {
+            let from = doc.index_of_layer(d.layer)?;
+            let block = doc.block(from);
+            let (start, end) = (*block.start(), *block.end());
+            let noop = (slot >= start && slot <= end + 1 && parent == layers[from].parent)
+                || (slot > start && slot <= end)
+                || parent.is_some_and(|p| doc.is_within(p, d.layer));
+            (!noop).then_some(DropTarget::Slot(slot, parent))
+        }
+        _ => None,
+    });
+    let line = |on: bool| {
+        let color = if on { ACCENT_PRIMARY } else { iced::Color::TRANSPARENT };
+        container(space()).width(Fill).height(2).style(style::fill(color))
+    };
+    for (k, &(index, layer)) in rows.iter().enumerate() {
         let name: Element<'_, Message> = match &app.renaming {
             Some((id, text)) if *id == layer.id => text_input("Layer name", text)
                 .id(RENAME_INPUT)
@@ -379,6 +446,14 @@ fn layers_panel(app: &Photo) -> Element<'_, Message> {
                 // "T" marks editable text layers.
                 if layer.text.as_ref().is_some_and(|t| t.is_current(&layer.pixels)) {
                     r = r.push(text("T").size(TEXT_SIZE).font(jd_ui::widget::bold()).color(ACCENT_PRIMARY));
+                }
+                if let Some(g) = layer.group {
+                    r = r.push(
+                        button(text(if g.open { "▾" } else { "▸" }).size(TEXT_SIZE))
+                            .padding(Padding::from([0, 2]))
+                            .style(style::ghost(false))
+                            .on_press(Message::ToggleGroupOpen(layer.id)),
+                    );
                 }
                 r = r.push(text(&layer.name).size(TEXT_SIZE).width(Fill));
                 if !layer.style.is_empty() {
@@ -397,7 +472,13 @@ fn layers_panel(app: &Photo) -> Element<'_, Message> {
             }
         };
         // Pressing a thumbnail picks what edits go to (and still selects / drags the layer).
-        let thumb: Element<'_, Message> = if layer.adjustment.is_some() {
+        let thumb: Element<'_, Message> = if layer.is_group() {
+            // Groups: a folder; double-click (or the arrow by the name) opens or closes it.
+            mouse_area(container(icon(Icon::Folder, 18.0, iced::Color::from_rgb8(0x30, 0x30, 0x30))).center(Fill))
+                .on_press(Message::ThumbPress(layer.id, false))
+                .on_double_click(Message::ToggleGroupOpen(layer.id))
+                .into()
+        } else if layer.adjustment.is_some() {
             // Adjustment layers have no pixels: an icon; double-click edits the adjustment.
             mouse_area(container(icon(Icon::Adjust, 18.0, iced::Color::from_rgb8(0x30, 0x30, 0x30))).center(Fill))
                 .on_press(Message::ThumbPress(layer.id, false))
@@ -416,6 +497,7 @@ fn layers_panel(app: &Photo) -> Element<'_, Message> {
         });
         let mask_targeted = Some(layer.id) == active_id && doc.editing_mask();
         let row = layer_row(
+            doc.depth(layer.id) as f32 * 16.0,
             name,
             thumb,
             mask,
@@ -429,28 +511,15 @@ fn layers_panel(app: &Photo) -> Element<'_, Message> {
             Message::ToggleLockOf(layer.id),
             Message::OpenLayerMenu(layer.id),
         );
-        // Drop slots: the upper half of a row means "above it", the lower half "below it".
-        // The accent line is drawn exactly where the layer will land.
-        let index = doc.layers().iter().position(|l| l.id == layer.id).unwrap_or(0);
-        let shown = app.layer_drag.and_then(|d| match d.target {
-            Some(DropTarget::Slot(slot)) if d.doc == open.id => {
-                let from = doc.layers().iter().position(|l| l.id == d.layer)?;
-                // Dropping right next to itself changes nothing, so show no line.
-                (slot != from && slot != from + 1).then_some(slot)
-            }
-            _ => None,
-        });
-        let line = |slot: usize| {
-            let color = if shown == Some(slot) { ACCENT_PRIMARY } else { iced::Color::TRANSPARENT };
-            container(space()).width(Fill).height(2).style(style::fill(color))
-        };
-        let mut cell = column![line(index + 1), row];
-        if index == 0 {
-            cell = cell.push(line(0));
+        // The line between this row and the one above is where both "above this row" and
+        // "below the row above" drop.
+        let top = target.is_some_and(|t| t == upper(index) || (k > 0 && t == lower(rows[k - 1].0)));
+        let mut cell = column![line(top), row];
+        if k + 1 == rows.len() {
+            cell = cell.push(line(target.is_some_and(|t| t == lower(index))));
         }
-        list = list.push(mouse_area(cell).on_move(move |p| {
-            Message::DragOver(DropTarget::Slot(if p.y < ROW_HALF { index + 1 } else { index }))
-        }));
+        let (up, down) = (upper(index), lower(index));
+        list = list.push(mouse_area(cell).on_move(move |p| Message::DragOver(if p.y < ROW_HALF { up } else { down })));
     }
 
     let mut actions = row![space::horizontal()].spacing(6).align_y(Vertical::Center);
@@ -460,7 +529,7 @@ fn layers_panel(app: &Photo) -> Element<'_, Message> {
         (Icon::Fx, Some(Message::ShowDialog(crate::app::DialogKind::BlendingOptions)), "Layer style"),
         (Icon::Mask, Some(Message::AddMask), "Add layer mask (Alt: hide all)"),
         (Icon::Adjust, Some(Message::OpenAdjustMenu), "New adjustment layer"),
-        (Icon::Folder, None, "New group (not available yet)"),
+        (Icon::Folder, Some(Message::NewGroup), "New group (Ctrl+G groups the active layer)"),
         (Icon::Plus, Some(Message::AddLayer), "New layer"),
         (Icon::Trash, Some(Message::DeleteLayer), "Delete layer"),
     ] {

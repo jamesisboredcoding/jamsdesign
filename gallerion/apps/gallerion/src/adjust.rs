@@ -155,6 +155,9 @@ impl Session {
         if layer.locked {
             return Err("The layer is locked");
         }
+        if layer.is_group() && !doc.editing_mask() {
+            return Err("Groups have no pixels: select a layer inside the group");
+        }
         if layer.adjustment.is_some() && !doc.editing_mask() {
             return Err("Adjustment layers have no pixels: double-click the thumbnail to change the adjustment");
         }
