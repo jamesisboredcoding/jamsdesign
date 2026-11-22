@@ -142,8 +142,12 @@ CLI argument as a file to open. Names are provisional until Step 0.
         (colour, number, text, boolean) and modes
   - [x] Fills bound to colour variables, frames pick a mode per collection; paint and text
         styles created from a layer, applied, renamed and deleted
-  - [ ] Binding numbers (gap, padding, radius) from the panel, effect styles, instance-swap
-        properties, publishing components across files (a library)
+  - [x] Number variables bound from the panel (size, radius, opacity, gap, padding, font
+        size, stroke); effects (drop/inner shadow, layer/background blur) and effect styles;
+        instance-swap properties
+  - [x] Libraries: add another .jdb, place its components (copied in once, onto a
+        "Library components" page). Libraries are remembered for the session only
+  - [ ] Libraries that update when their file changes; remembered per document
 - [ ] Step 6: prototype and inspect
   - Prototype tab: connections between frames (on click, navigate, overlay, back), simple
     transitions, a presentation window

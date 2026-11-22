@@ -41,7 +41,12 @@ fn component_props<'a>(app: &'a Blobr, n: &'a Node) -> Option<Element<'a, Messag
                 let nm = name.clone();
                 checkbox(*default).on_toggle(move |b| Message::SetPropertyDefault(nm.clone(), PropValue::Bool(b))).size(14).into()
             }
-            PropDef::InstanceSwap { .. } => text("instance swap").size(TEXT_SIZE_SMALL).color(TEXT_MUTED).into(),
+            PropDef::InstanceSwap { default } => {
+                let nm = name.clone();
+                let opts = swap_choices(app);
+                let cur = opts.iter().find(|c| c.0 == *default).cloned();
+                picker(opts, cur, move |c| Message::SetPropertyDefault(nm.clone(), PropValue::Node(c)))
+            }
         };
         col = col.push(
             row![
@@ -56,7 +61,7 @@ fn component_props<'a>(app: &'a Blobr, n: &'a Node) -> Option<Element<'a, Messag
     let add = |label: &'static str, kind: &'static str| {
         button(text(label).size(TEXT_SIZE_SMALL)).padding(Padding::from([3, 8])).style(style::ghost(false)).on_press(Message::AddProperty(kind))
     };
-    col = col.push(row![add("+ Text", "text"), add("+ Boolean", "boolean")].spacing(6));
+    col = col.push(row![add("+ Text", "text"), add("+ Boolean", "boolean"), add("+ Swap", "swap")].spacing(6));
     if properties.is_empty() {
         col = col.push(text("Then link layers inside the component to them.").size(10).color(TEXT_MUTED));
     }
@@ -356,6 +361,9 @@ fn node<'a>(app: &'a Blobr, n: &'a Node) -> Element<'a, Message> {
     }
     col = col.push(section("Appearance", None));
     col = col.push(body(field(app, "%", Field::Opacity, || shared(app, |n| num(n.props.opacity as f64 * 100.0)))));
+    if let Some(b) = number_bindings(app, n) {
+        col = col.push(b);
+    }
 
     let text_of = |n: &Node| match &n.kind {
         NodeKind::Text { text } => Some(text.clone()),
@@ -400,6 +408,10 @@ fn node<'a>(app: &'a Blobr, n: &'a Node) -> Element<'a, Message> {
         col = col.push(body(stroke));
     }
 
+    if all(app, |n| !matches!(n.kind, NodeKind::ComponentSet { .. })) {
+        col = col.push(section("Effects", Some((Icon::Plus, Message::AddEffect))));
+        col = col.push(body(effects(app, n)));
+    }
     col = col.push(section("Export", None));
     let export = |label: &'a str, f: ExportFormat| {
         button(text(label).size(TEXT_SIZE_SMALL)).padding(Padding::from([4, 10])).style(style::ghost(false)).on_press(Message::Export(f))
@@ -480,7 +492,13 @@ fn instance<'a>(app: &'a Blobr, id: jd_vector::NodeId, component: jd_vector::Nod
                 checkbox(b).on_toggle(move |v| Message::SetBool(n.clone(), v)).size(14).into()
             }
             (PropDef::Text { .. }, PropValue::Text(t)) => field(app, "", Field::Prop(name.clone()), move || t),
-            _ => text("swap").size(TEXT_SIZE_SMALL).color(TEXT_MUTED).into(),
+            (PropDef::InstanceSwap { .. }, PropValue::Node(c)) => {
+                let n = name.clone();
+                let opts = swap_choices(app);
+                let cur = opts.iter().find(|o| o.0 == c).cloned();
+                picker(opts, cur, move |v| Message::SetPropValue(n.clone(), PropValue::Node(v)))
+            }
+            _ => text("?").size(TEXT_SIZE_SMALL).color(TEXT_MUTED).into(),
         };
         col = col.push(row![label, control].align_y(Vertical::Center));
     }
@@ -617,4 +635,108 @@ fn modes<'a>(app: &'a Blobr, n: &'a Node) -> Option<Element<'a, Message>> {
         );
     }
     any.then(|| column![section("Variable modes", None), body(col)].into())
+}
+
+/// Components an instance can swap to (a set offers its first variant).
+fn swap_choices(app: &Blobr) -> Vec<Choice<jd_vector::NodeId>> {
+    let doc = app.doc();
+    app.components()
+        .into_iter()
+        .filter_map(|(c, _)| {
+            let n = doc.node(c)?;
+            let target = if matches!(n.kind, NodeKind::ComponentSet { .. }) { *doc.children(c).first()? } else { c };
+            Some(Choice(target, n.name.clone()))
+        })
+        .collect()
+}
+
+/// Number properties bound to number variables (shown once the file has some).
+fn number_bindings<'a>(app: &'a Blobr, n: &'a Node) -> Option<Element<'a, Message>> {
+    let tokens = app.doc().tokens();
+    let vars: Vec<Choice<Option<jd_vector::NodeId>>> = std::iter::once(Choice(None, "None".into()))
+        .chain(
+            tokens
+                .variables
+                .iter()
+                .filter(|(_, v)| v.values.values().next().is_some_and(|x| matches!(x, jd_vector::VarValue::Number(_) | jd_vector::VarValue::Alias(_))))
+                .map(|(&id, v)| Choice(Some(id), v.name.clone())),
+        )
+        .collect();
+    if vars.len() == 1 {
+        return None;
+    }
+    let mut paths: Vec<(&'static str, &'static str)> = vec![("Width", "width"), ("Height", "height"), ("Radius", "corner"), ("Opacity", "opacity")];
+    if n.props.layout.is_some() {
+        paths.extend([("Gap", "gap"), ("Padding", "padding")]);
+    }
+    if matches!(n.kind, NodeKind::Text { .. }) {
+        paths.push(("Font size", "font_size"));
+    }
+    if !n.props.strokes.is_empty() {
+        paths.push(("Stroke", "stroke_weight"));
+    }
+    let mut col = column![].spacing(6);
+    for (label, path) in paths {
+        let bound = n.props.bind.get(path).copied();
+        let cur = vars.iter().find(|c| c.0 == bound).cloned();
+        col = col.push(
+            row![text(label).size(TEXT_SIZE_SMALL).color(TEXT_SECONDARY).width(70), picker(vars.clone(), cur, move |v| Message::Bind(path.into(), v))]
+                .align_y(Vertical::Center),
+        );
+    }
+    Some(column![section("Number variables", None), body(col)].into())
+}
+
+/// The first selected layer's effects, and an effect style picker.
+fn effects<'a>(app: &'a Blobr, n: &'a Node) -> Element<'a, Message> {
+    use jd_vector::Effect as E;
+    let tokens = app.doc().tokens();
+    let styles: Vec<Choice<Option<jd_vector::NodeId>>> = std::iter::once(Choice(None, "No style".into()))
+        .chain(tokens.styles.iter().filter(|(_, s)| matches!(s.kind, jd_vector::StyleKind::Effect { .. })).map(|(&id, s)| Choice(Some(id), s.name.clone())))
+        .collect();
+    let cur = styles.iter().find(|c| c.0 == n.props.styles.effect).cloned();
+    let mut col = column![
+        row![
+            text("Style").size(TEXT_SIZE_SMALL).color(TEXT_SECONDARY).width(56),
+            picker(styles, cur, Message::UseEffectStyle),
+            jd_ui::widget::hover_tip(
+                button(icon(Icon::Plus, 12.0, ICON)).padding(3).style(style::ghost(false)).on_press(Message::CreateEffectStyle),
+                "Create an effect style from these effects",
+                iced::widget::tooltip::Position::Bottom,
+            ),
+        ]
+        .spacing(6)
+        .align_y(Vertical::Center)
+    ]
+    .spacing(8);
+    let kinds = vec![Choice("drop", "Drop shadow".into()), Choice("inner", "Inner shadow".into()), Choice("blur", "Layer blur".into()), Choice("background", "Background blur".into())];
+    for (i, e) in n.props.effects.iter().enumerate() {
+        let kind = match e {
+            E::DropShadow(_) => "drop",
+            E::InnerShadow(_) => "inner",
+            E::LayerBlur { .. } => "blur",
+            E::BackgroundBlur { .. } => "background",
+        };
+        let cur = kinds.iter().find(|k| k.0 == kind).cloned();
+        col = col.push(
+            row![picker(kinds.clone(), cur, move |k| Message::SetEffectKind(i, k)), button(icon(Icon::Minus, 12.0, ICON)).padding(3).style(style::ghost(false)).on_press(Message::RemoveEffect(i))]
+                .spacing(6)
+                .align_y(Vertical::Center),
+        );
+        match e {
+            E::DropShadow(s) | E::InnerShadow(s) => {
+                let hex = s.color.to_hex();
+                col = col.push(column![
+                    pair(field(app, "X", Field::Effect(i, "x"), || num(s.x as f64)), field(app, "Y", Field::Effect(i, "y"), || num(s.y as f64))),
+                    pair(field(app, "B", Field::Effect(i, "blur"), || num(s.blur as f64)), field(app, "S", Field::Effect(i, "spread"), || num(s.spread as f64))),
+                    row![swatch(&hex), field(app, "", Field::Effect(i, "color"), move || hex.clone())].spacing(8).align_y(Vertical::Center),
+                ]
+                .spacing(6));
+            }
+            E::LayerBlur { radius, .. } | E::BackgroundBlur { radius, .. } => {
+                col = col.push(field(app, "R", Field::Effect(i, "radius"), || num(*radius as f64)));
+            }
+        }
+    }
+    col.into()
 }

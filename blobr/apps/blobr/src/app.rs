@@ -108,6 +108,47 @@ pub struct LayerDrag {
     pub target: Option<(NodeId, Drop)>,
 }
 
+/// Another .jdb file whose components can be placed here.
+pub struct Library {
+    pub path: PathBuf,
+    pub name: String,
+    pub doc: Document,
+    pub thumbnails: HashMap<NodeId, image::Handle>,
+}
+
+/// Name of the page that holds components copied in from libraries.
+pub const LIBRARY_PAGE: &str = "Library components";
+
+/// Placeable components of `doc`: plain components and component sets (not the variants
+/// inside a set), with the page each is on.
+pub fn placeable_components(doc: &Document) -> Vec<(NodeId, NodeId)> {
+    let mut out = Vec::new();
+    for &p in doc.pages() {
+        for id in doc.descendants(p) {
+            let Some(n) = doc.node(id) else { continue };
+            let in_set = n.parent.and_then(|q| doc.node(q)).is_some_and(|q| matches!(q.kind, NodeKind::ComponentSet { .. }));
+            let placeable = matches!(n.kind, NodeKind::ComponentSet { .. }) || (matches!(n.kind, NodeKind::Component { .. }) && !in_set);
+            if placeable && !doc.is_inside_instance(id) {
+                out.push((id, p));
+            }
+        }
+    }
+    out
+}
+
+/// Small pictures of a document's components.
+fn thumbnails_of(doc: &Document, scale_factor: f32) -> HashMap<NodeId, image::Handle> {
+    let mut out = HashMap::new();
+    for (id, _) in placeable_components(doc) {
+        let Some(n) = doc.node(id) else { continue };
+        let scale = (40.0 / n.props.width.max(n.props.height).max(1.0)).min(2.0) * scale_factor as f64;
+        if let Some(pm) = jd_vector_render::render_node(doc, id, RenderOptions { scale, ..RenderOptions::default() }) {
+            out.insert(id, image::Handle::from_rgba(pm.width(), pm.height(), clipboard::to_rgba(&pm)));
+        }
+    }
+    out
+}
+
 /// How a layer inside a component follows a component property.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PropLink {
@@ -157,6 +198,8 @@ pub enum Field {
     /// A component's text property default.
     PropDefault(String),
     VarName(NodeId),
+    /// A part of effect `index`: "x", "y", "blur", "spread", "color" or "radius".
+    Effect(usize, &'static str),
     VarValue(NodeId, String),
     StyleName(NodeId),
     PageBackground,
@@ -219,6 +262,21 @@ pub enum Message {
     SetVarBool(NodeId, String, bool),
     /// Bind fill `index` of the selection to a colour variable (None unbinds).
     BindFill(usize, Option<NodeId>),
+    /// Bind a property path (`gap`, `corner`, ...) to a variable (None unbinds).
+    Bind(String, Option<NodeId>),
+    AddEffect,
+    RemoveEffect(usize),
+    /// Change an effect's type: "drop", "inner", "blur" or "background".
+    SetEffectKind(usize, &'static str),
+    UseEffectStyle(Option<NodeId>),
+    CreateEffectStyle,
+    /// Set a component property on the selected instance.
+    SetPropValue(String, PropValue),
+    AddLibrary,
+    LibraryPicked(Option<PathBuf>),
+    RemoveLibrary(usize),
+    /// Place an instance of a library's component (copied into this file once).
+    InsertLibraryComponent(usize, NodeId),
     /// Use a paint style for the fills, or a text style (None detaches).
     UseFillStyle(Option<NodeId>),
     UseTextStyle(Option<NodeId>),
@@ -336,6 +394,9 @@ pub struct Blobr {
     /// Small pictures of components for the Assets panel, and the version they show.
     pub thumbnails: HashMap<NodeId, image::Handle>,
     thumbs_version: u64,
+    pub libraries: Vec<Library>,
+    /// Library components already copied in: (library file, its id) to the local id.
+    imported: HashMap<(PathBuf, NodeId), NodeId>,
     last_click: Option<(Instant, Point)>,
     fit_pending: bool,
 }
@@ -398,6 +459,8 @@ impl Blobr {
             asset_filter: String::new(),
             thumbnails: HashMap::new(),
             thumbs_version: u64::MAX,
+            libraries: Vec::new(),
+            imported: HashMap::new(),
             last_click: None,
             fit_pending: false,
         };
@@ -598,6 +661,76 @@ impl Blobr {
                     (n.props.fills.len() > i || var.is_none()).then(|| Patch { bind: Some([(key.clone(), var)].into()), ..Patch::default() })
                 });
             }
+            Message::Bind(path, var) => self.per_node("Bind variable", |_| Some(Patch { bind: Some([(path.clone(), var)].into()), ..Patch::default() })),
+            Message::AddEffect => self.edit_effects("Add effect", |e| {
+                e.push(jd_vector::Effect::DropShadow(jd_vector::Shadow {
+                    color: Rgba::from_hex("#00000040").unwrap_or(Rgba::from_srgb8(0, 0, 0)),
+                    x: 0.0,
+                    y: 4.0,
+                    blur: 4.0,
+                    spread: 0.0,
+                    visible: true,
+                }))
+            }),
+            Message::RemoveEffect(i) => self.edit_effects("Remove effect", |e| {
+                if i < e.len() {
+                    e.remove(i);
+                }
+            }),
+            Message::SetEffectKind(i, kind) => self.edit_effects("Effect type", |e| {
+                use jd_vector::Effect as E;
+                let Some(cur) = e.get(i).cloned() else { return };
+                let shadow = match &cur {
+                    E::DropShadow(s) | E::InnerShadow(s) => s.clone(),
+                    E::LayerBlur { radius, .. } | E::BackgroundBlur { radius, .. } => {
+                        jd_vector::Shadow { color: Rgba::from_hex("#00000040").unwrap_or(Rgba::from_srgb8(0, 0, 0)), x: 0.0, y: 4.0, blur: *radius, spread: 0.0, visible: true }
+                    }
+                };
+                let radius = match &cur {
+                    E::LayerBlur { radius, .. } | E::BackgroundBlur { radius, .. } => *radius,
+                    E::DropShadow(s) | E::InnerShadow(s) => s.blur.max(4.0),
+                };
+                e[i] = match kind {
+                    "drop" => E::DropShadow(shadow),
+                    "inner" => E::InnerShadow(shadow),
+                    "blur" => E::LayerBlur { radius, visible: true },
+                    _ => E::BackgroundBlur { radius, visible: true },
+                };
+            }),
+            Message::UseEffectStyle(style) => self.per_node("Effect style", |n| {
+                let mut refs = n.props.styles.clone();
+                refs.effect = style;
+                Some(Patch { styles: Some(refs), ..Patch::default() })
+            }),
+            Message::CreateEffectStyle => {
+                let Some(n) = self.selection.first().and_then(|&id| self.doc().node(id)) else { return Task::none() };
+                if n.props.effects.is_empty() {
+                    return Task::none();
+                }
+                let count = self.doc().tokens().styles.len() + 1;
+                let op = Op::CreateStyle { name: format!("Effect {count}"), style: StyleKind::Effect { effects: n.props.effects.clone() }, key: Some("s".into()) };
+                if let Some(done) = self.run("Create style", &[op])
+                    && let Some(sid) = done.id("s")
+                {
+                    let _ = self.handle(Message::UseEffectStyle(Some(sid)));
+                    self.ed.history.merge_last();
+                }
+            }
+            Message::SetPropValue(name, v) => self.patch_selection("Set property", Patch { values: Some([(name, v)].into()), ..Patch::default() }),
+            Message::AddLibrary => {
+                return Task::perform(
+                    rfd::AsyncFileDialog::new().add_filter("Blobr document", &[file::EXTENSION]).set_title("Add a library").pick_file(),
+                    |f| Message::LibraryPicked(f.map(|f| f.path().to_path_buf())),
+                );
+            }
+            Message::LibraryPicked(Some(path)) => self.add_library(path),
+            Message::LibraryPicked(None) => {}
+            Message::RemoveLibrary(i) => {
+                if i < self.libraries.len() {
+                    self.libraries.remove(i);
+                }
+            }
+            Message::InsertLibraryComponent(i, id) => self.insert_library_component(i, id),
             Message::UseFillStyle(style) => self.per_node("Fill style", |n| {
                 let mut refs = n.props.styles.clone();
                 refs.fill = style;
@@ -1325,6 +1458,30 @@ impl Blobr {
                 });
                 return;
             }
+            Field::Effect(i, part) => {
+                let (i, part) = (*i, *part);
+                let color = Rgba::from_hex(&input);
+                let v = num();
+                if (part == "color" && color.is_none()) || (part != "color" && v.is_none()) {
+                    return bad(self);
+                }
+                let v = v.unwrap_or(0.0) as f32;
+                return self.edit_effects("Edit effect", move |e| {
+                    use jd_vector::Effect as E;
+                    match e.get_mut(i) {
+                        Some(E::DropShadow(s) | E::InnerShadow(s)) => match part {
+                            "x" => s.x = v,
+                            "y" => s.y = v,
+                            "blur" => s.blur = v.max(0.0),
+                            "spread" => s.spread = v,
+                            "color" => s.color = color.expect("checked"),
+                            _ => {}
+                        },
+                        Some(E::LayerBlur { radius, .. } | E::BackgroundBlur { radius, .. }) if part == "radius" => *radius = v.max(0.0),
+                        _ => {}
+                    }
+                });
+            }
             Field::StrokeWeight => match num().filter(|v| *v >= 0.0) {
                 Some(v) => {
                     return self.per_node("Stroke weight", |n| {
@@ -1429,19 +1586,7 @@ impl Blobr {
     /// Every component in the document that can be placed: plain components and component
     /// sets (not the variants inside a set), with the page each is on.
     pub fn components(&self) -> Vec<(NodeId, NodeId)> {
-        let doc = self.doc();
-        let mut out = Vec::new();
-        for &p in doc.pages() {
-            for id in doc.descendants(p) {
-                let Some(n) = doc.node(id) else { continue };
-                let in_set = n.parent.and_then(|q| doc.node(q)).is_some_and(|q| matches!(q.kind, NodeKind::ComponentSet { .. }));
-                let placeable = matches!(n.kind, NodeKind::ComponentSet { .. }) || (matches!(n.kind, NodeKind::Component { .. }) && !in_set);
-                if placeable && !doc.is_inside_instance(id) {
-                    out.push((id, p));
-                }
-            }
-        }
-        out
+        placeable_components(self.doc())
     }
 
     /// The component that `id` sits in (or is), not counting instances.
@@ -1510,6 +1655,63 @@ impl Blobr {
         let _ = self.handle(Message::SetPropertyDefault(name, PropValue::Text(value)));
     }
 
+    fn edit_effects(&mut self, label: &str, f: impl Fn(&mut Vec<jd_vector::Effect>)) {
+        self.per_node(label, |n| {
+            let mut e = n.props.effects.clone();
+            f(&mut e);
+            Some(Patch { effects: Some(e), ..Patch::default() })
+        });
+    }
+
+    fn add_library(&mut self, path: PathBuf) {
+        if self.libraries.iter().any(|l| l.path == path) {
+            return;
+        }
+        match file::load(&path) {
+            Ok(mut doc) => {
+                jd_vector::layout::run(&mut doc, &CosmicMeasure);
+                let name = path.file_stem().map_or("Library".into(), |n| n.to_string_lossy().into_owned());
+                let count = placeable_components(&doc).len();
+                let thumbnails = thumbnails_of(&doc, self.scale_factor);
+                self.info(format!("Added library {name} ({count} components)"));
+                self.libraries.push(Library { path, name, doc, thumbnails });
+                self.left_tab = 1;
+            }
+            Err(e) => self.error(format!("Couldn't open {}: {e}", path.display())),
+        }
+    }
+
+    /// Copies a library component into this file (once, onto the library page) and places
+    /// an instance of it.
+    fn insert_library_component(&mut self, lib: usize, id: NodeId) {
+        let Some(l) = self.libraries.get(lib) else { return };
+        let key = (l.path.clone(), id);
+        if let Some(&local) = self.imported.get(&key)
+            && self.doc().contains(local)
+        {
+            return self.insert_component(local);
+        }
+        let Some(clip) = Clip::copy(&l.doc, &[id]) else { return };
+        let doc = self.doc();
+        let page = doc.pages().iter().copied().find(|&p| doc.node(p).is_some_and(|n| n.name == LIBRARY_PAGE));
+        let right = page.map_or(0.0, |p| doc.children(p).iter().filter_map(|&c| doc.world_bounds(c)).map(|b| b.x1 + 80.0).fold(0.0, f64::max));
+        let mut ops = Vec::new();
+        let parent: jd_vector::Ref = match page {
+            Some(p) => p.into(),
+            None => {
+                ops.push(Op::CreatePage { name: LIBRARY_PAGE.into(), key: Some("lp".into()), index: None });
+                "lp".into()
+            }
+        };
+        ops.push(Op::Paste { parent, clip, index: None, key: Some("c".into()), offset: [0.0, 0.0] });
+        ops.push(Op::set("c0", Patch { x: Some(right), y: Some(0.0), ..Patch::default() }));
+        let Some(done) = self.run("Import component", &ops) else { return };
+        let Some(local) = done.id("c0") else { return };
+        self.imported.insert(key, local);
+        self.insert_component(local);
+        self.ed.history.merge_last();
+    }
+
     /// Changes the selected component's property definitions.
     fn edit_properties(&mut self, label: &str, f: impl Fn(&mut std::collections::BTreeMap<String, PropDef>)) {
         let [id] = self.selection[..] else { return };
@@ -1522,9 +1724,28 @@ impl Blobr {
     fn add_property(&mut self, kind: &'static str) {
         let [id] = self.selection[..] else { return };
         let Some(NodeKind::Component { properties, .. }) = self.doc().node(id).map(|n| &n.kind) else { return };
-        let base = if kind == "text" { "Text" } else { "Show" };
+        let base = match kind {
+            "text" => "Text",
+            "swap" => "Icon",
+            _ => "Show",
+        };
         let name = (1..).map(|i| if i == 1 { base.to_owned() } else { format!("{base} {i}") }).find(|n| !properties.contains_key(n)).expect("endless");
-        let def = if kind == "text" { PropDef::Text { default: "Text".into() } } else { PropDef::Boolean { default: true } };
+        let def = match kind {
+            "text" => PropDef::Text { default: "Text".into() },
+            "swap" => {
+                // Defaults to another component: a set's first variant.
+                let doc = self.doc();
+                let other = placeable_components(doc).into_iter().map(|(c, _)| c).find(|&c| c != id).and_then(|c| match doc.node(c).map(|n| &n.kind) {
+                    Some(NodeKind::ComponentSet { .. }) => doc.children(c).first().copied(),
+                    _ => Some(c),
+                });
+                match other {
+                    Some(c) => PropDef::InstanceSwap { default: c },
+                    None => return self.error("an instance-swap property needs another component to swap to".into()),
+                }
+            }
+            _ => PropDef::Boolean { default: true },
+        };
         self.edit_properties("Add property", move |props| {
             props.insert(name.clone(), def.clone());
         });
@@ -1536,14 +1757,7 @@ impl Blobr {
             return;
         }
         self.thumbs_version = self.version;
-        self.thumbnails.clear();
-        for (id, _) in self.components() {
-            let Some(n) = self.doc().node(id) else { continue };
-            let scale = (40.0 / n.props.width.max(n.props.height).max(1.0)).min(2.0) * self.scale_factor as f64;
-            if let Some(pm) = jd_vector_render::render_node(self.doc(), id, RenderOptions { scale, ..RenderOptions::default() }) {
-                self.thumbnails.insert(id, image::Handle::from_rgba(pm.width(), pm.height(), clipboard::to_rgba(&pm)));
-            }
-        }
+        self.thumbnails = thumbnails_of(self.doc(), self.scale_factor);
     }
 
     // ----- Arranging ---------------------------------------------------------------------
@@ -2816,6 +3030,62 @@ mod tests {
         let _ = app.update(Message::FieldInput(Field::StyleName(sid), "Brand/Dark".into()));
         let _ = app.update(Message::FieldSubmit(Field::StyleName(sid)));
         assert_eq!(app.doc().tokens().styles[&sid].name, "Brand/Dark");
+    }
+
+    #[test]
+    fn number_bindings_effects_swap_props_and_libraries() {
+        let mut app = app();
+        let p = app.page;
+        let f = app.run("Add", &[Op::create(p, NodeSpec::frame("Row", 200.0, 50.0))]).unwrap().created[0];
+        app.select(f, false);
+        let _ = app.update(Message::ToggleAutoLayout);
+        let _ = app.update(Message::ShowVariables(true));
+        let _ = app.update(Message::AddVariable("number"));
+        let _ = app.update(Message::ShowVariables(false));
+        let var = *app.doc().tokens().variables.keys().next().unwrap();
+        app.select(f, false);
+        let _ = app.update(Message::Bind("gap".into(), Some(var)));
+        assert_eq!(app.doc().node(f).unwrap().props.layout.as_ref().unwrap().gap, 8.0, "the variable's value");
+
+        // Effects: add, edit, make a style.
+        let _ = app.update(Message::AddEffect);
+        let _ = app.update(Message::FieldInput(Field::Effect(0, "blur"), "12".into()));
+        let _ = app.update(Message::FieldSubmit(Field::Effect(0, "blur")));
+        assert!(matches!(&app.doc().node(f).unwrap().props.effects[0], jd_vector::Effect::DropShadow(s) if s.blur == 12.0));
+        let _ = app.update(Message::SetEffectKind(0, "blur"));
+        assert!(matches!(app.doc().node(f).unwrap().props.effects[0], jd_vector::Effect::LayerBlur { radius, .. } if radius == 12.0));
+        let _ = app.update(Message::CreateEffectStyle);
+        assert!(app.doc().node(f).unwrap().props.styles.effect.is_some());
+
+        // A library file with a component; placing it twice copies it in once.
+        let mut lib = Document::new();
+        let lp = lib.pages()[0];
+        let done = lib
+            .apply(&[Op::create_as("b", lp, NodeSpec::frame("Badge", 30.0, 30.0)), Op::MakeComponent { id: "b".into() }], &jd_vector::ApproxMeasure)
+            .unwrap();
+        let badge = done.id("b").unwrap();
+        let dir = std::env::temp_dir().join(format!("blobr-lib-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("lib.jdb");
+        file::save(&lib, &path).unwrap();
+        let _ = app.update(Message::LibraryPicked(Some(path)));
+        assert_eq!(app.libraries.len(), 1);
+        app.selection.clear();
+        let _ = app.update(Message::InsertLibraryComponent(0, badge));
+        let _ = app.update(Message::InsertLibraryComponent(0, badge));
+        let lib_page = *app.doc().pages().iter().find(|&&pg| app.doc().node(pg).unwrap().name == LIBRARY_PAGE).unwrap();
+        assert_eq!(app.doc().children(lib_page).len(), 1, "copied in once");
+        let local = app.doc().children(lib_page)[0];
+        let instances = app.doc().descendants(p).into_iter().filter(|&d| matches!(app.doc().node(d).unwrap().kind, NodeKind::Instance { component, .. } if component == local)).count();
+        assert_eq!(instances, 2);
+        let _ = std::fs::remove_dir_all(dir);
+
+        // An instance-swap property defaults to another component.
+        let host = app.run("Add", &[Op::create(p, NodeSpec::frame("Card", 100.0, 100.0).at(400.0, 0.0))]).unwrap().created[0];
+        app.selection = vec![host];
+        let _ = app.update(Message::CreateComponent);
+        let _ = app.update(Message::AddProperty("swap"));
+        assert!(matches!(&app.doc().node(host).unwrap().kind, NodeKind::Component { properties, .. } if matches!(properties.get("Icon"), Some(PropDef::InstanceSwap { default }) if *default == local)));
     }
 
     #[test]
