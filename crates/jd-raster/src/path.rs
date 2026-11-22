@@ -140,6 +140,134 @@ impl VectorPath {
     }
 }
 
+/// Make Work Path: the outline of a selection as a path, simplified to within `tolerance`
+/// pixels (Photoshop's default is 2). Sharp turns stay corners; gentle ones become smooth
+/// points, so curves stay curves.
+pub fn from_selection(sel: &Selection, name: impl Into<String>, tolerance: f32) -> VectorPath {
+    let mut path = VectorPath::new(name);
+    for ring in outline_rings(sel) {
+        let pts = simplify_ring(&ring, tolerance.max(0.5));
+        if pts.len() >= 3 {
+            path.subpaths.push(SubPath { anchors: smooth_ring(&pts), closed: true });
+        }
+    }
+    path
+}
+
+/// The selection's outline (pixel edges) joined into closed rings of corner points.
+fn outline_rings(sel: &Selection) -> Vec<Vec<Pt>> {
+    use std::collections::HashMap;
+    // Every unit edge, both ways round, so rings can be walked from any end.
+    let mut edges: Vec<((u32, u32), (u32, u32))> = Vec::new();
+    for [x0, y0, x1, y1] in sel.outline() {
+        let (dx, dy) = ((x1 as i64 - x0 as i64).signum(), (y1 as i64 - y0 as i64).signum());
+        let (mut x, mut y) = (x0 as i64, y0 as i64);
+        while (x, y) != (x1 as i64, y1 as i64) {
+            let next = (x + dx, y + dy);
+            edges.push(((x as u32, y as u32), (next.0 as u32, next.1 as u32)));
+            (x, y) = next;
+        }
+    }
+    let mut at: HashMap<(u32, u32), Vec<usize>> = HashMap::new();
+    for (i, (a, b)) in edges.iter().enumerate() {
+        at.entry(*a).or_default().push(i);
+        at.entry(*b).or_default().push(i);
+    }
+    let mut used = vec![false; edges.len()];
+    let mut rings = Vec::new();
+    for start in 0..edges.len() {
+        if used[start] {
+            continue;
+        }
+        used[start] = true;
+        let (first, mut cur) = edges[start];
+        let mut ring = vec![first];
+        let mut prev_dir = (cur.0 as i64 - first.0 as i64, cur.1 as i64 - first.1 as i64);
+        while cur != first {
+            ring.push(cur);
+            // Prefer carrying straight on, then any free edge from here.
+            let free: Vec<usize> = at.get(&cur).map(|v| v.iter().copied().filter(|&e| !used[e]).collect()).unwrap_or_default();
+            let other = |e: usize| if edges[e].0 == cur { edges[e].1 } else { edges[e].0 };
+            let pick = free
+                .iter()
+                .copied()
+                .find(|&e| {
+                    let o = other(e);
+                    (o.0 as i64 - cur.0 as i64, o.1 as i64 - cur.1 as i64) == prev_dir
+                })
+                .or_else(|| free.first().copied());
+            let Some(e) = pick else { break };
+            used[e] = true;
+            let o = other(e);
+            prev_dir = (o.0 as i64 - cur.0 as i64, o.1 as i64 - cur.1 as i64);
+            cur = o;
+        }
+        if ring.len() >= 4 {
+            rings.push(ring.into_iter().map(|(x, y)| (x as f32, y as f32)).collect());
+        }
+    }
+    rings
+}
+
+/// Distance from `p` to the line through `a` and `b`.
+fn line_dist(p: Pt, a: Pt, b: Pt) -> f32 {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let len = (dx * dx + dy * dy).sqrt();
+    if len == 0.0 { dist(p, a) } else { ((p.0 - a.0) * dy - (p.1 - a.1) * dx).abs() / len }
+}
+
+/// Douglas-Peucker on an open run of points (keeps both ends).
+fn simplify_run(pts: &[Pt], tol: f32, out: &mut Vec<Pt>) {
+    let (a, b) = (pts[0], pts[pts.len() - 1]);
+    let far = (1..pts.len() - 1).map(|i| (i, line_dist(pts[i], a, b))).max_by(|x, y| x.1.total_cmp(&y.1));
+    match far {
+        Some((i, d)) if d > tol => {
+            simplify_run(&pts[..=i], tol, out);
+            simplify_run(&pts[i..], tol, out);
+        }
+        _ => out.push(a),
+    }
+}
+
+/// A closed ring simplified: split at the point farthest from the start, simplify both halves.
+fn simplify_ring(ring: &[Pt], tol: f32) -> Vec<Pt> {
+    let far = (1..ring.len()).max_by(|&i, &j| dist(ring[i], ring[0]).total_cmp(&dist(ring[j], ring[0]))).unwrap_or(0);
+    let mut out = Vec::new();
+    let first: Vec<Pt> = ring[..=far].to_vec();
+    let mut second: Vec<Pt> = ring[far..].to_vec();
+    second.push(ring[0]);
+    if first.len() >= 2 {
+        simplify_run(&first, tol, &mut out);
+    }
+    if second.len() >= 2 {
+        simplify_run(&second, tol, &mut out);
+    }
+    out
+}
+
+/// Anchors through `pts` (a closed ring): corners where it turns sharply (over 50°),
+/// smooth points with tangent handles elsewhere.
+fn smooth_ring(pts: &[Pt]) -> Vec<Anchor> {
+    let n = pts.len();
+    (0..n)
+        .map(|i| {
+            let (prev, p, next) = (pts[(i + n - 1) % n], pts[i], pts[(i + 1) % n]);
+            let (ax, ay) = (p.0 - prev.0, p.1 - prev.1);
+            let (bx, by) = (next.0 - p.0, next.1 - p.1);
+            let turn = (ax * by - ay * bx).atan2(ax * bx + ay * by).abs();
+            if turn > 50f32.to_radians() {
+                return Anchor::corner(p);
+            }
+            // Tangent along prev -> next; each handle a third of its own segment long.
+            let (tx, ty) = (next.0 - prev.0, next.1 - prev.1);
+            let tl = (tx * tx + ty * ty).sqrt().max(1e-6);
+            let (ux, uy) = (tx / tl, ty / tl);
+            let (lin, lout) = (dist(prev, p) / 3.0, dist(p, next) / 3.0);
+            Anchor { p, h_in: (p.0 - ux * lin, p.1 - uy * lin), h_out: (p.0 + ux * lout, p.1 + uy * lout) }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,6 +298,32 @@ mod tests {
         assert_eq!(s.get(70, 52), 255, "inside near the top");
         assert_eq!(s.get(54, 54), 0, "outside the corner of its box");
         assert_eq!(s.get(20, 20), 255, "both pieces");
+    }
+
+    #[test]
+    fn work_path_from_selections() {
+        // A rectangle: four corners, and loading it back gives the same pixels.
+        let sel = Selection::rect(60, 60, 10.0, 10.0, 40.0, 30.0);
+        let p = from_selection(&sel, "Work Path", 2.0);
+        assert_eq!(p.subpaths.len(), 1);
+        assert_eq!(p.subpaths[0].anchors.len(), 4);
+        assert!(p.subpaths[0].anchors.iter().all(|a| a.h_in == a.p && a.h_out == a.p));
+        let back = p.to_selection(60, 60);
+        assert_eq!((back.get(20, 20), back.get(5, 5), back.get(39, 29), back.get(40, 30)), (255, 0, 255, 0));
+
+        // An ellipse: a handful of smooth points that still hug the edge.
+        let e = Selection::ellipse(100, 100, 20.0, 20.0, 80.0, 80.0);
+        let p = from_selection(&e, "Work Path", 2.0);
+        let s = &p.subpaths[0];
+        assert!(s.anchors.len() >= 6 && s.anchors.len() <= 40, "{}", s.anchors.len());
+        assert!(s.anchors.iter().any(|a| a.h_out != a.p), "curves stay curves");
+        let back = p.to_selection(100, 100);
+        assert_eq!((back.get(50, 50), back.get(50, 23), back.get(24, 24)), (255, 255, 0));
+
+        // Two separate areas: two pieces.
+        let mut two = Selection::rect(60, 60, 0.0, 0.0, 10.0, 10.0);
+        two.combine(&Selection::rect(60, 60, 30.0, 30.0, 50.0, 50.0), Combine::Add);
+        assert_eq!(from_selection(&two, "p", 2.0).subpaths.len(), 2);
     }
 
     #[test]

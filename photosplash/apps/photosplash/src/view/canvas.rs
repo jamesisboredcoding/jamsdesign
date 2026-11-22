@@ -653,7 +653,7 @@ impl canvas::Program<Message> for Overlay<'_> {
                         Some(canvas::Action::request_redraw().and_capture())
                     }
                     Tool::Wand => publish(Message::Wand { at: doc, combine: self.combine(m) }),
-                    Tool::Pen | Tool::Select => {
+                    t if t.is_path() => {
                         state.pathing = true;
                         publish(Message::PathPress { at: doc, ctrl: m.command(), alt: m.alt() })
                     }
@@ -994,7 +994,7 @@ impl canvas::Program<Message> for Overlay<'_> {
             });
             frame.stroke(&curves, Stroke::default().with_width(2.5).with_color(Color::from_rgba(0.0, 0.0, 0.0, 0.45)));
             frame.stroke(&curves, Stroke::default().with_width(1.0).with_color(Color::from_rgb8(0x5A, 0xA9, 0xFF)));
-            if matches!(self.tool, Tool::Pen | Tool::Select) {
+            if self.tool.is_path() {
                 // Rubber band from the last point to the pointer while drawing.
                 if self.tool == Tool::Pen
                     && let (Some(sub), Some(c)) = (self.pen_open, cursor.position_in(bounds))

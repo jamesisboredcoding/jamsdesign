@@ -303,6 +303,7 @@ fn paths_panel(app: &Photo) -> Element<'_, Message> {
         (Icon::Shape, has.then_some(Message::FillPath), "Fill path with the foreground colour"),
         (Icon::Brush, has.then_some(Message::StrokePath), "Stroke path with the brush"),
         (Icon::Marquee, has.then_some(Message::PathToSelection), "Load path as a selection (Ctrl+Enter)"),
+        (Icon::Lasso, doc.selection.as_ref().map(|_| Message::MakeWorkPath), "Make work path from the selection"),
         (Icon::Plus, Some(Message::NewPath), "New path"),
         (Icon::Trash, doc.active_path.map(|_| Message::DeletePath), "Delete path"),
     ] {

@@ -34,7 +34,8 @@ icons! {
     Brushes => "brushes", Info => "info", Corner => "corner", Minimize => "minimize",
     Maximize => "maximize", Restore => "restore", Fullscreen => "fullscreen",
     ExitFullscreen => "exit-fullscreen", Image => "image", MarqueeEllipse => "marquee-ellipse",
-    PolygonLasso => "polygon-lasso",
+    PolygonLasso => "polygon-lasso", PenAdd => "pen-add", PenRemove => "pen-remove",
+    ConvertPoint => "convert-point",
     // Video (Cinematica)
     MarkIn => "mark-in", MarkOut => "mark-out", GoToIn => "go-to-in", StepBack => "step-back",
     Play => "play", Pause => "pause", StepForward => "step-forward", GoToOut => "go-to-out",

@@ -19,6 +19,9 @@ pub enum Tool {
     Dodge,
     Burn,
     Pen,
+    AddAnchor,
+    DeleteAnchor,
+    ConvertPoint,
     Type,
     Select,
     Shape,
@@ -46,7 +49,7 @@ pub const GROUPS: &[&[&[Tool]]] = &[
         &[Tool::Gradient],
         &[Tool::Dodge, Tool::Burn],
     ],
-    &[&[Tool::Pen], &[Tool::Type], &[Tool::Select], &[Tool::Shape, Tool::EllipseShape]],
+    &[&[Tool::Pen, Tool::AddAnchor, Tool::DeleteAnchor, Tool::ConvertPoint], &[Tool::Type], &[Tool::Select], &[Tool::Shape, Tool::EllipseShape]],
     &[&[Tool::Hand], &[Tool::Zoom]],
 ];
 
@@ -75,6 +78,9 @@ impl Tool {
             Tool::Dodge => Icon::Dodge,
             Tool::Burn => Icon::Burn,
             Tool::Pen => Icon::Pen,
+            Tool::AddAnchor => Icon::PenAdd,
+            Tool::DeleteAnchor => Icon::PenRemove,
+            Tool::ConvertPoint => Icon::ConvertPoint,
             Tool::Type => Icon::Type,
             Tool::Select => Icon::Select,
             Tool::Shape => Icon::Shape,
@@ -103,6 +109,9 @@ impl Tool {
             Tool::Dodge => "Dodge",
             Tool::Burn => "Burn",
             Tool::Pen => "Pen",
+            Tool::AddAnchor => "Add Anchor Point",
+            Tool::DeleteAnchor => "Delete Anchor Point",
+            Tool::ConvertPoint => "Convert Point",
             Tool::Type => "Type",
             Tool::Select => "Path Selection",
             Tool::Shape => "Rectangle",
@@ -132,6 +141,9 @@ impl Tool {
             Tool::Dodge => "Dodge Tool (O)",
             Tool::Burn => "Burn Tool (O)",
             Tool::Pen => "Pen Tool (P)",
+            Tool::AddAnchor => "Add Anchor Point Tool (P)",
+            Tool::DeleteAnchor => "Delete Anchor Point Tool (P)",
+            Tool::ConvertPoint => "Convert Point Tool (P)",
             Tool::Type => "Type Tool (T)",
             Tool::Select => "Path Selection Tool (A)",
             Tool::Shape => "Rectangle Tool (U)",
@@ -156,7 +168,7 @@ impl Tool {
             Tool::Eraser => 'e',
             Tool::Gradient => 'g',
             Tool::Dodge | Tool::Burn => 'o',
-            Tool::Pen => 'p',
+            Tool::Pen | Tool::AddAnchor | Tool::DeleteAnchor | Tool::ConvertPoint => 'p',
             Tool::Type => 't',
             Tool::Select => 'a',
             Tool::Shape | Tool::EllipseShape => 'u',
@@ -188,6 +200,11 @@ impl Tool {
     /// Clone Stamp and Healing Brush paint from a source set with Alt+click.
     pub fn clones(self) -> bool {
         matches!(self, Tool::Stamp | Tool::Heal)
+    }
+
+    /// Tools that draw or edit vector paths.
+    pub fn is_path(self) -> bool {
+        matches!(self, Tool::Pen | Tool::Select | Tool::AddAnchor | Tool::DeleteAnchor | Tool::ConvertPoint)
     }
 
     pub fn is_shape(self) -> bool {

@@ -780,6 +780,8 @@ pub enum Message {
     PathUndoPoint,
     SelectPath(Option<usize>),
     NewPath,
+    /// The selection's outline becomes the Work Path (it replaces an existing one).
+    MakeWorkPath,
     DeletePath,
     /// Ctrl+Enter: Load Path as Selection.
     PathToSelection,
@@ -2350,6 +2352,89 @@ impl Photo {
                     }
                     return Task::none();
                 }
+                // What's under the pointer on the active path.
+                use crate::pen::{self, Grab};
+                let path = d.doc.active_path.and_then(|i| d.doc.paths.get(i));
+                let anchor = path.and_then(|p| pen::hit_anchor(p, at, tol));
+                let segment = path.and_then(|p| pen::hit_segment(p, at, tol));
+                let handle = path.and_then(|p| pen::hit(p, at, tol, true)).filter(|g| matches!(g, Grab::Handle { .. }));
+                let open_end = anchor.filter(|&(sub, idx)| {
+                    path.and_then(|p| p.subpaths.get(sub)).is_some_and(|s| !s.closed && (idx == 0 || idx + 1 == s.anchors.len()))
+                });
+                let drawing = self.pen_tool.open.is_some();
+                let tool = self.tool;
+                let converting = tool == Tool::ConvertPoint || (tool == Tool::Pen && alt);
+                if converting {
+                    // A handle: move just that side. A point: make it a corner, and a drag
+                    // pulls out new smooth handles.
+                    if let Some(g) = handle {
+                        self.pen_tool.grab = Some(g);
+                    } else if let Some((sub, idx)) = anchor {
+                        let mut grab = None;
+                        self.edit("Convert Point", Some("path-drag"), |doc| {
+                            let Some(p) = doc.active_path.and_then(|i| doc.paths.get_mut(i)) else { return false };
+                            grab = pen::convert_anchor(p, sub, idx);
+                            grab.is_some()
+                        });
+                        self.pen_tool.grab = grab;
+                    }
+                    return Task::none();
+                }
+                let delete = match tool {
+                    Tool::DeleteAnchor => anchor,
+                    // The Pen deletes a point it's clicked on (Photoshop's Auto Add/Delete),
+                    // except an open end, where it carries on drawing that piece.
+                    Tool::Pen if !drawing && open_end.is_none() => anchor,
+                    _ => None,
+                };
+                if let Some((sub, idx)) = delete {
+                    self.edit("Delete Anchor Point", None, |doc| {
+                        let Some(p) = doc.active_path.and_then(|i| doc.paths.get_mut(i)) else { return false };
+                        pen::delete_anchor(p, sub, idx);
+                        true
+                    });
+                    self.pen_tool.grab = None;
+                    return Task::none();
+                }
+                let add = match tool {
+                    Tool::AddAnchor => segment,
+                    Tool::Pen if !drawing && anchor.is_none() => segment,
+                    _ => None,
+                };
+                if let Some((sub, seg, t)) = add {
+                    let mut grab = None;
+                    self.edit("Add Anchor Point", Some("path-drag"), |doc| {
+                        let Some(p) = doc.active_path.and_then(|i| doc.paths.get_mut(i)) else { return false };
+                        grab = pen::add_anchor(p, sub, seg, t).map(|idx| Grab::Anchor { sub, idx, last: at });
+                        grab.is_some()
+                    });
+                    self.pen_tool.grab = grab;
+                    return Task::none();
+                }
+                if tool != Tool::Pen {
+                    // Add / Delete Anchor Point clicked off the path: nothing.
+                    self.pen_tool.grab = None;
+                    return Task::none();
+                }
+                if let (false, Some((sub, idx))) = (drawing, open_end) {
+                    // Carry on drawing from an open end (its first point: the piece is turned
+                    // round so new points go after it).
+                    if idx == 0 {
+                        self.edit("Pen", Some("path-drag"), |doc| {
+                            let Some(s) = doc.active_path.and_then(|i| doc.paths.get_mut(i)).and_then(|p| p.subpaths.get_mut(sub)) else {
+                                return false;
+                            };
+                            s.anchors.reverse();
+                            for a in &mut s.anchors {
+                                std::mem::swap(&mut a.h_in, &mut a.h_out);
+                            }
+                            s.anchors.len() > 1
+                        });
+                    }
+                    self.pen_tool.open = Some(sub);
+                    self.pen_tool.grab = None;
+                    return Task::none();
+                }
                 let mut st = self.pen_tool;
                 // The click and the drag that follows are one undo step.
                 self.edit("Pen", Some("path-drag"), |doc| {
@@ -2397,6 +2482,28 @@ impl Photo {
                 if let Some(d) = self.doc_mut() {
                     d.doc.active_path = i.filter(|&i| i < d.doc.paths.len());
                 }
+            }
+            Message::MakeWorkPath => {
+                self.pen_tool = Default::default();
+                self.edit("Make Work Path", None, |doc| {
+                    let Some(sel) = doc.selection.take() else { return false };
+                    let path = jd_raster::path::from_selection(&sel, "Work Path", 2.0);
+                    if path.is_empty() {
+                        doc.selection = Some(sel);
+                        return false;
+                    }
+                    match doc.paths.iter().position(|p| p.name == "Work Path") {
+                        Some(i) => {
+                            doc.paths[i] = path;
+                            doc.active_path = Some(i);
+                        }
+                        None => {
+                            doc.paths.push(path);
+                            doc.active_path = Some(doc.paths.len() - 1);
+                        }
+                    }
+                    true
+                });
             }
             Message::NewPath => {
                 self.pen_tool = Default::default();
@@ -5353,6 +5460,60 @@ mod tests {
         let _ = app.update(Message::ToggleHome);
         let _ = app.update(Message::Open(vec![PathBuf::from("Cargo.toml")]));
         assert_eq!((app.loading, app.docs.len(), app.active, app.home), (0, 2, 1, false));
+    }
+
+    #[test]
+    fn anchor_tools_and_make_work_path() {
+        let (mut app, _) = Photo::new();
+        white(&mut app, 100, 100);
+        let _ = app.update(Message::SelectTool(Tool::Pen));
+        let press = |app: &mut Photo, x: f32, y: f32, alt: bool| {
+            let _ = app.update(Message::PathPress { at: Point::new(x, y), ctrl: false, alt });
+            let _ = app.update(Message::PathRelease);
+        };
+        let anchors = |app: &Photo| app.document().unwrap().paths[0].subpaths.first().map_or(0, |s| s.anchors.len());
+        // An open line of two points, finished.
+        press(&mut app, 10.0, 50.0, false);
+        press(&mut app, 90.0, 50.0, false);
+        let _ = app.update(Message::PathFinish);
+        assert_eq!(anchors(&app), 2);
+        // The Pen on the line adds a point; on that point, deletes it.
+        press(&mut app, 50.0, 50.0, false);
+        assert_eq!(anchors(&app), 3);
+        press(&mut app, 50.0, 50.0, false);
+        assert_eq!(anchors(&app), 2);
+        // On an open end it carries on drawing that piece (from the first point too).
+        press(&mut app, 10.0, 50.0, false);
+        assert_eq!(app.pen_tool.open, Some(0));
+        press(&mut app, 10.0, 90.0, false);
+        let doc = app.document().unwrap();
+        assert_eq!(doc.paths[0].subpaths[0].anchors.iter().map(|a| a.p).collect::<Vec<_>>(), [(90.0, 50.0), (10.0, 50.0), (10.0, 90.0)]);
+        let _ = app.update(Message::PathFinish);
+
+        // Convert Point: a drag from a corner pulls out smooth handles; a click makes it a corner again.
+        let _ = app.update(Message::SelectTool(Tool::ConvertPoint));
+        let _ = app.update(Message::PathPress { at: Point::new(10.0, 50.0), ctrl: false, alt: false });
+        let _ = app.update(Message::PathDrag { at: Point::new(10.0, 30.0), shift: false });
+        let _ = app.update(Message::PathRelease);
+        let a = app.document().unwrap().paths[0].subpaths[0].anchors[1];
+        assert_eq!((a.h_out, a.h_in), ((10.0, 30.0), (10.0, 70.0)));
+        press(&mut app, 10.0, 50.0, false);
+        let a = app.document().unwrap().paths[0].subpaths[0].anchors[1];
+        assert!(a.h_in == a.p && a.h_out == a.p);
+        let _ = app.update(Message::Undo);
+        assert_ne!(app.document().unwrap().paths[0].subpaths[0].anchors[1].h_out, a.p, "one undo step each");
+        // Delete Anchor Point clicked off the path does nothing.
+        let _ = app.update(Message::SelectTool(Tool::DeleteAnchor));
+        press(&mut app, 70.0, 80.0, false);
+        assert_eq!(anchors(&app), 3);
+
+        // Make Work Path: the selection becomes the Work Path (and the selection goes).
+        let _ = app.update(rect(20.0, 20.0, 60.0, 40.0));
+        let _ = app.update(Message::MakeWorkPath);
+        let doc = app.document().unwrap();
+        assert!(doc.selection.is_none());
+        assert_eq!(doc.paths[0].name, "Work Path");
+        assert_eq!(doc.paths[0].subpaths[0].anchors.len(), 4, "replaces the old Work Path");
     }
 
     #[test]

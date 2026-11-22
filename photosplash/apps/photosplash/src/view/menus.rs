@@ -151,6 +151,7 @@ fn context(app: &Photo) -> Vec<MenuEntry<'_, Message>> {
             item("Deselect", "Ctrl+D", true, Message::Deselect),
             item("Select Inverse", "Shift+Ctrl+I", true, Message::InvertSelection),
             item("Feather...", "Shift+F6", true, Message::ShowDialog(DialogKind::Feather)),
+            item("Make Work Path", "", true, Message::MakeWorkPath),
             Separator,
             item("Layer via Copy", "Ctrl+J", true, Message::LayerVia { cut: false }),
             item("Layer via Cut", "Shift+Ctrl+J", s.editable, Message::LayerVia { cut: true }),

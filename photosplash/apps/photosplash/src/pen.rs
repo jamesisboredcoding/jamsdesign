@@ -157,6 +157,86 @@ pub fn drag(path: &mut VectorPath, grab: &mut Grab, at: Point, shift: bool) {
     }
 }
 
+fn cubic(a: (f32, f32), b: (f32, f32), c: (f32, f32), d: (f32, f32), t: f32) -> (f32, f32) {
+    let u = 1.0 - t;
+    let (w0, w1, w2, w3) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+    (w0 * a.0 + w1 * b.0 + w2 * c.0 + w3 * d.0, w0 * a.1 + w1 * b.1 + w2 * c.1 + w3 * d.1)
+}
+
+/// The anchor under `at`, if any: (piece, index).
+pub fn hit_anchor(path: &VectorPath, at: Point, tol: f32) -> Option<(usize, usize)> {
+    path.subpaths.iter().enumerate().find_map(|(sub, s)| s.anchors.iter().position(|a| near(a.p, at, tol)).map(|idx| (sub, idx)))
+}
+
+/// The curve segment under `at`: (piece, segment index, t along it). Segment `i` runs from
+/// anchor `i` to the next one (the last one back to the first on a closed piece).
+pub fn hit_segment(path: &VectorPath, at: Point, tol: f32) -> Option<(usize, usize, f32)> {
+    let mut best: Option<(f32, (usize, usize, f32))> = None;
+    for (sub, s) in path.subpaths.iter().enumerate() {
+        let n = s.anchors.len();
+        let segments = if s.closed { n } else { n.saturating_sub(1) };
+        for i in 0..segments {
+            let (a, b) = (s.anchors[i], s.anchors[(i + 1) % n]);
+            const STEPS: usize = 64;
+            let mut prev = a.p;
+            for k in 1..=STEPS {
+                let t = k as f32 / STEPS as f32;
+                let q = cubic(a.p, a.h_out, b.h_in, b.p, t);
+                let d = seg_dist(prev, q, at);
+                if d <= tol && best.is_none_or(|(bd, _)| d < bd) {
+                    // t of the closest point within this little step.
+                    let (dx, dy) = (q.0 - prev.0, q.1 - prev.1);
+                    let len2 = dx * dx + dy * dy;
+                    let f = if len2 == 0.0 { 0.0 } else { (((at.x - prev.0) * dx + (at.y - prev.1) * dy) / len2).clamp(0.0, 1.0) };
+                    best = Some((d, (sub, i, t - (1.0 - f) / STEPS as f32)));
+                }
+                prev = q;
+            }
+        }
+    }
+    best.map(|(_, h)| h)
+}
+
+/// Adds an anchor on segment `seg` at `t` without changing the curve's shape (Add Anchor
+/// Point). Returns its index.
+pub fn add_anchor(path: &mut VectorPath, sub: usize, seg: usize, t: f32) -> Option<usize> {
+    let s = path.subpaths.get_mut(sub)?;
+    let n = s.anchors.len();
+    if n < 2 {
+        return None;
+    }
+    let (i, j) = (seg, (seg + 1) % n);
+    let (a, b) = (s.anchors[i], s.anchors[j]);
+    // De Casteljau: split the cubic at t.
+    let lerp = |p: (f32, f32), q: (f32, f32)| (p.0 + (q.0 - p.0) * t, p.1 + (q.1 - p.1) * t);
+    let (p01, p12, p23) = (lerp(a.p, a.h_out), lerp(a.h_out, b.h_in), lerp(b.h_in, b.p));
+    let (p012, p123) = (lerp(p01, p12), lerp(p12, p23));
+    let mid = lerp(p012, p123);
+    s.anchors[i].h_out = p01;
+    s.anchors[j].h_in = p23;
+    s.anchors.insert(seg + 1, Anchor { p: mid, h_in: p012, h_out: p123 });
+    Some(seg + 1)
+}
+
+/// Removes an anchor (Delete Anchor Point); a piece left with one point goes too.
+pub fn delete_anchor(path: &mut VectorPath, sub: usize, idx: usize) {
+    let Some(s) = path.subpaths.get_mut(sub) else { return };
+    if idx < s.anchors.len() {
+        s.anchors.remove(idx);
+    }
+    if s.anchors.len() < 2 {
+        path.subpaths.remove(sub);
+    }
+}
+
+/// Convert Point on an anchor: it becomes a corner (no handles); dragging from it then pulls
+/// out new smooth handles.
+pub fn convert_anchor(path: &mut VectorPath, sub: usize, idx: usize) -> Option<Grab> {
+    let a = path.subpaths.get_mut(sub)?.anchors.get_mut(idx)?;
+    *a = Anchor::corner(a.p);
+    Some(Grab::NewAnchor { sub, idx })
+}
+
 /// Shift keeps a handle at 45° steps, like Photoshop.
 fn constrain(origin: (f32, f32), p: (f32, f32), shift: bool) -> (f32, f32) {
     if !shift {
@@ -204,5 +284,32 @@ mod tests {
         assert!(matches!(g, Grab::Whole { .. }));
         drag(&mut doc.paths[0], &mut g, Point::new(30.0, 15.0), false);
         assert_eq!(doc.paths[0].subpaths[0].anchors[0].p, (10.0, 15.0));
+    }
+
+    #[test]
+    fn add_delete_and_convert_points() {
+        let mut p = VectorPath::new("p");
+        // A curve whose shape must survive adding a point.
+        p.subpaths.push(SubPath { anchors: vec![Anchor::smooth((0.0, 0.0), (0.0, 40.0)), Anchor::smooth((100.0, 0.0), (100.0, -40.0))], closed: false });
+        let before = p.subpaths[0].flatten();
+        let mid = before[before.len() / 2];
+        let (sub, seg, t) = hit_segment(&p, Point::new(mid.0, mid.1), 2.0).unwrap();
+        assert_eq!((sub, seg), (0, 0));
+        let idx = add_anchor(&mut p, sub, seg, t).unwrap();
+        assert_eq!((idx, p.subpaths[0].anchors.len()), (1, 3));
+        let a = p.subpaths[0].anchors[1].p;
+        assert!((a.0 - mid.0).abs() < 1.5 && (a.1 - mid.1).abs() < 1.5, "{a:?} vs {mid:?}");
+        // Same curve: a point a quarter of the way along is still on it.
+        let q = before[before.len() / 4];
+        assert!(hit_segment(&p, Point::new(q.0, q.1), 0.5).is_some());
+
+        assert_eq!(hit_anchor(&p, Point::new(99.0, 1.0), 3.0), Some((0, 2)));
+        let g = convert_anchor(&mut p, 0, 1).unwrap();
+        assert_eq!(g, Grab::NewAnchor { sub: 0, idx: 1 });
+        assert_eq!(p.subpaths[0].anchors[1], Anchor::corner(a));
+        delete_anchor(&mut p, 0, 1);
+        assert_eq!(p.subpaths[0].anchors.len(), 2);
+        delete_anchor(&mut p, 0, 0);
+        assert!(p.subpaths.is_empty(), "one point left: the piece goes");
     }
 }

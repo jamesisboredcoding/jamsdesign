@@ -140,6 +140,10 @@ left-click in, right-click out.
       Guides (Ctrl+;) / Grid (Ctrl+'), Lock Guides (Alt+Ctrl+;), Clear Guides; Snap To Guides
       and Grid; grid spacing and subdivisions in Preferences. Guides are undoable, follow
       crops and rotations, and are saved in .jdp
+- [x] 6m: Add Anchor Point, Delete Anchor Point and Convert Point tools (in the Pen's slot);
+      the Pen adds a point on the path, deletes one it's clicked on, carries on from an open
+      end, and converts with Alt; Make Work Path from a selection (right-click menu and the
+      Paths panel)
 - [x] 6l: layer masks: Alt+click the mask thumbnail to see the mask alone (again to go back),
       Ctrl+\\ targets the mask and Ctrl+2 the layer
 - [x] 6k: Home screen (the Home button in the options bar, and whenever nothing is open):
@@ -198,8 +202,7 @@ Try it: `cargo run -p jd-io --example demo_doc -- demo.jdp base.jpg top.jpg`
 - Groups: inside a group that isn't plain Pass Through (another blend mode, or opacity /
   mask / effects on the group), Move and Free Transform show the result when committed
   rather than while dragging. Copying a group to another document isn't supported yet.
-- Paths: no Convert Point / Add or Delete Anchor tools, no vector shape layers, no Make Work
-  Path from a selection; the Pen's last point can only be removed while drawing.
+- Paths: no vector shape layers; Make Work Path always uses a 2 px tolerance (no dialog).
 - Layer masks are always linked (moving a selection inside a mask isn't supported), and there's
   no red overlay view (Photoshop's \\ key).
 - Type: point text only (no text boxes or wrapping), the caret is always at the end (no

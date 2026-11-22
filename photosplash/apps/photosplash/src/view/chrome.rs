@@ -238,16 +238,18 @@ pub fn options_bar(app: &Photo) -> Element<'_, Message> {
         return options_container(bar);
     }
 
-    if matches!(tool, Tool::Pen | Tool::Select) {
+    if tool.is_path() {
         let has = app.document().and_then(|d| d.active_path.and_then(|i| d.paths.get(i))).is_some_and(|p| !p.is_empty());
         let action = |name: &'static str, msg: Message| {
             button(text(name).size(TEXT_SIZE_SMALL)).padding(Padding::from([3, 10])).style(style::ghost(false)).on_press_maybe(has.then_some(msg))
         };
         bar = bar
-            .push(label(if tool == Tool::Pen {
-                "Click: corner · Drag: curve · Click the first point: close · Enter: done · Ctrl: edit points"
-            } else {
-                "Drag a point, a handle (Alt: just that side) or the curve"
+            .push(label(match tool {
+                Tool::Pen => "Click: corner · Drag: curve · Click the path: add a point, a point: delete it · Alt: convert · Ctrl: edit",
+                Tool::AddAnchor => "Click the path to add a point (the curve keeps its shape) · drag to move it",
+                Tool::DeleteAnchor => "Click a point to delete it",
+                Tool::ConvertPoint => "Click a point: corner · Drag from a point: smooth · Drag a handle: just that side",
+                _ => "Drag a point, a handle (Alt: just that side) or the curve",
             }))
             .push(space::horizontal())
             .push(action("Selection", Message::PathToSelection))
