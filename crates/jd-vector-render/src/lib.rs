@@ -4,12 +4,16 @@
 //!
 //! No iced here, so export, thumbnails, tests and (later) MCP renders all work headless.
 
+pub mod pdf;
 pub mod raster;
 pub mod svg;
+mod svgin;
 pub mod text;
 
 pub use raster::{RenderOptions, render_node, render_png, render_region};
+pub use pdf::export_pdf;
 pub use svg::export_svg;
+pub use svgin::import_svg;
 pub use text::{CosmicMeasure, families, text_outline};
 
 use jd_vector::{Document, ExportFormat, NodeId};

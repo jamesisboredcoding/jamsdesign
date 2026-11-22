@@ -421,7 +421,14 @@ fn node<'a>(app: &'a Blobr, n: &'a Node) -> Element<'a, Message> {
     let export = |label: &'a str, f: ExportFormat| {
         button(text(label).size(TEXT_SIZE_SMALL)).padding(Padding::from([4, 10])).style(style::ghost(false)).on_press(Message::Export(f))
     };
-    col = col.push(body(row![export("Export PNG", ExportFormat::Png), export("Export SVG", ExportFormat::Svg)].spacing(8)));
+    col = col.push(body(
+        row![
+            export("PNG", ExportFormat::Png),
+            export("SVG", ExportFormat::Svg),
+            button(text("PDF").size(TEXT_SIZE_SMALL)).padding(Padding::from([4, 10])).style(style::ghost(false)).on_press(Message::ExportPdf),
+        ]
+        .spacing(8),
+    ));
     col.into()
 }
 

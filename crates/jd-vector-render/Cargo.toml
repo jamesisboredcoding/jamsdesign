@@ -15,6 +15,12 @@ tiny-skia = "0.11"
 cosmic-text = "0.15"
 # Same swash cosmic-text uses, for its glyph outline commands.
 swash = "0.2"
+# SVG import (resolves CSS, transforms and text) and PDF export (from our SVG). usvg 0.45 is
+# already in the lockfile via iced; svg2pdf 0.13 is built on the same usvg.
+usvg = "0.45"
+svg2pdf = { version = "0.13", default-features = false, features = ["image", "filters"] }
+# The PDF writer svg2pdf uses, to put several pages in one file.
+pdf-writer = "0.12"
 
 [dev-dependencies]
 # Renders our SVG export back to pixels, to check it matches the raster renderer.

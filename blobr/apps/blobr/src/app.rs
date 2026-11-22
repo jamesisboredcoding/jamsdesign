@@ -316,6 +316,10 @@ pub enum Message {
     CreateEffectStyle,
     /// Set a component property on the selected instance.
     SetPropValue(String, PropValue),
+    ImportSvg,
+    SvgPicked(Option<PathBuf>),
+    /// The selection (or every frame on the page) as a PDF, a page each.
+    ExportPdf,
     AddLibrary,
     LibraryPicked(Option<PathBuf>),
     RemoveLibrary(usize),
@@ -844,6 +848,36 @@ impl Blobr {
                 }
             }
             Message::SetPropValue(name, v) => self.patch_selection("Set property", Patch { values: Some([(name, v)].into()), ..Patch::default() }),
+            Message::ImportSvg => {
+                return Task::perform(
+                    rfd::AsyncFileDialog::new().add_filter("SVG", &["svg"]).set_title("Import SVG").pick_file(),
+                    |f| Message::SvgPicked(f.map(|f| f.path().to_path_buf())),
+                );
+            }
+            Message::SvgPicked(Some(path)) => match std::fs::read(&path) {
+                Ok(data) => {
+                    let name = path.file_stem().map_or("SVG".into(), |n| n.to_string_lossy().into_owned());
+                    self.import_svg(&data, &name);
+                }
+                Err(e) => self.error(format!("Couldn't read {}: {e}", path.display())),
+            },
+            Message::SvgPicked(None) => {}
+            Message::ExportPdf => {
+                let ids = if self.selection.is_empty() { self.top_frames() } else { self.selection.clone() };
+                if ids.is_empty() {
+                    self.error("Nothing to export: add a frame".into());
+                    return Task::none();
+                }
+                let bytes = match jd_vector_render::export_pdf(self.doc(), &ids) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        self.error(e);
+                        return Task::none();
+                    }
+                };
+                let name = format!("{}.pdf", self.path.as_ref().and_then(|p| p.file_stem()).map_or("Untitled".into(), |n| n.to_string_lossy().into_owned()));
+                return Task::perform(rfd::AsyncFileDialog::new().set_file_name(name).save_file(), move |f| Message::Exported(f.map(|f| f.path().to_path_buf()), bytes));
+            }
             Message::AddLibrary => {
                 return Task::perform(
                     rfd::AsyncFileDialog::new().add_filter("Blobr document", &[file::EXTENSION]).set_title("Add a library").pick_file(),
@@ -1733,8 +1767,35 @@ impl Blobr {
         }
     }
 
-    /// Text from another app becomes a text layer in the middle of the view.
+    /// An SVG as a frame of vector layers, in the middle of the view (or selected frame).
+    fn import_svg(&mut self, data: &[u8], name: &str) {
+        let (parent, index) = self.paste_target(&[]);
+        let mut ops = match jd_vector_render::import_svg(data, parent.into(), name, 0.0, 0.0) {
+            Ok(ops) => ops,
+            Err(e) => return self.error(e),
+        };
+        let doc = self.doc();
+        let center = if parent == self.page { self.view_rect().center() } else { doc.world_bounds(parent).map_or(self.view_rect().center(), |b| b.center()) };
+        if let Some(Op::Create { node, index: at, .. }) = ops.first_mut() {
+            let local = doc.world_transform(parent).inverse() * (center - kurbo::Vec2::new(node.props.width / 2.0, node.props.height / 2.0));
+            node.props.x = local.x.round();
+            node.props.y = local.y.round();
+            *at = index;
+        }
+        if let Some(done) = self.run("Import SVG", &ops)
+            && let Some(f) = done.id("svg")
+        {
+            self.select(f, false);
+        }
+    }
+
+    /// Text from another app becomes a text layer in the middle of the view; SVG markup is
+    /// imported as shapes.
     fn paste_text(&mut self, text: String) {
+        let t = text.trim_start();
+        if t.starts_with("<svg") || (t.starts_with("<?xml") && t.contains("<svg")) {
+            return self.import_svg(text.as_bytes(), "SVG");
+        }
         let c = self.view_rect().center();
         let spec = NodeSpec::text("Text", text.trim_end(), TextStyle { size: 16.0, ..TextStyle::default() }).at(c.x.round(), c.y.round());
         if let Some(done) = self.run("Paste text", &[Op::create(self.page, spec)]) {
@@ -3536,6 +3597,18 @@ mod tests {
 
         let css = jd_vector::inspect::css(app.doc(), btn);
         assert!(css.contains(&"position: absolute;".to_string()) && css.contains(&"left: 150px;".to_string()), "{css:?}");
+    }
+
+    #[test]
+    fn pasting_svg_markup_imports_shapes() {
+        let mut app = app();
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20" rx="4" fill="#4C8DFF"/></svg>"##;
+        let _ = app.update(Message::Pasted(Some(Pasted::Text(svg.into()))));
+        let f = app.selection[0];
+        let n = app.doc().node(f).unwrap();
+        assert_eq!((n.name.as_str(), n.props.width, n.props.height), ("SVG", 40.0, 20.0));
+        assert_eq!(app.doc().world_bounds(f).unwrap().center(), app.view_rect().center());
+        assert!(matches!(app.doc().node(app.doc().children(f)[0]).unwrap().kind, NodeKind::Vector { .. }));
     }
 
     #[test]
