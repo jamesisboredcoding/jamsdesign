@@ -10,9 +10,10 @@ mod tool;
 mod view;
 
 /// Display name, used in the title bar and menu bar.
-pub const APP_NAME: &str = "Gallerion";
+pub const APP_NAME: &str = "Photosplash";
 
 fn main() -> iced::Result {
+    prefs::migrate_old_names();
     iced::application(app::Photo::new, app::Photo::update, view::view)
         .title(|app: &app::Photo| match app.document() {
             Some(doc) => format!("{} - {APP_NAME}", doc.name),
@@ -31,7 +32,7 @@ fn main() -> iced::Result {
             // We draw our own title bar and window controls.
             decorations: false,
             icon: window_icon(),
-            // Matches packaging/dev.jamsdesign.Gallerion.desktop, which is where Wayland
+            // Matches packaging/dev.jamsdesign.Photosplash.desktop, which is where Wayland
             // compositors (KWin) take the taskbar and task-switcher icon from.
             platform_specific: iced::window::settings::PlatformSpecific {
                 application_id: APP_ID.to_owned(),
@@ -46,10 +47,10 @@ fn main() -> iced::Result {
 }
 
 /// Wayland app id; also the name of the .desktop file and the installed icon.
-pub const APP_ID: &str = "dev.jamsdesign.Gallerion";
+pub const APP_ID: &str = "dev.jamsdesign.Photosplash";
 
-/// The Gallerion logo (the suite's shared artwork in the repo root `img/`).
-pub const LOGO_SVG: &[u8] = include_bytes!("../../../../img/gallerion.svg");
+/// The Photosplash logo (the suite's shared artwork in the repo root `img/`).
+pub const LOGO_SVG: &[u8] = include_bytes!("../../../../img/photosplash.svg");
 
 /// The logo rendered to pixels for the window icon (used by X11; Wayland uses the .desktop file).
 fn window_icon() -> Option<iced::window::Icon> {

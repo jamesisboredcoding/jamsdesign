@@ -371,7 +371,7 @@ fn menu_bar(app: &Photo, i: usize) -> Vec<MenuEntry<'_, Message>> {
             Separator,
             item("Full Screen", "F11", true, Message::ToggleFullscreen),
         ],
-        "Help" => vec![item("About Gallerion", "", true, Message::About)],
+        "Help" => vec![item("About Photosplash", "", true, Message::About)],
         "Window" => vec![
             item("Color", check(app.panels.color), true, Message::TogglePanel(Panel::Color)),
             item("History", check(app.open_strip == Some(0)), true, Message::ToggleStrip(0)),

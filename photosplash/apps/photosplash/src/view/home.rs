@@ -52,7 +52,7 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
     let subtitle = if app.loading > 0 { "Opening…" } else { "Open something recent, or start something new." };
     let header = row![
         column![
-            text("Welcome to Gallerion").size(22).font(bold()),
+            text("Welcome to Photosplash").size(22).font(bold()),
             text(subtitle).size(TEXT_SIZE).color(TEXT_SECONDARY),
         ]
         .spacing(6),

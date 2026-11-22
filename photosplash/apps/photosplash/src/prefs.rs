@@ -1,5 +1,5 @@
 //! Edit > Preferences (Ctrl+K): settings kept between sessions in
-//! `$XDG_CONFIG_HOME/jamsdesign/gallerion.json`. A missing or unreadable file just means
+//! `$XDG_CONFIG_HOME/jamsdesign/photosplash.json`. A missing or unreadable file just means
 //! the defaults; unknown or missing fields fall back to their defaults too.
 
 use std::path::PathBuf;
@@ -91,11 +91,32 @@ impl Default for Prefs {
 
 pub const HISTORY_RANGE: std::ops::RangeInclusive<f32> = 5.0..=1000.0;
 
+/// The app used to be called Gallerion: moves its settings, tool presets and thumbnail cache
+/// to the new names, once (only when nothing exists under the new name yet).
+pub fn migrate_old_names() {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let dir = |var: &str, fallback: &str| {
+        std::env::var_os(var).map(PathBuf::from).filter(|p| p.is_absolute()).or_else(|| home.as_ref().map(|h| h.join(fallback)))
+    };
+    let moves = [
+        (dir("XDG_CONFIG_HOME", ".config"), "gallerion.json", "photosplash.json"),
+        (dir("XDG_CONFIG_HOME", ".config"), "gallerion-tool-presets.json", "photosplash-tool-presets.json"),
+        (dir("XDG_CACHE_HOME", ".cache"), "gallerion-thumbs", "photosplash-thumbs"),
+    ];
+    for (base, old, new) in moves {
+        let Some(base) = base.map(|b| b.join("jamsdesign")) else { continue };
+        let (old, new) = (base.join(old), base.join(new));
+        if old.exists() && !new.exists() {
+            let _ = std::fs::rename(old, new);
+        }
+    }
+}
+
 fn path() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("jamsdesign").join("gallerion.json"))
+    Some(base.join("jamsdesign").join("photosplash.json"))
 }
 
 /// Grid spacing limits (px) and subdivision limits, for the Preferences boxes.

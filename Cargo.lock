@@ -1487,28 +1487,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gallerion"
-version = "0.1.0"
-dependencies = [
- "arboard",
- "iced",
- "iced_winit",
- "image",
- "jd-ai",
- "jd-core",
- "jd-gpu",
- "jd-io",
- "jd-raster",
- "jd-ui",
- "octotablet",
- "raw-window-handle",
- "resvg",
- "rfd",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "gethostname"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3439,6 +3417,28 @@ dependencies = [
  "fixedbitset",
  "hashbrown 0.15.5",
  "indexmap",
+]
+
+[[package]]
+name = "photosplash"
+version = "0.1.0"
+dependencies = [
+ "arboard",
+ "iced",
+ "iced_winit",
+ "image",
+ "jd-ai",
+ "jd-core",
+ "jd-gpu",
+ "jd-io",
+ "jd-raster",
+ "jd-ui",
+ "octotablet",
+ "raw-window-handle",
+ "resvg",
+ "rfd",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

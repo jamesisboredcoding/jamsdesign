@@ -1,4 +1,4 @@
-//! `.jdp`, the native Gallerion document format.
+//! `.jdp`, the native Photosplash document format.
 //!
 //! A zip archive (like OpenRaster or .docx) containing:
 //!
@@ -437,7 +437,7 @@ pub fn read<R: Read + Seek>(name: impl Into<String>, input: R) -> Result<Documen
     };
     if manifest.version > VERSION {
         return Err(LoadError::Format(format!(
-            "made by a newer version of Gallerion (format v{}, this build reads v{VERSION})",
+            "made by a newer version of Photosplash (format v{}, this build reads v{VERSION})",
             manifest.version
         )));
     }

@@ -21,7 +21,7 @@ pub const MENUS: &[&str] = &[
 /// Our own title bar (the window has no system decorations): app badge, menus, title,
 /// actions and window controls. Empty space drags the window; double-click maximises.
 pub fn title_bar(app: &Photo) -> Element<'_, Message> {
-    // The Gallerion logo, in its own colours (not tinted like the UI icons).
+    // The Photosplash logo, in its own colours (not tinted like the UI icons).
     let badge = iced::widget::svg(iced::widget::svg::Handle::from_memory(crate::LOGO_SVG)).width(22).height(22);
 
     let mut menus = row![badge, space().width(8)].align_y(Vertical::Center).spacing(2);

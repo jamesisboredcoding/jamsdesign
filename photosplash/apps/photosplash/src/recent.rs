@@ -1,5 +1,5 @@
 //! Recent files for the Home screen: the list lives in Preferences; each file's thumbnail is
-//! cached as a small PNG in `$XDG_CACHE_HOME/jamsdesign/gallerion-thumbs/` when it's opened
+//! cached as a small PNG in `$XDG_CACHE_HOME/jamsdesign/photosplash-thumbs/` when it's opened
 //! or saved (so the Home screen never has to open big files to show them).
 
 use std::path::{Path, PathBuf};
@@ -25,7 +25,7 @@ fn cache_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?;
-    Some(base.join("jamsdesign").join("gallerion-thumbs"))
+    Some(base.join("jamsdesign").join("photosplash-thumbs"))
 }
 
 /// Where `path`'s thumbnail is cached (named by a hash of the path).

@@ -89,7 +89,7 @@ pub fn read() -> Option<Pasted> {
     Some(Pasted::Text(text))
 }
 
-/// An image or document Gallerion opens (by extension).
+/// An image or document Photosplash opens (by extension).
 fn openable(p: &std::path::Path) -> bool {
     let ext = p.extension().and_then(|e| e.to_str()).map(str::to_lowercase).unwrap_or_default();
     jd_io::OPEN_EXTENSIONS.contains(&ext.as_str()) || ext == jd_io::jdp::EXTENSION

@@ -1,6 +1,6 @@
 //! Pen tablet input (pressure, eraser end) on Wayland, via octotablet.
 //!
-//! iced doesn't deliver pen data, so we attach octotablet to Gallerion's own window: iced lends
+//! iced doesn't deliver pen data, so we attach octotablet to Photosplash's own window: iced lends
 //! us the native handles (`window::run`), and a background thread pumps tablet events. It
 //! wakes every 3 ms to poll and only sends messages when the pen does something.
 //!
@@ -9,7 +9,7 @@
 //! iced_winit, see vendor/iced_winit/src/synthetic.rs): buttons, sliders and all tools work
 //! with the pen. Pressure and the eraser end arrive separately as `TabletMessage::Pen`.
 //!
-//! `GALLERION_PEN=0` skips all of this; the pen is then a plain mouse from the compositor.
+//! `PHOTOSPLASH_PEN=0` skips all of this; the pen is then a plain mouse from the compositor.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -32,10 +32,10 @@ pub fn pen_near() -> bool {
     PEN_NEAR.load(Ordering::Acquire)
 }
 
-/// `GALLERION_PEN=0` (or `off`/`false`) disables tablet input for this run.
+/// `PHOTOSPLASH_PEN=0` (or `off`/`false`) disables tablet input for this run.
 pub fn enabled_by_env() -> bool {
     !matches!(
-        std::env::var("GALLERION_PEN").map(|v| v.to_ascii_lowercase()).as_deref(),
+        std::env::var("PHOTOSPLASH_PEN").map(|v| v.to_ascii_lowercase()).as_deref(),
         Ok("0" | "off" | "false" | "no")
     )
 }
@@ -125,7 +125,7 @@ fn stream() -> impl iced::futures::Stream<Item = TabletMessage> {
         let handles = *PENDING.lock().expect("tablet handles lock");
         let Some(handles) = handles else { return };
         std::thread::Builder::new()
-            .name("gallerion-tablet".into())
+            .name("photosplash-tablet".into())
             .spawn(move || run(handles, output))
             .expect("spawn tablet thread");
         // The thread does the work; keep the stream (and its channel) alive.

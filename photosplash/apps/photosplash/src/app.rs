@@ -62,7 +62,7 @@ impl Default for BrushSettings {
 }
 
 /// A saved brush setup (the options bar's tool preset picker). Kept in
-/// `$XDG_CONFIG_HOME/jamsdesign/gallerion-tool-presets.json`.
+/// `$XDG_CONFIG_HOME/jamsdesign/photosplash-tool-presets.json`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ToolPreset {
     pub name: String,
@@ -86,7 +86,7 @@ fn presets_path() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("jamsdesign").join("gallerion-tool-presets.json"))
+    Some(base.join("jamsdesign").join("photosplash-tool-presets.json"))
 }
 
 /// A brush/eraser stroke in progress.
@@ -544,7 +544,7 @@ pub struct Photo {
     /// The canvas widget's bounds in the window (pen positions are window-relative).
     pub canvas_bounds: Rectangle,
     pub stroke: Option<ActiveStroke>,
-    /// Started with tablet support (not disabled by `GALLERION_PEN=0`).
+    /// Started with tablet support (not disabled by `PHOTOSPLASH_PEN=0`).
     pub tablet_allowed: bool,
     pub tablet_ready: bool,
     /// Pen strokes use pressure. Off: the pen paints like a mouse (full pressure).
@@ -1126,7 +1126,7 @@ impl Photo {
             loading: 0,
             notice: None,
         };
-        // `gallerion photo.jpg other.png` opens those files.
+        // `photosplash photo.jpg other.png` opens those files.
         // Tests never touch the real config folder.
         if !cfg!(test) {
             app.load_presets();
@@ -1973,7 +1973,7 @@ impl Photo {
                         rfd::AsyncFileDialog::new()
                             .set_title("Open")
                             .add_filter("Images and documents", &images)
-                            .add_filter("Gallerion documents", &[jd_io::jdp::EXTENSION])
+                            .add_filter("Photosplash documents", &[jd_io::jdp::EXTENSION])
                             .add_filter("All files", &["*"])
                             .pick_files()
                             .await
@@ -2854,7 +2854,7 @@ impl Photo {
                     self.copy_layer_into(src, layer);
                 }
             }
-            Message::About => self.info("Gallerion, the jamsdesign photo editor (Rust + iced)"),
+            Message::About => self.info("Photosplash, the jamsdesign photo editor (Rust + iced)"),
             Message::OpenPalette => {
                 self.popup = None;
                 self.palette = Some(String::new());
@@ -3252,7 +3252,7 @@ impl Photo {
                 let mut dialog = rfd::AsyncFileDialog::new()
                     .set_title("Save As")
                     .set_file_name(suggested)
-                    .add_filter("Gallerion document", &[jd_io::jdp::EXTENSION]);
+                    .add_filter("Photosplash document", &[jd_io::jdp::EXTENSION]);
                 if let Some(dir) = dir {
                     dialog = dialog.set_directory(dir);
                 }

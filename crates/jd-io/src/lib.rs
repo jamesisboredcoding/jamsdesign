@@ -36,7 +36,7 @@ impl fmt::Display for LoadError {
         match self {
             Self::Io(e) => write!(f, "couldn't read file: {e}"),
             Self::Decode(e) => write!(f, "couldn't decode image: {e}"),
-            Self::Format(e) => write!(f, "not a valid Gallerion document: {e}"),
+            Self::Format(e) => write!(f, "not a valid Photosplash document: {e}"),
         }
     }
 }

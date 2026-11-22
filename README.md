@@ -23,8 +23,8 @@ Native, GPU-accelerated apps for photo and video work, with the shortcuts and wo
 <table>
   <tr>
     <td align="center" width="50%">
-      <img src="img/gallerion.svg" alt="Gallerion icon" width="96" height="96"><br>
-      <h3>Gallerion</h3>
+      <img src="img/photosplash.svg" alt="Photosplash icon" width="96" height="96"><br>
+      <h3>Photosplash</h3>
       <em>Photo editor</em>
     </td>
     <td align="center" width="50%">
@@ -42,7 +42,7 @@ Native, GPU-accelerated apps for photo and video work, with the shortcuts and wo
     </td>
     <td valign="top">
       A timeline-based video editor inspired by Premiere, built on the same core, renderer and
-      UI toolkit as Gallerion. In early development.
+      UI toolkit as Photosplash. In early development.
     </td>
   </tr>
 </table>
@@ -62,9 +62,9 @@ You need a recent stable Rust toolchain (edition 2024) and a Linux desktop with 
 Cinematica also needs the system FFmpeg development libraries.
 
 ```sh
-# Gallerion
-cd gallerion
-cargo run -p gallerion -- path/to/photo.jpg
+# Photosplash
+cd photosplash
+cargo run -p photosplash -- path/to/photo.jpg
 
 # Cinematica
 cd cinematica
@@ -75,13 +75,13 @@ cargo test --workspace
 ```
 
 Each app has its own README with full details, shortcuts and status:
-[Gallerion](gallerion/README.md) · [Cinematica](cinematica/README.md)
+[Photosplash](photosplash/README.md) · [Cinematica](cinematica/README.md)
 
 ## Repository layout
 
 ```
 jamsdesign/
-├── gallerion/    git branch `gallerion`   (photo editor workspace)
+├── photosplash/    git branch `photosplash`   (photo editor workspace)
 ├── cinematica/   git worktree, branch `cinematica`   (video editor workspace)
 └── img/          suite and app logos (SVG)
 ```
