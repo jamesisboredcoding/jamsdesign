@@ -74,8 +74,9 @@ impl Handle {
 pub enum Drag {
     Pan { start: Point, origin: kurbo::Point },
     /// Each node with its starting x/y and the map from page to its parent's space.
-    Move { start: kurbo::Point, items: Vec<(NodeId, f64, f64, Affine)> },
-    Resize { id: NodeId, handle: Handle, start: kurbo::Point, rect: Rect, to_parent: Affine },
+    /// `started` once the pointer has gone past the drag threshold (a click doesn't move).
+    Move { start: kurbo::Point, items: Vec<(NodeId, f64, f64, Affine)>, started: bool },
+    Resize { id: NodeId, handle: Handle, start: kurbo::Point, rect: Rect, to_parent: Affine, started: bool },
     Marquee { start: kurbo::Point, now: kurbo::Point },
     Create { tool: Tool, start: kurbo::Point, now: kurbo::Point },
 }
@@ -114,6 +115,8 @@ pub enum Message {
     Key(keyboard::Event),
     ScaleFactor(f32),
     Viewport(Size),
+    /// A screen refresh while dragging (see `update`).
+    Frame,
     Tool(Tool),
     CanvasPress { at: Point, button: mouse::Button },
     CanvasMove(Point),
@@ -192,6 +195,8 @@ pub struct Blobr {
 }
 
 const MIN_ZOOM: f64 = 0.02;
+/// Screen pixels the pointer must travel before a press becomes a drag.
+const DRAG_THRESHOLD: f64 = 3.0;
 const MAX_ZOOM: f64 = 256.0;
 
 impl Blobr {
@@ -246,12 +251,21 @@ impl Blobr {
             keyboard::listen().map(Message::Key),
             WindowChrome::subscription().map(Message::Chrome),
             window::close_requests().map(|_| Message::Quit),
+            if self.drag.is_some() { window::frames().map(|_| Message::Frame) } else { Subscription::none() },
         ])
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        let before = self.selection.clone();
         let task = self.handle(message);
-        self.refresh();
+        // Half-typed values belong to the layer they were typed for.
+        if self.selection != before {
+            self.drafts.clear();
+        }
+        // While dragging, mouse moves can outpace the screen: render once per frame instead.
+        if self.drag.is_none() {
+            self.refresh();
+        }
         task
     }
 
@@ -263,9 +277,8 @@ impl Blobr {
                 return Task::batch([task, scale]);
             }
             Message::Chrome(e) => {
-                let task = self.chrome.update(e).map(Message::Chrome);
-                self.viewport = view::canvas_size(self.chrome.size);
-                return task;
+                // The canvas overlay reports its real size (Message::Viewport).
+                return self.chrome.update(e).map(Message::Chrome);
             }
             Message::Menu(m) => {
                 self.chrome.open_menu = None;
@@ -273,6 +286,7 @@ impl Blobr {
             }
             Message::CloseMenu => self.chrome.open_menu = None,
             Message::Noop => {}
+            Message::Frame => self.refresh(),
             Message::Quit => return self.chrome.close(),
             Message::Key(e) => return self.on_key(e),
             Message::ScaleFactor(s) => self.scale_factor = s.max(0.5),
@@ -506,6 +520,7 @@ impl Blobr {
                     ("d", true, false, false) => Some(Message::Duplicate),
                     ("a", true, false, false) => Some(Message::SelectAll),
                     ("a", true, true, false) => Some(Message::Deselect),
+                    ("q", true, false, false) => Some(Message::Quit),
                     ("s", true, false, false) => Some(Message::Save),
                     ("s", true, true, false) => Some(Message::SaveAs),
                     ("o", true, false, false) => Some(Message::Open),
@@ -910,7 +925,7 @@ impl Blobr {
             let n = self.doc().node(id).expect("selected");
             let to_parent = n.parent.map_or(Affine::IDENTITY, |p| self.doc().world_transform(p).inverse());
             let rect = Rect::new(n.props.x, n.props.y, n.props.x + n.props.width, n.props.y + n.props.height);
-            self.drag = Some(Drag::Resize { id, handle, start: page, rect, to_parent });
+            self.drag = Some(Drag::Resize { id, handle, start: page, rect, to_parent, started: false });
             return;
         }
         let shift = self.modifiers.shift();
@@ -922,7 +937,7 @@ impl Blobr {
                     self.select(id, false);
                 }
                 let items = self.movable();
-                self.drag = Some(Drag::Move { start: page, items });
+                self.drag = Some(Drag::Move { start: page, items, started: false });
             }
             None => {
                 if !shift {
@@ -952,6 +967,14 @@ impl Blobr {
 
     fn drag_to(&mut self, at: Point) {
         let page = self.camera.to_page(at);
+        if let Some(Drag::Move { start, started, .. } | Drag::Resize { start, started, .. }) = &mut self.drag
+            && !*started
+        {
+            if (page - *start).hypot() * self.camera.zoom < DRAG_THRESHOLD {
+                return;
+            }
+            *started = true;
+        }
         let Some(drag) = self.drag.clone() else {
             let hover = if self.tool == Tool::Move { self.pick_at(at, self.modifiers.command(), false) } else { None };
             self.hover = hover;
@@ -962,7 +985,7 @@ impl Blobr {
                 let z = self.camera.zoom;
                 self.camera.origin = kurbo::Point::new(origin.x - (at.x - start.x) as f64 / z, origin.y - (at.y - start.y) as f64 / z);
             }
-            Drag::Move { start, items } => {
+            Drag::Move { start, items, .. } => {
                 if items.is_empty() {
                     if !self.selection.is_empty() {
                         self.error("Auto layout places this layer; change its order in the Layers panel".into());
@@ -982,7 +1005,7 @@ impl Blobr {
                     .collect();
                 self.run_gesture("Move", &ops);
             }
-            Drag::Resize { id, handle, start, rect, to_parent } => {
+            Drag::Resize { id, handle, start, rect, to_parent, .. } => {
                 let c = to_parent.as_coeffs();
                 let d = page - start;
                 let d = Vec2::new(c[0] * d.x + c[2] * d.y, c[1] * d.x + c[3] * d.y);
@@ -1230,6 +1253,26 @@ mod tests {
         app.update(Message::FieldInput(Field::X, "abc".into()));
         app.update(Message::FieldSubmit(Field::X));
         assert!(app.status.error);
+    }
+
+    #[test]
+    fn half_typed_values_and_click_jitter_dont_leak() {
+        let mut app = app();
+        let p = app.page;
+        let r = app.run("Add", &[Op::create(p, NodeSpec::rect("R", 50.0, 50.0).at(100.0, 100.0))]).unwrap().created[0];
+        app.update(Message::Select(r, false));
+        app.update(Message::FieldInput(Field::W, "999".into()));
+        app.update(Message::Deselect);
+        assert!(app.drafts.is_empty(), "a draft for one layer must not show on the next");
+
+        // A click with a pixel of jitter selects without moving or adding an undo step.
+        let steps = app.ed.history.labels().count();
+        app.update(Message::CanvasPress { at: Point::new(120.0, 120.0), button: mouse::Button::Left });
+        app.update(Message::CanvasMove(Point::new(121.0, 120.0)));
+        app.update(Message::CanvasRelease(Point::new(121.0, 120.0)));
+        assert_eq!(app.doc().node(r).unwrap().props.x, 100.0);
+        assert_eq!(app.ed.history.labels().count(), steps);
+        assert_eq!(app.selection, vec![r]);
     }
 
     #[test]

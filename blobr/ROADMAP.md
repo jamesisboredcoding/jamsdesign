@@ -100,7 +100,8 @@ CLI argument as a file to open. Names are provisional until Step 0.
   - [x] Canvas: tiny-skia render of the visible region at screen resolution, redrawn only when
         the document, camera or window changes; zoom (Ctrl+scroll, Shift+0/1/2), pan (scroll,
         Space, middle drag, Hand), frame labels, hover and selection outlines
-  - [ ] Cache shaped text if dragging lags on text-heavy pages; GPU later if needed
+  - [ ] Faster redraws: a full-viewport render is ~30 ms at 2x in debug (drags render once
+        per frame); cache shaped text and the untouched layers, GPU later if needed
   - [x] Pages list (add, switch), layer tree (expand, select, hide, lock); clicks pick a
         frame's children, Ctrl picks the deepest layer, double-click goes one level deeper
   - [x] Design panel showing (and editing) the selection: name, position, size, rotation,
