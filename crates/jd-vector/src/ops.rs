@@ -357,6 +357,18 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         index: Option<usize>,
     },
+    /// Add copied layers (see [`Clip`](crate::clip::Clip)) to `parent`, moved by `offset`.
+    /// With a `key`, the pasted layers are known as `key0`, `key1`, ... in the batch.
+    Paste {
+        parent: Ref,
+        clip: crate::clip::Clip,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key: Option<String>,
+        #[serde(default)]
+        offset: [f64; 2],
+    },
     /// Copy a node and everything in it, placed just above the original.
     Duplicate {
         id: Ref,
@@ -454,6 +466,7 @@ impl Op {
             Self::Resize { .. } => "resize",
             Self::Move { .. } => "move",
             Self::Duplicate { .. } => "duplicate",
+            Self::Paste { .. } => "paste",
             Self::Delete { .. } => "delete",
             Self::CreateInstance { .. } => "create_instance",
             Self::MakeComponent { .. } => "make_component",
@@ -700,6 +713,23 @@ impl Batch {
                 let kids = &mut doc.node_mut(parent).expect("exists").children;
                 let at = kids.iter().position(|&c| c == id).map_or(kids.len(), |i| i + 1);
                 kids.insert(at, copy);
+            }
+            Op::Paste { parent, clip, index, key, offset } => {
+                let parent = self.resolve(doc, parent)?;
+                self.container(doc, parent)?;
+                let roots = crate::clip::paste(doc, clip, parent, &mut self.created);
+                let mut at = *index;
+                for (i, &id) in roots.iter().enumerate() {
+                    let p = &mut doc.node_mut(id).expect("just pasted").props;
+                    p.x += offset[0];
+                    p.y += offset[1];
+                    insert_child(doc, parent, id, at);
+                    at = at.map(|a| a + 1);
+                    if let Some(k) = key {
+                        self.remember(&Some(format!("{k}{i}")), id)?;
+                    }
+                    validate(doc, id)?;
+                }
             }
             Op::Delete { id } => {
                 let id = self.resolve(doc, id)?;

@@ -61,19 +61,20 @@ struct FileDoc {
     tokens: crate::tokens::Tokens,
 }
 
-#[derive(Serialize, Deserialize)]
-struct FileNode {
-    id: NodeId,
-    name: String,
+/// A node and its subtree, nested, as files (and copied layers) store them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct FileNode {
+    pub(crate) id: NodeId,
+    pub(crate) name: String,
     #[serde(flatten)]
-    kind: NodeKind,
+    pub(crate) kind: NodeKind,
     #[serde(flatten)]
-    props: Props,
+    pub(crate) props: Props,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    children: Vec<FileNode>,
+    pub(crate) children: Vec<FileNode>,
 }
 
-fn to_file(doc: &Document, id: NodeId) -> FileNode {
+pub(crate) fn to_file(doc: &Document, id: NodeId) -> FileNode {
     let n = doc.node(id).expect("listed node exists");
     FileNode {
         id,

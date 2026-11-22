@@ -7,12 +7,13 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use iced::keyboard::{self, Key, key::Named};
-use iced::widget::{image, operation};
+use iced::widget::{image, operation, text_editor};
 use iced::{Point, Size, Subscription, Task, Vector, mouse, window};
 use iced_runtime::image::Allocation;
 use jd_core::Rgba;
 use jd_ui::chrome::{self, WindowChrome};
-use jd_vector::arrange::{self, Order};
+use jd_vector::arrange::{self, Align, Order};
+use jd_vector::clip::Clip;
 use jd_vector::snap::{self, Edges, Line};
 use jd_vector::{
     AutoLayout, Direction, Document, Editor, ExportFormat, NodeId, NodeKind, NodeSpec, Op, Padding, Paint, PaintKind, Patch, PropDef,
@@ -21,6 +22,7 @@ use jd_vector::{
 use jd_vector_render::{CosmicMeasure, RenderOptions, export_svg, render_png, render_region};
 use kurbo::{Affine, Rect, Vec2};
 
+use crate::clipboard::{self, Pasted};
 use crate::tool::Tool;
 use crate::view::{self, MENU_COUNT};
 
@@ -107,6 +109,9 @@ pub enum After {
     Open,
 }
 
+/// Id of the on-canvas text editor.
+pub const TEXT_EDITOR: &str = "canvas-text";
+
 /// Id of the layer-name box in the Layers panel.
 pub const RENAME_INPUT: &str = "layer-rename";
 
@@ -169,6 +174,16 @@ pub enum Message {
     RemoveStroke(usize),
     SetBool(String, bool),
     SetVariant(String, String),
+    EditText(NodeId),
+    TextAction(text_editor::Action),
+    EndTextEdit,
+    Copy,
+    Cut,
+    Paste,
+    Pasted(Option<Pasted>),
+    CopyAsPng,
+    Align(Align),
+    Distribute(bool),
     Group,
     FrameSelection,
     Ungroup,
@@ -247,6 +262,10 @@ pub struct Blobr {
     pub confirm: Option<After>,
     /// Continue with this once the Save As dialog has saved.
     after_save: Option<After>,
+    /// The last copy, for when the system clipboard can't be read.
+    clip: Option<Clip>,
+    /// A text layer being typed into on the canvas.
+    pub text_edit: Option<(NodeId, text_editor::Content)>,
     last_click: Option<(Instant, Point)>,
     fit_pending: bool,
 }
@@ -299,6 +318,8 @@ impl Blobr {
             renaming: None,
             confirm: None,
             after_save: None,
+            clip: None,
+            text_edit: None,
             last_click: None,
             fit_pending: false,
         };
@@ -331,6 +352,27 @@ impl Blobr {
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        // Anything but typing (and redraws) finishes the text being typed first.
+        if self.text_edit.is_some()
+            && !matches!(
+                message,
+                Message::TextAction(_)
+                    | Message::EditText(_)
+                    | Message::CanvasPress { .. }
+                    | Message::CanvasMove(_)
+                    | Message::CanvasRelease(_)
+                    | Message::CanvasScroll { .. }
+                    | Message::Frame
+                    | Message::CanvasReady(..)
+                    | Message::Viewport(_)
+                    | Message::ScaleFactor(_)
+                    | Message::Chrome(_)
+                    | Message::Key(_)
+                    | Message::Noop
+            )
+        {
+            self.commit_text();
+        }
         let before = self.selection.clone();
         let task = self.handle(message);
         // Half-typed values belong to the layer they were typed for.
@@ -388,6 +430,45 @@ impl Blobr {
                         return self.handle(Message::SaveAs);
                     }
                 }
+            }
+            Message::Copy => {
+                self.copy();
+            }
+            Message::Cut => {
+                if self.copy() {
+                    return self.handle(Message::Delete);
+                }
+            }
+            Message::Paste => return Task::perform(clipboard::read_async(), Message::Pasted),
+            Message::Pasted(p) => match p {
+                Some(Pasted::Layers(c)) => self.paste(*c),
+                Some(Pasted::Image { width, height, png }) => self.paste(Clip::image("Image", width as f64, height as f64, png)),
+                Some(Pasted::Text(t)) if !t.trim().is_empty() => self.paste_text(t),
+                _ => match self.clip.clone() {
+                    Some(c) => self.paste(c),
+                    None => self.info("Nothing to paste".into()),
+                },
+            },
+            Message::CopyAsPng => {
+                let Some(&id) = self.selection.first() else { return Task::none() };
+                match jd_vector_render::render_node(self.doc(), id, RenderOptions { scale: 2.0, ..RenderOptions::default() }) {
+                    Some(pm) => {
+                        clipboard::put_image(pm.width(), pm.height(), clipboard::to_rgba(&pm));
+                        self.info("Copied as PNG (2x)".into());
+                    }
+                    None => self.error("Nothing to copy: the layer is empty or hidden".into()),
+                }
+            }
+            Message::Align(to) => {
+                let ops = arrange::align(self.doc(), &self.selection, to);
+                self.run("Align", &ops);
+            }
+            Message::Distribute(horizontal) => {
+                let ops = arrange::distribute(self.doc(), &self.selection, horizontal);
+                if ops.is_empty() && self.selection.len() < 3 {
+                    self.error("Distribute needs three or more layers".into());
+                }
+                self.run("Distribute", &ops);
             }
             Message::Group => self.group(false),
             Message::FrameSelection => self.group(true),
@@ -450,9 +531,16 @@ impl Blobr {
                 self.tool = t;
                 self.drag = None;
             }
-            Message::CanvasPress { at, button } => self.press(at, button),
+            Message::CanvasPress { at, button } => return self.press(at, button),
+            Message::EditText(id) => return self.start_text_edit(id),
+            Message::TextAction(action) => {
+                if let Some((_, content)) = &mut self.text_edit {
+                    content.perform(action);
+                }
+            }
+            Message::EndTextEdit => self.commit_text(),
             Message::CanvasMove(at) => self.drag_to(at),
-            Message::CanvasRelease(at) => self.release(at),
+            Message::CanvasRelease(at) => return self.release(at),
             Message::CanvasScroll { delta, at } => self.scroll(delta, at),
             Message::SelectPage(p) => {
                 if p != self.page {
@@ -632,6 +720,10 @@ impl Blobr {
         }
         let keyboard::Event::KeyPressed { key, modifiers, .. } = event else { return Task::none() };
         if matches!(key.as_ref(), Key::Named(Named::Escape)) {
+            if self.text_edit.is_some() {
+                self.commit_text();
+                return Task::none();
+            }
             if self.chrome.open_menu.is_some() {
                 self.chrome.open_menu = None;
                 return Task::none();
@@ -658,6 +750,18 @@ impl Blobr {
                 self.selection = parent.into_iter().collect();
                 None
             }
+            Key::Named(Named::Enter) if plain => match self.selection[..] {
+                [one] if self.is_text(one) => Some(Message::EditText(one)),
+                // Enter goes into a frame, like Figma.
+                [one] => {
+                    let kids = self.doc().children(one).to_vec();
+                    if !kids.is_empty() {
+                        self.selection = kids;
+                    }
+                    None
+                }
+                _ => None,
+            },
             Key::Named(Named::Delete | Named::Backspace) if plain => Some(Message::Delete),
             Key::Named(Named::ArrowLeft) if plain => return self.nudge(-nudge, 0.0),
             Key::Named(Named::ArrowRight) if plain => return self.nudge(nudge, 0.0),
@@ -669,6 +773,18 @@ impl Blobr {
                     ("z", true, false, false) => Some(Message::Undo),
                     ("z", true, true, false) | ("y", true, false, false) => Some(Message::Redo),
                     ("d", true, false, false) => Some(Message::Duplicate),
+                    ("c", true, false, false) => Some(Message::Copy),
+                    ("x", true, false, false) => Some(Message::Cut),
+                    ("v", true, false, false) => Some(Message::Paste),
+                    ("c", true, true, false) => Some(Message::CopyAsPng),
+                    ("a", false, false, true) => Some(Message::Align(Align::Left)),
+                    ("h", false, false, true) => Some(Message::Align(Align::Center)),
+                    ("d", false, false, true) => Some(Message::Align(Align::Right)),
+                    ("w", false, false, true) => Some(Message::Align(Align::Top)),
+                    ("v", false, false, true) => Some(Message::Align(Align::Middle)),
+                    ("s", false, false, true) => Some(Message::Align(Align::Bottom)),
+                    ("h", false, true, true) => Some(Message::Distribute(true)),
+                    ("v", false, true, true) => Some(Message::Distribute(false)),
                     ("g", true, false, false) => Some(Message::Group),
                     ("g", true, false, true) => Some(Message::FrameSelection),
                     ("g", true, true, false) => Some(Message::Ungroup),
@@ -831,8 +947,9 @@ impl Blobr {
             }
             return;
         };
-        let node = self.doc().node(first).cloned();
-        let Some(node) = node else { return };
+        if !self.doc().contains(first) {
+            return;
+        }
         let bad = |app: &mut Self| app.error(format!("{input:?} isn't a valid value"));
         let patch = match &f {
             Field::Name => Patch { name: Some(input.clone()), ..Patch::default() },
@@ -872,25 +989,31 @@ impl Blobr {
             },
             Field::Gap | Field::PadH | Field::PadV => {
                 let Some(v) = num() else { return bad(self) };
-                let Some(mut l) = node.props.layout.clone() else { return };
-                match f {
-                    Field::Gap => l.gap = v,
-                    Field::PadH => (l.padding.left, l.padding.right) = (v, v),
-                    _ => (l.padding.top, l.padding.bottom) = (v, v),
-                }
-                Patch { layout: Some(Some(l)), ..Patch::default() }
+                return self.per_node("Auto layout", |n| {
+                    let mut l = n.props.layout.clone()?;
+                    match f {
+                        Field::Gap => l.gap = v,
+                        Field::PadH => (l.padding.left, l.padding.right) = (v, v),
+                        _ => (l.padding.top, l.padding.bottom) = (v, v),
+                    }
+                    Some(Patch { layout: Some(Some(l)), ..Patch::default() })
+                });
             }
             Field::Text => Patch { text: Some(input.replace("\\n", "\n")), ..Patch::default() },
             Field::FontSize | Field::FontStyle => {
-                let NodeKind::Text { text } = &node.kind else { return };
-                let mut style = text.style.clone();
-                if f == Field::FontSize {
-                    let Some(v) = num().filter(|v| *v > 0.0) else { return bad(self) };
-                    style.size = v as f32;
-                } else {
-                    style.style = input.clone();
+                let size = num().filter(|v| *v > 0.0);
+                if f == Field::FontSize && size.is_none() {
+                    return bad(self);
                 }
-                Patch { text_style: Some(style), ..Patch::default() }
+                return self.per_node("Text style", |n| {
+                    let NodeKind::Text { text } = &n.kind else { return None };
+                    let mut style = text.style.clone();
+                    match size {
+                        Some(v) if f == Field::FontSize => style.size = v as f32,
+                        _ => style.style = input.clone(),
+                    }
+                    Some(Patch { text_style: Some(style), ..Patch::default() })
+                });
             }
             Field::Fill(i) | Field::Stroke(i) => {
                 let Some(c) = Rgba::from_hex(&input) else { return bad(self) };
@@ -904,13 +1027,101 @@ impl Blobr {
                 return;
             }
             Field::StrokeWeight => match num().filter(|v| *v >= 0.0) {
-                Some(v) => Patch { stroke: Some(jd_vector::StrokeStyle { weight: v as f32, ..node.props.stroke.clone() }), ..Patch::default() },
+                Some(v) => {
+                    return self.per_node("Stroke weight", |n| {
+                        Some(Patch { stroke: Some(jd_vector::StrokeStyle { weight: v as f32, ..n.props.stroke.clone() }), ..Patch::default() })
+                    });
+                }
                 None => return bad(self),
             },
             Field::Prop(name) => Patch { values: Some([(name.clone(), PropValue::Text(input.clone()))].into()), ..Patch::default() },
             Field::PageBackground => return,
         };
         self.patch_selection("Edit", patch);
+    }
+
+    /// A patch worked out for each selected layer (None skips it).
+    fn per_node(&mut self, label: &str, f: impl Fn(&jd_vector::Node) -> Option<Patch>) {
+        let ops: Vec<Op> = self.selection.iter().filter_map(|&id| Some(Op::set(id, f(self.doc().node(id)?)?))).collect();
+        self.run(label, &ops);
+    }
+
+    // ----- Clipboard ---------------------------------------------------------------------
+
+    /// Copies the selection; false if there was nothing to copy.
+    fn copy(&mut self) -> bool {
+        let Some(clip) = Clip::copy(self.doc(), &self.selection) else { return false };
+        clipboard::put_text(clip.to_text());
+        self.info(format!("Copied {} layer{}", clip.len(), if clip.len() == 1 { "" } else { "s" }));
+        self.clip = Some(clip);
+        true
+    }
+
+    /// The visible part of the page.
+    fn view_rect(&self) -> Rect {
+        let (w, h) = (self.viewport.width as f64 / self.camera.zoom, self.viewport.height as f64 / self.camera.zoom);
+        Rect::from_origin_size(self.camera.origin, (w, h))
+    }
+
+    /// Where pasted layers go, Figma-style: into a selected frame (unless it's what was
+    /// copied), else just above the selected layer, else on the page.
+    fn paste_target(&self, sources: &[NodeId]) -> (NodeId, Option<usize>) {
+        let doc = self.doc();
+        let [one] = self.selection[..] else { return (self.page, None) };
+        let Some(n) = doc.node(one) else { return (self.page, None) };
+        let open = n.kind.is_container() && !matches!(n.kind, NodeKind::Instance { .. }) && !doc.is_inside_instance(one);
+        if open && !sources.contains(&one) {
+            return (one, None);
+        }
+        // Next to it, climbing out of instances (nothing can be added inside them).
+        let mut at = one;
+        while doc.is_inside_instance(at) || doc.node(doc.parent(at).unwrap_or(self.page)).is_some_and(|p| matches!(p.kind, NodeKind::Instance { .. })) {
+            match doc.parent(at) {
+                Some(p) if p != self.page => at = p,
+                _ => break,
+            }
+        }
+        let parent = doc.parent(at).unwrap_or(self.page);
+        let index = doc.children(parent).iter().position(|&c| c == at).map(|i| i + 1);
+        (parent, index)
+    }
+
+    fn paste(&mut self, clip: Clip) {
+        let doc = self.doc();
+        let (parent, index) = self.paste_target(&clip.sources());
+        // In place when it lands where it came from (and is in view); else centred on the
+        // frame it goes into, or on the view.
+        let delta = match clip.bounds() {
+            Some(b) => {
+                let same = !clip.parents().is_empty() && clip.parents().iter().all(|&p| p == parent);
+                let target = if parent == self.page { self.view_rect() } else { doc.world_bounds(parent).unwrap_or(b) };
+                if same && (parent != self.page || target.intersect(b).area() > 0.0) { Vec2::ZERO } else { target.center() - b.center() }
+            }
+            None => Vec2::ZERO,
+        };
+        let to_local = doc.world_transform(parent).inverse();
+        let mut ops = vec![Op::Paste { parent: parent.into(), clip: clip.clone(), index, key: Some("p".into()), offset: [0.0, 0.0] }];
+        for (i, o) in clip.origins().iter().enumerate() {
+            let p = to_local * (kurbo::Point::new(o[0], o[1]) + delta);
+            ops.push(Op::set(format!("p{i}").as_str(), Patch { x: Some(round2(p.x)), y: Some(round2(p.y)), ..Patch::default() }));
+        }
+        if let Some(done) = self.run("Paste", &ops) {
+            self.selection = (0..clip.len()).filter_map(|i| done.id(&format!("p{i}"))).collect();
+            if let Some(&first) = self.selection.first() {
+                let sel = std::mem::take(&mut self.selection);
+                self.select(first, false);
+                self.selection = sel;
+            }
+        }
+    }
+
+    /// Text from another app becomes a text layer in the middle of the view.
+    fn paste_text(&mut self, text: String) {
+        let c = self.view_rect().center();
+        let spec = NodeSpec::text("Text", text.trim_end(), TextStyle { size: 16.0, ..TextStyle::default() }).at(c.x.round(), c.y.round());
+        if let Some(done) = self.run("Paste text", &[Op::create(self.page, spec)]) {
+            self.select(done.created[0], false);
+        }
     }
 
     // ----- Arranging ---------------------------------------------------------------------
@@ -1175,21 +1386,23 @@ impl Blobr {
         }
     }
 
-    fn press(&mut self, at: Point, button: mouse::Button) {
+    fn press(&mut self, at: Point, button: mouse::Button) -> Task<Message> {
         let page = self.camera.to_page(at);
         if button == mouse::Button::Middle || self.space_held || self.tool == Tool::Hand {
             self.drag = Some(Drag::Pan { start: at, origin: self.camera.origin });
-            return;
+            return Task::none();
         }
         if button != mouse::Button::Left {
-            return;
+            return Task::none();
         }
+        // Clicking anywhere else on the canvas finishes typing.
+        self.commit_text();
         let now = Instant::now();
         let double = self.last_click.is_some_and(|(t, p)| now - t < Duration::from_millis(400) && (p.x - at.x).abs() < 4.0 && (p.y - at.y).abs() < 4.0);
         self.last_click = Some((now, at));
         if self.tool.creates() {
             self.drag = Some(Drag::Create { tool: self.tool, start: page, now: page });
-            return;
+            return Task::none();
         }
         if let Some((id, handle)) = self.handle_at(at) {
             let n = self.doc().node(id).expect("selected");
@@ -1197,10 +1410,12 @@ impl Blobr {
             let rect = Rect::new(n.props.x, n.props.y, n.props.x + n.props.width, n.props.y + n.props.height);
             let targets = snap::targets(self.doc(), &[id]);
             self.drag = Some(Drag::Resize { id, handle, start: page, rect, to_parent, started: false, targets });
-            return;
+            return Task::none();
         }
         let shift = self.modifiers.shift();
         match self.pick_at(at, self.modifiers.command(), double) {
+            // Double-clicking a selected text layer types into it.
+            Some(id) if double && self.selection == [id] && self.is_text(id) => return self.start_text_edit(id),
             Some(id) => {
                 if shift {
                     self.select(id, true);
@@ -1219,6 +1434,39 @@ impl Blobr {
                 }
                 self.drag = Some(Drag::Marquee { start: page, now: page });
             }
+        }
+        Task::none()
+    }
+
+    fn is_text(&self, id: NodeId) -> bool {
+        self.doc().node(id).is_some_and(|n| matches!(n.kind, NodeKind::Text { .. }))
+    }
+
+    fn start_text_edit(&mut self, id: NodeId) -> Task<Message> {
+        self.commit_text();
+        let Some(NodeKind::Text { text }) = self.doc().node(id).map(|n| &n.kind) else { return Task::none() };
+        let mut content = text_editor::Content::with_text(&text.content);
+        content.perform(text_editor::Action::SelectAll);
+        self.select(id, false);
+        self.text_edit = Some((id, content));
+        self.drag = None;
+        operation::focus(TEXT_EDITOR)
+    }
+
+    /// Writes the typed text to the layer (one undo step); empty text removes the layer.
+    pub fn commit_text(&mut self) {
+        let Some((id, content)) = self.text_edit.take() else { return };
+        let mut typed = content.text();
+        if typed.ends_with('\n') {
+            typed.pop();
+        }
+        let Some(NodeKind::Text { text }) = self.doc().node(id).map(|n| &n.kind) else { return };
+        if typed.trim().is_empty() {
+            if self.run("Delete empty text", &[Op::Delete { id: id.into() }]).is_some() {
+                self.selection.retain(|&s| s != id);
+            }
+        } else if typed != text.content {
+            self.run("Edit text", &[Op::set(id, Patch { text: Some(typed), ..Patch::default() })]);
         }
     }
 
@@ -1322,9 +1570,9 @@ impl Blobr {
         }
     }
 
-    fn release(&mut self, at: Point) {
+    fn release(&mut self, at: Point) -> Task<Message> {
         let page = self.camera.to_page(at);
-        let Some(drag) = self.drag.take() else { return };
+        let Some(drag) = self.drag.take() else { return Task::none() };
         match drag {
             Drag::Move { .. } | Drag::Resize { .. } => {
                 self.ed.end_gesture();
@@ -1334,7 +1582,7 @@ impl Blobr {
             Drag::Marquee { start, .. } => {
                 let r = Rect::from_points(start, page);
                 if r.width() * self.camera.zoom < 3.0 && r.height() * self.camera.zoom < 3.0 {
-                    return;
+                    return Task::none();
                 }
                 // Inside a top-level frame, select its children; otherwise top-level nodes.
                 let scope = self
@@ -1351,11 +1599,12 @@ impl Blobr {
                     }
                 }
             }
-            Drag::Create { tool, start, .. } => self.create(tool, start, page),
+            Drag::Create { tool, start, .. } => return self.create(tool, start, page),
         }
+        Task::none()
     }
 
-    fn create(&mut self, tool: Tool, start: kurbo::Point, end: kurbo::Point) {
+    fn create(&mut self, tool: Tool, start: kurbo::Point, end: kurbo::Point) -> Task<Message> {
         let doc = self.doc();
         let mut r = Rect::from_points(start, end);
         let clicked = r.width() * self.camera.zoom < 3.0 && r.height() * self.camera.zoom < 3.0;
@@ -1377,16 +1626,17 @@ impl Blobr {
             Tool::Rectangle => NodeSpec::rect(&format!("Rectangle {n}"), w, h),
             Tool::Ellipse => NodeSpec::ellipse(&format!("Ellipse {n}"), w, h),
             Tool::Text => NodeSpec::text("Text", "Text", TextStyle { size: 16.0, ..TextStyle::default() }),
-            Tool::Move | Tool::Hand => return,
+            Tool::Move | Tool::Hand => return Task::none(),
         }
         .at(at.x.round(), at.y.round());
         if let Some(done) = self.run(&format!("Add {}", tool.tip().split(' ').next().unwrap_or("layer")), &[Op::create(parent, spec)]) {
             self.select(done.created[0], false);
             self.tool = Tool::Move;
             if tool == Tool::Text {
-                self.info("Type the text in the Design panel".into());
+                return self.start_text_edit(done.created[0]);
             }
         }
+        Task::none()
     }
 
     // ----- For the panels ---------------------------------------------------------------
@@ -1688,6 +1938,81 @@ mod tests {
         assert!(app.doc().children(app.page).is_empty(), "discarded");
         let _ = app.update(Message::New);
         assert_eq!(app.confirm, None, "clean: no question");
+    }
+
+    #[test]
+    fn copy_paste_in_place_into_frames_and_cut() {
+        let mut app = app();
+        let ids = three_rects(&mut app);
+        let p = app.page;
+        // In place, on top, selected.
+        app.selection = vec![ids[0]];
+        let _ = app.update(Message::Copy);
+        let _ = app.update(Message::Paste);
+        let _ = app.update(Message::Pasted(None));
+        let copy = app.selection[0];
+        assert_ne!(copy, ids[0]);
+        assert_eq!(app.doc().world_bounds(copy), app.doc().world_bounds(ids[0]));
+        assert_eq!(app.doc().children(p).iter().position(|&c| c == copy), Some(1), "just above the original");
+
+        // Into a selected frame: centred in it.
+        let f = app.run("Frame", &[Op::create(p, NodeSpec::frame("F", 200.0, 200.0).at(500.0, 500.0))]).unwrap().created[0];
+        app.selection = vec![f];
+        let _ = app.update(Message::Pasted(None));
+        let inside = app.selection[0];
+        assert_eq!(app.doc().parent(inside), Some(f));
+        assert_eq!(app.doc().world_bounds(inside).unwrap().center(), kurbo::Point::new(600.0, 600.0));
+
+        // Cut removes; pasting brings it back where it was.
+        app.selection = vec![ids[2]];
+        let _ = app.update(Message::Cut);
+        assert!(!app.doc().contains(ids[2]));
+        app.selection.clear();
+        app.camera = Camera { origin: kurbo::Point::new(0.0, 0.0), zoom: 1.0 };
+        let _ = app.update(Message::Pasted(None));
+        assert_eq!(app.doc().world_bounds(app.selection[0]).unwrap().origin(), kurbo::Point::new(100.0, 300.0));
+
+        // Text from another app.
+        app.selection.clear();
+        let _ = app.update(Message::Pasted(Some(Pasted::Text("Hello".into()))));
+        assert!(matches!(&app.doc().node(app.selection[0]).unwrap().kind, NodeKind::Text { text } if text.content == "Hello"));
+    }
+
+    #[test]
+    fn align_and_edit_many_layers_at_once() {
+        let mut app = app();
+        let ids = three_rects(&mut app);
+        app.selection = ids.clone();
+        let _ = app.update(Message::Align(Align::Left));
+        assert!(ids.iter().all(|&id| app.doc().node(id).unwrap().props.x == 100.0));
+        let _ = app.update(Message::FieldInput(Field::W, "80".into()));
+        let _ = app.update(Message::FieldSubmit(Field::W));
+        assert!(ids.iter().all(|&id| app.doc().node(id).unwrap().props.width == 80.0));
+        let _ = app.update(Message::FieldInput(Field::Fill(0), "#FF0000".into()));
+        let _ = app.update(Message::FieldSubmit(Field::Fill(0)));
+        assert!(ids.iter().all(|&id| app.doc().node(id).unwrap().props.fills == vec![Paint::hex("#FF0000")]));
+        assert_eq!(app.ed.history.labels().count(), 4, "add, align, resize, fill: one step each");
+    }
+
+    #[test]
+    fn typing_text_on_the_canvas() {
+        use std::sync::Arc;
+        use text_editor::{Action, Edit};
+        let mut app = app();
+        let _ = app.update(Message::Tool(Tool::Text));
+        drag(&mut app, Point::new(50.0, 50.0), Point::new(50.0, 50.0));
+        let t = app.selection[0];
+        assert!(app.text_edit.is_some(), "a new text layer is typed into straight away");
+        let _ = app.update(Message::TextAction(Action::Edit(Edit::Paste(Arc::new("Hello there".into())))));
+        let _ = app.update(Message::EndTextEdit);
+        assert!(matches!(&app.doc().node(t).unwrap().kind, NodeKind::Text { text } if text.content == "Hello there"));
+
+        // Double-click to edit again; clearing it removes the layer.
+        let _ = app.update(Message::EditText(t));
+        let _ = app.update(Message::TextAction(Action::Edit(Edit::Delete)));
+        let _ = app.update(Message::CanvasPress { at: Point::new(700.0, 500.0), button: mouse::Button::Left });
+        let _ = app.update(Message::CanvasRelease(Point::new(700.0, 500.0)));
+        assert!(!app.doc().contains(t));
     }
 
     #[test]

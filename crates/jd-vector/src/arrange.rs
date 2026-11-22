@@ -145,6 +145,93 @@ pub fn reorder(doc: &Document, ids: &[NodeId], order: Order) -> Vec<Op> {
     ops
 }
 
+/// Which edge or centre line to line layers up on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Align {
+    Left,
+    Center,
+    Right,
+    Top,
+    Middle,
+    Bottom,
+}
+
+/// Layers that can be placed freely (auto layout places the rest), with their page boxes.
+fn placeable(doc: &Document, ids: &[NodeId]) -> Vec<(NodeId, Rect)> {
+    ids.iter()
+        .filter_map(|&id| {
+            let n = doc.node(id)?;
+            let parent = doc.node(n.parent?)?;
+            if parent.props.layout.is_some() && !n.props.absolute {
+                return None;
+            }
+            Some((id, doc.world_bounds(id)?))
+        })
+        .collect()
+}
+
+/// An op moving `id` by `(dx, dy)` on its page.
+fn shift(doc: &Document, id: NodeId, dx: f64, dy: f64) -> Option<Op> {
+    if dx.abs() < 1e-9 && dy.abs() < 1e-9 {
+        return None;
+    }
+    let n = doc.node(id)?;
+    let c = doc.world_transform(n.parent?).inverse().as_coeffs();
+    let (lx, ly) = (c[0] * dx + c[2] * dy, c[1] * dx + c[3] * dy);
+    let r = |v: f64| (v * 100.0).round() / 100.0;
+    Some(Op::set(id, Patch { x: Some(r(n.props.x + lx)), y: Some(r(n.props.y + ly)), ..Patch::default() }))
+}
+
+/// Ops lining up `ids` with each other, or one layer with its parent frame.
+pub fn align(doc: &Document, ids: &[NodeId], to: Align) -> Vec<Op> {
+    let items = placeable(doc, ids);
+    let reference = match items.as_slice() {
+        [] => return Vec::new(),
+        [(id, _)] => match doc.parent(*id).filter(|&p| doc.parent(p).is_some()).and_then(|p| doc.world_bounds(p)) {
+            Some(b) => b,
+            None => return Vec::new(),
+        },
+        many => many.iter().map(|(_, b)| *b).reduce(|a, b| a.union(b)).expect("not empty"),
+    };
+    items
+        .iter()
+        .filter_map(|&(id, b)| {
+            let (dx, dy) = match to {
+                Align::Left => (reference.x0 - b.x0, 0.0),
+                Align::Center => (reference.center().x - b.center().x, 0.0),
+                Align::Right => (reference.x1 - b.x1, 0.0),
+                Align::Top => (0.0, reference.y0 - b.y0),
+                Align::Middle => (0.0, reference.center().y - b.center().y),
+                Align::Bottom => (0.0, reference.y1 - b.y1),
+            };
+            shift(doc, id, dx, dy)
+        })
+        .collect()
+}
+
+/// Ops spacing three or more layers evenly between the outermost two.
+pub fn distribute(doc: &Document, ids: &[NodeId], horizontal: bool) -> Vec<Op> {
+    let mut items = placeable(doc, ids);
+    if items.len() < 3 {
+        return Vec::new();
+    }
+    let lo = |b: &Rect| if horizontal { b.x0 } else { b.y0 };
+    let len = |b: &Rect| if horizontal { b.width() } else { b.height() };
+    items.sort_by(|a, b| lo(&a.1).total_cmp(&lo(&b.1)));
+    let first = lo(&items[0].1);
+    let end = items.iter().map(|(_, b)| lo(b) + len(b)).fold(f64::MIN, f64::max);
+    let total: f64 = items.iter().map(|(_, b)| len(b)).sum();
+    let gap = (end - first - total) / (items.len() - 1) as f64;
+    let mut at = first;
+    let mut ops = Vec::new();
+    for (id, b) in &items {
+        let d = at - lo(b);
+        ops.extend(if horizontal { shift(doc, *id, d, 0.0) } else { shift(doc, *id, 0.0, d) });
+        at += len(b) + gap;
+    }
+    ops
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,6 +286,27 @@ mod tests {
         assert_eq!(doc.node(ids[0]).unwrap().props.x, 0.0);
         assert_eq!(doc.world_bounds(ids[1]).unwrap().x0, 150.0);
         assert!(group(&doc, &[ids[0], ids[2]], false).is_err(), "different parents");
+    }
+
+    #[test]
+    fn align_and_distribute() {
+        let (mut doc, _, ids) = setup();
+        let ops = align(&doc, &[ids[0], ids[1], ids[2]], Align::Right);
+        doc.apply(&ops, &ApproxMeasure).unwrap();
+        assert!(ids.iter().all(|&id| doc.world_bounds(id).unwrap().x1 == 160.0));
+        let ops = align(&doc, &[ids[0], ids[1], ids[2]], Align::Top);
+        doc.apply(&ops, &ApproxMeasure).unwrap();
+        assert!(ids.iter().all(|&id| doc.world_bounds(id).unwrap().y0 == 0.0));
+        assert!(align(&doc, &[ids[0]], Align::Left).is_empty(), "a top-level layer has no frame to align to");
+
+        // Spread along x: A at 0, C at 100, B at 20 => B moves to 50 (gaps of 40).
+        let set = |doc: &mut Document, id, x| doc.apply(&[Op::set(id, Patch { x: Some(x), ..Patch::default() })], &ApproxMeasure).unwrap();
+        set(&mut doc, ids[0], 0.0);
+        set(&mut doc, ids[1], 20.0);
+        set(&mut doc, ids[2], 100.0);
+        let ops = distribute(&doc, &ids, true);
+        doc.apply(&ops, &ApproxMeasure).unwrap();
+        assert_eq!(doc.node(ids[1]).unwrap().props.x, 50.0);
     }
 
     #[test]

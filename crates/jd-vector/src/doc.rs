@@ -190,7 +190,7 @@ impl Document {
 }
 
 /// FNV-1a over the bytes, plus the length.
-fn content_key(bytes: &[u8]) -> String {
+pub(crate) fn content_key(bytes: &[u8]) -> String {
     let mut h: u64 = 0xcbf29ce484222325;
     for &b in bytes {
         h ^= b as u64;

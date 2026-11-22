@@ -5,7 +5,7 @@ use iced::Element;
 use jd_ui::chrome;
 use jd_ui::widget::MenuEntry;
 use jd_vector::ExportFormat;
-use jd_vector::arrange::Order;
+use jd_vector::arrange::{Align, Order};
 
 use crate::app::{Blobr, Message};
 
@@ -49,9 +49,10 @@ fn entries(app: &Blobr, menu: usize) -> Vec<MenuEntry<'_, Message>> {
             item("Undo", "Ctrl+Z", on(app.ed.history.can_undo(), Message::Undo)),
             item("Redo", "Ctrl+Shift+Z", on(app.ed.history.can_redo(), Message::Redo)),
             Separator,
-            todo("Cut", "Ctrl+X"),
-            todo("Copy", "Ctrl+C"),
-            todo("Paste", "Ctrl+V"),
+            item("Cut", "Ctrl+X", on(sel, Message::Cut)),
+            item("Copy", "Ctrl+C", on(sel, Message::Copy)),
+            item("Paste", "Ctrl+V", Some(Message::Paste)),
+            item("Copy as PNG", "Ctrl+Shift+C", on(sel, Message::CopyAsPng)),
             item("Duplicate", "Ctrl+D", on(sel, Message::Duplicate)),
             item("Delete", "Delete", on(sel, Message::Delete)),
             Separator,
@@ -92,9 +93,15 @@ fn entries(app: &Blobr, menu: usize) -> Vec<MenuEntry<'_, Message>> {
             item("Send Backward", "Ctrl+Shift+[", on(sel, Message::Reorder(Order::Backward))),
             item("Send to Back", "Ctrl+[", on(sel, Message::Reorder(Order::Back))),
             Separator,
-            todo("Align Left", "Alt+A"),
-            todo("Align Center", "Alt+H"),
-            todo("Align Right", "Alt+D"),
+            item("Align Left", "Alt+A", on(sel, Message::Align(Align::Left))),
+            item("Align Horizontal Centers", "Alt+H", on(sel, Message::Align(Align::Center))),
+            item("Align Right", "Alt+D", on(sel, Message::Align(Align::Right))),
+            item("Align Top", "Alt+W", on(sel, Message::Align(Align::Top))),
+            item("Align Vertical Centers", "Alt+V", on(sel, Message::Align(Align::Middle))),
+            item("Align Bottom", "Alt+S", on(sel, Message::Align(Align::Bottom))),
+            Separator,
+            item("Distribute Horizontal Spacing", "Alt+Shift+H", on(app.selection.len() >= 3, Message::Distribute(true))),
+            item("Distribute Vertical Spacing", "Alt+Shift+V", on(app.selection.len() >= 3, Message::Distribute(false))),
         ],
         "Plugins" => vec![todo("Manage Plugins...", "")],
         "Window" => vec![todo("Layers", "Alt+1"), todo("Assets", "Alt+2"), todo("Design", "")],

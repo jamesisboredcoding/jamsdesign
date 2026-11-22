@@ -13,6 +13,7 @@
 //! without a window.
 
 pub mod arrange;
+pub mod clip;
 mod color;
 pub mod component;
 mod doc;

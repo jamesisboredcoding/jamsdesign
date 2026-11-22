@@ -14,15 +14,10 @@ use crate::app::{Blobr, Field, Message};
 pub fn view(app: &Blobr) -> Element<'_, Message> {
     let body: Element<'_, Message> = match app.selection.as_slice() {
         [] => page(app),
-        [one] => match app.doc().node(*one) {
+        [first, ..] => match app.doc().node(*first) {
             Some(n) => node(app, n),
             None => space().into(),
         },
-        many => column![
-            section(format!("{} layers", many.len()), None),
-            container(text("Edit one layer at a time for now.").size(TEXT_SIZE_SMALL).color(TEXT_SECONDARY)).padding(Padding::from([0, 12])),
-        ]
-        .into(),
     };
     column![panel_header(&["Design", "Prototype", "Inspect"], 0, |_| Message::Noop), scrollable(body).height(Fill)].into()
 }
@@ -56,6 +51,43 @@ fn field<'a>(app: &Blobr, label: &'a str, f: Field, value: impl FnOnce() -> Stri
     .align_y(Vertical::Center)
     .width(Fill)
     .into()
+}
+
+/// A value shown for the whole selection: the shared one, or "Mixed".
+fn shared(app: &Blobr, f: impl Fn(&Node) -> String) -> String {
+    let mut values = app.selection.iter().filter_map(|&id| app.doc().node(id)).map(f);
+    let Some(first) = values.next() else { return String::new() };
+    if values.all(|v| v == first) { first } else { "Mixed".into() }
+}
+
+/// Whether every selected layer passes `f`.
+fn all(app: &Blobr, f: impl Fn(&Node) -> bool) -> bool {
+    app.selection.iter().filter_map(|&id| app.doc().node(id)).all(f)
+}
+
+/// The align buttons (and distribute, with three or more layers).
+fn arrange(app: &Blobr) -> Element<'_, Message> {
+    use jd_vector::arrange::Align;
+    let b = |i: Icon, tip: &'static str, m: Message| jd_ui::widget::hover_tip(button(icon(i, 14.0, ICON)).padding(4).style(style::ghost(false)).on_press(m), tip, iced::widget::tooltip::Position::Bottom);
+    let mut r = row![
+        b(Icon::AlignLeft, "Align left (Alt+A)", Message::Align(Align::Left)),
+        b(Icon::AlignCenter, "Align horizontal centers (Alt+H)", Message::Align(Align::Center)),
+        b(Icon::AlignRight, "Align right (Alt+D)", Message::Align(Align::Right)),
+        b(Icon::AlignTop, "Align top (Alt+W)", Message::Align(Align::Top)),
+        b(Icon::AlignMiddle, "Align vertical centers (Alt+V)", Message::Align(Align::Middle)),
+        b(Icon::AlignBottom, "Align bottom (Alt+S)", Message::Align(Align::Bottom)),
+    ]
+    .spacing(2)
+    .align_y(Vertical::Center);
+    if app.selection.len() >= 3 {
+        let d = |label: &'static str, tip: &'static str, m: Message| {
+            jd_ui::widget::hover_tip(button(text(label).size(TEXT_SIZE_SMALL)).padding(Padding::from([3, 6])).style(style::ghost(false)).on_press(m), tip, iced::widget::tooltip::Position::Bottom)
+        };
+        r = r.push(space::horizontal());
+        r = r.push(d("↔", "Distribute horizontal spacing (Alt+Shift+H)", Message::Distribute(true)));
+        r = r.push(d("↕", "Distribute vertical spacing (Alt+Shift+V)", Message::Distribute(false)));
+    }
+    container(r).padding(Padding::from([6, 10])).into()
 }
 
 fn num(v: f64) -> String {
@@ -117,28 +149,32 @@ fn swatch<'a>(hex: &str) -> Element<'a, Message> {
 fn node<'a>(app: &'a Blobr, n: &'a Node) -> Element<'a, Message> {
     let doc = app.doc();
     let p = &n.props;
+    let many = app.selection.len() > 1;
+    let kind = if many { format!("{} layers", app.selection.len()) } else { n.kind.type_name().replace('_', " ") };
     let mut col = column![
+        arrange(app),
+        hline(BG_PANEL),
         container(
-            row![
-                icon(super::kind_icon(&n.kind), 12.0, ICON),
-                text(n.kind.type_name().replace('_', " ")).size(TEXT_SIZE_SMALL).color(TEXT_SECONDARY)
-            ]
-            .spacing(6)
-            .align_y(Vertical::Center)
+            row![icon(if many { Icon::Layers } else { super::kind_icon(&n.kind) }, 12.0, ICON), text(kind).size(TEXT_SIZE_SMALL).color(TEXT_SECONDARY)]
+                .spacing(6)
+                .align_y(Vertical::Center)
         )
         .padding(Padding { top: 10.0, right: 12.0, bottom: 4.0, left: 12.0 }),
-        body(field(app, "", Field::Name, || n.name.clone())),
+        body(field(app, "", Field::Name, || shared(app, |n| n.name.clone()))),
     ];
 
-    if let NodeKind::Instance { component, .. } = &n.kind {
+    if !many && let NodeKind::Instance { component, .. } = &n.kind {
         col = col.push(instance(app, n.id, *component));
     }
 
     col = col.push(section("Layout", None));
     let mut layout = column![
-        pair(field(app, "X", Field::X, || num(p.x)), field(app, "Y", Field::Y, || num(p.y))),
-        pair(field(app, "W", Field::W, || num(p.width)), field(app, "H", Field::H, || num(p.height))),
-        pair(field(app, "°", Field::Rotation, || num(p.rotation)), field(app, "R", Field::Radius, || num(p.corner.top_left))),
+        pair(field(app, "X", Field::X, || shared(app, |n| num(n.props.x))), field(app, "Y", Field::Y, || shared(app, |n| num(n.props.y)))),
+        pair(field(app, "W", Field::W, || shared(app, |n| num(n.props.width))), field(app, "H", Field::H, || shared(app, |n| num(n.props.height)))),
+        pair(
+            field(app, "°", Field::Rotation, || shared(app, |n| num(n.props.rotation))),
+            field(app, "R", Field::Radius, || shared(app, |n| num(n.props.corner.top_left))),
+        ),
     ]
     .spacing(8);
     let parent_layout = n.parent.and_then(|pid| doc.node(pid)).is_some_and(|pn| pn.props.layout.is_some());
@@ -165,7 +201,7 @@ fn node<'a>(app: &'a Blobr, n: &'a Node) -> Element<'a, Message> {
     }
     col = col.push(body(layout));
 
-    if n.kind.is_frame_like() {
+    if all(app, |n| n.kind.is_frame_like()) {
         let on = p.layout.is_some();
         col = col.push(section("Auto layout", Some((if on { Icon::Minus } else { Icon::Plus }, Message::ToggleAutoLayout))));
         if let Some(l) = &p.layout {
@@ -174,10 +210,18 @@ fn node<'a>(app: &'a Blobr, n: &'a Node) -> Element<'a, Message> {
             };
             col = col.push(body(
                 column![
-                    row![dir(Direction::Horizontal, Icon::ChevronRight), dir(Direction::Vertical, Icon::Chevron), space::horizontal(), field(app, "Gap", Field::Gap, || num(l.gap))]
-                        .spacing(2)
-                        .align_y(Vertical::Center),
-                    pair(field(app, "↔", Field::PadH, || num(l.padding.left)), field(app, "↕", Field::PadV, || num(l.padding.top))),
+                    row![
+                        dir(Direction::Horizontal, Icon::ChevronRight),
+                        dir(Direction::Vertical, Icon::Chevron),
+                        space::horizontal(),
+                        field(app, "Gap", Field::Gap, || shared(app, |n| n.props.layout.as_ref().map_or(String::new(), |l| num(l.gap))))
+                    ]
+                    .spacing(2)
+                    .align_y(Vertical::Center),
+                    pair(
+                        field(app, "↔", Field::PadH, || shared(app, |n| n.props.layout.as_ref().map_or(String::new(), |l| num(l.padding.left)))),
+                        field(app, "↕", Field::PadV, || shared(app, |n| n.props.layout.as_ref().map_or(String::new(), |l| num(l.padding.top)))),
+                    ),
                 ]
                 .spacing(8),
             ));
@@ -185,14 +229,23 @@ fn node<'a>(app: &'a Blobr, n: &'a Node) -> Element<'a, Message> {
     }
 
     col = col.push(section("Appearance", None));
-    col = col.push(body(field(app, "%", Field::Opacity, || num(p.opacity as f64 * 100.0))));
+    col = col.push(body(field(app, "%", Field::Opacity, || shared(app, |n| num(n.props.opacity as f64 * 100.0)))));
 
-    if let NodeKind::Text { text: t } = &n.kind {
+    let text_of = |n: &Node| match &n.kind {
+        NodeKind::Text { text } => Some(text.clone()),
+        _ => None,
+    };
+    if all(app, |n| matches!(n.kind, NodeKind::Text { .. }))
+        && let NodeKind::Text { text: t } = &n.kind
+    {
         col = col.push(section("Text", None));
         col = col.push(body(
             column![
-                field(app, "", Field::Text, || t.content.replace('\n', "\\n")),
-                pair(field(app, "Sz", Field::FontSize, || num(t.style.size as f64)), field(app, "", Field::FontStyle, || t.style.style.clone())),
+                field(app, "", Field::Text, || shared(app, |n| text_of(n).map_or(String::new(), |t| t.content.replace('\n', "\\n")))),
+                pair(
+                    field(app, "Sz", Field::FontSize, || shared(app, |n| text_of(n).map_or(String::new(), |t| num(t.style.size as f64)))),
+                    field(app, "", Field::FontStyle, || shared(app, |n| text_of(n).map_or(String::new(), |t| t.style.style.clone()))),
+                ),
                 text(format!("Font: {}", if t.style.family.is_empty() { "system sans-serif" } else { &t.style.family }))
                     .size(10)
                     .color(TEXT_MUTED),
@@ -201,13 +254,21 @@ fn node<'a>(app: &'a Blobr, n: &'a Node) -> Element<'a, Message> {
         ));
     }
 
-    if !matches!(n.kind, NodeKind::Group | NodeKind::ComponentSet { .. }) {
+    if all(app, |n| !matches!(n.kind, NodeKind::Group | NodeKind::ComponentSet { .. })) {
+        let mixed = |fills: bool| -> Element<'a, Message> {
+            let same = all(app, |o| if fills { o.props.fills == p.fills } else { o.props.strokes == p.strokes });
+            if same {
+                paints(app, if fills { &p.fills } else { &p.strokes }, fills)
+            } else {
+                text("Mixed: + adds one to each layer").size(TEXT_SIZE_SMALL).color(TEXT_MUTED).into()
+            }
+        };
         col = col.push(section("Fill", Some((Icon::Plus, Message::AddFill))));
-        col = col.push(body(paints(app, &p.fills, true)));
+        col = col.push(body(mixed(true)));
         col = col.push(section("Stroke", Some((Icon::Plus, Message::AddStroke))));
-        let mut stroke = column![paints(app, &p.strokes, false)].spacing(8);
+        let mut stroke = column![mixed(false)].spacing(8);
         if !p.strokes.is_empty() {
-            stroke = stroke.push(field(app, "Wt", Field::StrokeWeight, || num(p.stroke.weight as f64)));
+            stroke = stroke.push(field(app, "Wt", Field::StrokeWeight, || shared(app, |n| num(n.props.stroke.weight as f64))));
         }
         col = col.push(body(stroke));
     }

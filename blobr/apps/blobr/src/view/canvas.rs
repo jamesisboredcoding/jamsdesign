@@ -15,12 +15,46 @@ pub fn view(app: &Blobr) -> Element<'_, Message> {
         Some(a) => image(a.handle().clone()).width(app.viewport.width).height(app.viewport.height).filter_method(image::FilterMethod::Linear).into(),
         None => space().into(),
     };
-    container(stack![picture, canvas::Canvas::new(Overlay { app }).width(Fill).height(Fill)])
+    let mut layers = stack![picture, canvas::Canvas::new(Overlay { app }).width(Fill).height(Fill)];
+    if let Some(editor) = text_editor_overlay(app) {
+        layers = layers.push(editor);
+    }
+    container(layers)
         .width(Fill)
         .height(Fill)
         .clip(true)
         .style(jd_ui::style::fill(BG_CANVAS))
         .into()
+}
+
+/// The box typed into when editing a text layer, over the layer, at its zoomed size.
+fn text_editor_overlay(app: &Blobr) -> Option<Element<'_, Message>> {
+    use iced::widget::text_editor::{self, Binding, KeyPress};
+    let (id, content) = app.text_edit.as_ref()?;
+    let r = app.screen_bounds(*id)?;
+    let size = match app.doc().node(*id).map(|n| &n.kind) {
+        Some(jd_vector::NodeKind::Text { text }) => text.style.size * app.camera.zoom as f32,
+        _ => 16.0,
+    };
+    let editor = iced::widget::text_editor(content)
+        .id(crate::app::TEXT_EDITOR)
+        .on_action(Message::TextAction)
+        .size(size.clamp(8.0, 200.0))
+        .padding(2)
+        .width(r.width.max(120.0) + 24.0)
+        // Escape finishes; everything else edits as usual.
+        .key_binding(|kp: KeyPress| match kp.key.as_ref() {
+            iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape) => Some(Binding::Custom(Message::EndTextEdit)),
+            _ => Binding::from_key_press(kp),
+        })
+        .style(|_, _| text_editor::Style {
+            background: BG_PANEL.into(),
+            border: iced::Border { radius: 2.0.into(), width: 1.0, color: ACCENT_PRIMARY },
+            placeholder: TEXT_MUTED,
+            value: TEXT_PRIMARY,
+            selection: BG_SELECTED,
+        });
+    Some(container(editor).padding(iced::Padding { top: (r.y - 3.0).max(0.0), left: (r.x - 3.0).max(0.0), ..iced::Padding::ZERO }).into())
 }
 
 struct Overlay<'a> {

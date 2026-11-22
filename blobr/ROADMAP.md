@@ -110,12 +110,14 @@ CLI argument as a file to open. Names are provisional until Step 0.
         variants; errors from refused ops go to the status bar
   - [x] Rename in the layer tree (double-click or Ctrl+R), drag layers to restack them or
         drop them into frames and groups
-  - [ ] Multi-selection editing
+  - [x] Multi-selection editing (shared values, "Mixed" where they differ)
 - [ ] Step 4: editing tools (started: move/resize by drag as one undo step, Frame, Rectangle,
       Ellipse and Text by drag, marquee, nudge, duplicate, delete; snapping to siblings and
       the parent with red guides, Shift keeps to one axis, Ctrl turns snapping off; Alt shows
       distances to the hovered layer or the parent; group, frame selection, ungroup and
-      stacking order, as `jd_vector::arrange` op builders)
+      stacking order, align and distribute, as `jd_vector::arrange` op builders; copy, cut and
+      paste through the system clipboard (`jd_vector::clip`, `Op::Paste`), images and text
+      pasted from other apps, Copy as PNG; typing text on the canvas)
   - Move, resize and rotate with handles; Frame (with device presets), Rectangle, Ellipse,
     Line, Pen (bezier editing) and Text tools; Hand and Zoom
   - Snapping, smart guides and spacing measurements (as in the mockup)
