@@ -1,16 +1,17 @@
 //! The Layers panel: pages, then the layer tree of the current page (top layer first).
 
 use iced::alignment::Vertical;
-use iced::widget::{button, column, container, row, scrollable, space, svg, text};
-use iced::{Element, Fill, Padding};
+use iced::widget::{button, column, container, mouse_area, row, scrollable, space, stack, svg, text, text_input};
+use iced::{Border, Color, Element, Fill, Padding};
 use jd_ui::widget::{hline, panel_header};
 use jd_ui::{Icon, icon, style, tokens::*};
 use jd_vector::{NodeId, NodeKind};
 
 use super::{COMPONENT, kind_icon};
-use crate::app::{Blobr, Message};
+use crate::app::{Blobr, Drop, Message, RENAME_INPUT};
 
-const ROW: f32 = 26.0;
+/// Height of a layer row.
+pub const ROW: f32 = 26.0;
 const INDENT: f32 = 14.0;
 
 pub fn view(app: &Blobr) -> Element<'_, Message> {
@@ -42,7 +43,8 @@ pub fn view(app: &Blobr) -> Element<'_, Message> {
         container(pages).padding(Padding::from([0, 6])),
         container(hline(BG_PANEL)).padding(Padding::from([6, 0])),
         section("Layers", None),
-        scrollable(container(tree).padding(Padding::from([0, 6]))).height(Fill),
+        // Releasing anywhere over the tree ends a layer drag.
+        mouse_area(scrollable(container(tree).padding(Padding::from([0, 6]))).height(Fill)).on_release(Message::LayerRelease),
         footer(app),
     ]
     .into()
@@ -78,11 +80,23 @@ fn rows<'a>(app: &'a Blobr, id: NodeId, depth: usize, out: &mut Vec<Element<'a, 
     } else {
         space().width(16).into()
     };
+    let renaming = app.renaming.as_ref().filter(|(r, _)| *r == id);
+    let name: Element<'_, Message> = match renaming {
+        Some((_, current)) => text_input("", current)
+            .id(RENAME_INPUT)
+            .on_input(Message::RenameInput)
+            .on_submit(Message::RenameSubmit)
+            .size(TEXT_SIZE_SMALL)
+            .padding(Padding::from([2, 4]))
+            .width(Fill)
+            .into(),
+        None => text(n.name.clone()).size(TEXT_SIZE_SMALL).color(color).into(),
+    };
     let mut r = row![
         space().width(depth as f32 * INDENT),
         disclosure,
         icon(kind_icon(&n.kind), 12.0, if purple { COMPONENT } else { ICON }),
-        text(n.name.clone()).size(TEXT_SIZE_SMALL).color(color),
+        name,
         space::horizontal(),
     ]
     .spacing(6)
@@ -104,13 +118,35 @@ fn rows<'a>(app: &'a Blobr, id: NodeId, depth: usize, out: &mut Vec<Element<'a, 
                 .on_press(Message::ToggleVisible(id)),
         );
     }
+    // Where a dragged layer would land.
+    let drop = app.layer_drag.and_then(|d| d.target).filter(|(t, _)| *t == id).map(|(_, d)| d);
+    let bg = if selected { BG_SELECTED } else { BG_PANEL };
+    let body = container(r).padding(Padding::from([0, 8])).width(Fill).height(ROW).style(move |_| container::Style {
+        background: Some(bg.into()),
+        border: Border {
+            width: if drop == Some(Drop::Inside) { 1.0 } else { 0.0 },
+            color: ACCENT_PRIMARY,
+            radius: 2.0.into(),
+        },
+        ..Default::default()
+    });
+    let line = |show: bool| -> Element<'_, Message> {
+        container(space().width(Fill).height(2)).style(move |_| container::Style {
+            background: Some(if show { ACCENT_PRIMARY } else { Color::TRANSPARENT }.into()),
+            ..Default::default()
+        })
+        .into()
+    };
+    let marked = stack![
+        body,
+        column![line(drop == Some(Drop::Above)), space().height(Fill), line(drop == Some(Drop::Below))].height(ROW),
+    ];
     out.push(
-        button(r)
-            .width(Fill)
-            .height(ROW)
-            .padding(Padding::from([0, 8]))
-            .style(style::row(selected))
-            .on_press(Message::Select(id, false))
+        mouse_area(marked)
+            .on_press(Message::LayerPress(id))
+            .on_release(Message::LayerRelease)
+            .on_double_click(Message::StartRename(id))
+            .on_move(move |p| Message::LayerHover(id, p.y))
             .into(),
     );
     if has_kids && open {

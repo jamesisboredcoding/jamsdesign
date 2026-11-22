@@ -7,7 +7,7 @@ mod layers;
 mod menus;
 
 use iced::alignment::Vertical;
-use iced::widget::{button, column, container, row, space, stack, text};
+use iced::widget::{button, column, container, mouse_area, row, space, stack, text};
 use iced::{Element, Fill, Padding, Size};
 use jd_ui::chrome::{self, TITLE_BAR_HEIGHT, title_bar};
 use jd_ui::widget::{bold, field_box, hline, tool_button, value, vline};
@@ -15,9 +15,10 @@ use jd_ui::{Icon, icon, style, tokens::*};
 use jd_vector::ExportFormat;
 
 use crate::APP_NAME;
-use crate::app::{Blobr, Message};
+use crate::app::{After, Blobr, Message};
 use crate::tool::Tool;
 
+pub use layers::ROW as LAYER_ROW;
 pub use menus::MENU_COUNT;
 
 /// Gap between panels.
@@ -67,6 +68,9 @@ pub fn view(app: &Blobr) -> Element<'_, Message> {
     if let Some(popup) = menus::popup(app) {
         layers = layers.push(popup);
     }
+    if let Some(after) = app.confirm {
+        layers = layers.push(confirm(app, after));
+    }
     layers.into()
 }
 
@@ -80,6 +84,49 @@ fn panel<'a>(content: impl Into<Element<'a, Message>>, width: Option<f32>) -> El
         Some(w) => c.width(w).into(),
         None => c.width(Fill).into(),
     }
+}
+
+/// "Save changes?" before quitting, opening or starting a new file.
+fn confirm(app: &Blobr, after: After) -> Element<'_, Message> {
+    let verb = match after {
+        After::Quit => "closing",
+        After::New => "starting a new file",
+        After::Open => "opening another file",
+    };
+    let name = app.path.as_ref().and_then(|p| p.file_name()).map_or("Untitled".into(), |n| n.to_string_lossy().into_owned());
+    let action = |label: &'static str, m: Message, primary: bool| {
+        let b = button(text(label).size(TEXT_SIZE_SMALL)).padding(Padding::from([5, 14])).on_press(m);
+        if primary { b.style(style::primary) } else { b.style(style::ghost(false)) }
+    };
+    let card = container(
+        column![
+            text(format!("Save changes to {name}?")).size(TEXT_SIZE).font(bold()).color(TEXT_PRIMARY),
+            text(format!("Your changes will be lost if you don't save them before {verb}.")).size(TEXT_SIZE_SMALL).color(TEXT_SECONDARY),
+            row![
+                action("Don't Save", Message::ConfirmDiscard, false),
+                space::horizontal(),
+                action("Cancel", Message::ConfirmCancel, false),
+                action("Save", Message::ConfirmSave, true),
+            ]
+            .spacing(8),
+        ]
+        .spacing(12),
+    )
+    .padding(20)
+    .width(380)
+    .style(|_| container::Style {
+        background: Some(BG_PANEL.into()),
+        border: iced::Border { radius: 6.0.into(), width: 1.0, color: BORDER_DEFAULT },
+        ..Default::default()
+    });
+    // A dimmed backdrop that swallows clicks.
+    iced::widget::opaque(
+        mouse_area(container(card).center(Fill).style(|_| container::Style {
+            background: Some(iced::Color::from_rgba(0.0, 0.0, 0.0, 0.45).into()),
+            ..Default::default()
+        }))
+        .on_press(Message::Noop),
+    )
 }
 
 fn title_actions<'a>() -> Element<'a, Message> {

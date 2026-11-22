@@ -12,6 +12,7 @@
 //! No iced and no GPU here: rendering lives elsewhere, so documents can be edited and saved
 //! without a window.
 
+pub mod arrange;
 mod color;
 pub mod component;
 mod doc;
@@ -22,6 +23,7 @@ pub mod layout;
 pub mod node;
 pub mod ops;
 pub mod text;
+pub mod snap;
 pub mod tokens;
 
 pub use doc::Document;

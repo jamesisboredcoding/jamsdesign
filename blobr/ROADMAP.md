@@ -96,7 +96,8 @@ CLI argument as a file to open. Names are provisional until Step 0.
   - [x] Window, menus, toolbar and panels laid out like the mockup, built from `jd-ui` (theme
         tokens, icons, panel tabs) so it matches Photosplash and Cinematica
   - [x] Open/save/save as `.jdb`, PNG/SVG export of the selection
-  - [ ] Document tabs, recent files, unsaved-changes prompts
+  - [x] Unsaved-changes prompt (Save / Don't Save / Cancel) before quit, new and open
+  - [ ] Document tabs, recent files
   - [x] Canvas: tiny-skia render of the visible region at screen resolution, redrawn only when
         the document, camera or window changes; zoom (Ctrl+scroll, Shift+0/1/2), pan (scroll,
         Space, middle drag, Hand), frame labels, hover and selection outlines
@@ -107,9 +108,14 @@ CLI argument as a file to open. Names are provisional until Step 0.
   - [x] Design panel showing (and editing) the selection: name, position, size, rotation,
         radius, sizing, auto layout, opacity, text, fills, strokes, instance properties and
         variants; errors from refused ops go to the status bar
-  - [ ] Rename in the layer tree, multi-selection editing
+  - [x] Rename in the layer tree (double-click or Ctrl+R), drag layers to restack them or
+        drop them into frames and groups
+  - [ ] Multi-selection editing
 - [ ] Step 4: editing tools (started: move/resize by drag as one undo step, Frame, Rectangle,
-      Ellipse and Text by drag, marquee, nudge, duplicate, delete)
+      Ellipse and Text by drag, marquee, nudge, duplicate, delete; snapping to siblings and
+      the parent with red guides, Shift keeps to one axis, Ctrl turns snapping off; Alt shows
+      distances to the hovered layer or the parent; group, frame selection, ungroup and
+      stacking order, as `jd_vector::arrange` op builders)
   - Move, resize and rotate with handles; Frame (with device presets), Rectangle, Ellipse,
     Line, Pen (bezier editing) and Text tools; Hand and Zoom
   - Snapping, smart guides and spacing measurements (as in the mockup)

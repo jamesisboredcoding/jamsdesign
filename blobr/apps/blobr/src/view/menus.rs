@@ -5,6 +5,7 @@ use iced::Element;
 use jd_ui::chrome;
 use jd_ui::widget::MenuEntry;
 use jd_vector::ExportFormat;
+use jd_vector::arrange::Order;
 
 use crate::app::{Blobr, Message};
 
@@ -70,8 +71,10 @@ fn entries(app: &Blobr, menu: usize) -> Vec<MenuEntry<'_, Message>> {
             item("Full Screen", "F11", Some(Message::Chrome(chrome::Event::ToggleFullscreen))),
         ],
         "Object" => vec![
-            todo("Group Selection", "Ctrl+G"),
-            todo("Frame Selection", "Ctrl+Alt+G"),
+            item("Group Selection", "Ctrl+G", on(sel, Message::Group)),
+            item("Frame Selection", "Ctrl+Alt+G", on(sel, Message::FrameSelection)),
+            item("Ungroup Selection", "Ctrl+Shift+G", on(sel, Message::Ungroup)),
+            item("Rename", "Ctrl+R", app.selection.first().map(|&id| Message::StartRename(id))),
             item("Add Auto Layout", "Shift+A", on(sel, Message::ToggleAutoLayout)),
             Separator,
             item("Create Component", "Ctrl+Alt+K", on(sel, Message::CreateComponent)),
@@ -84,10 +87,10 @@ fn entries(app: &Blobr, menu: usize) -> Vec<MenuEntry<'_, Message>> {
         ],
         "Text" => vec![todo("Bold", "Ctrl+B"), todo("Italic", "Ctrl+I"), todo("Underline", "Ctrl+U"), Separator, todo("Text Styles...", "")],
         "Arrange" => vec![
-            todo("Bring to Front", "Ctrl+]"),
-            todo("Bring Forward", "Ctrl+Shift+]"),
-            todo("Send Backward", "Ctrl+Shift+["),
-            todo("Send to Back", "Ctrl+["),
+            item("Bring to Front", "Ctrl+]", on(sel, Message::Reorder(Order::Front))),
+            item("Bring Forward", "Ctrl+Shift+]", on(sel, Message::Reorder(Order::Forward))),
+            item("Send Backward", "Ctrl+Shift+[", on(sel, Message::Reorder(Order::Backward))),
+            item("Send to Back", "Ctrl+[", on(sel, Message::Reorder(Order::Back))),
             Separator,
             todo("Align Left", "Alt+A"),
             todo("Align Center", "Alt+H"),

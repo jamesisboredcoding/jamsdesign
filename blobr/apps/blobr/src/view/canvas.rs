@@ -124,6 +124,35 @@ impl canvas::Program<Message> for Overlay<'_> {
             }
         }
 
+        // Smart guides while a drag snaps, and Alt-hover distances, in Figma's red.
+        let red = Color::from_rgb8(0xF2, 0x48, 0x22);
+        for g in &app.guides {
+            let line = Path::line(app.camera.to_screen(g.from), app.camera.to_screen(g.to));
+            frame.stroke(&line, Stroke::default().with_width(1.0).with_color(red));
+        }
+        if app.modifiers.alt()
+            && app.drag.is_none()
+            && let Some(a) = app.selection_bounds()
+        {
+            let other = app.hover.filter(|h| !app.selection.contains(h)).or_else(|| {
+                let s = *app.selection.first()?;
+                doc.parent(s).filter(|&p| p != app.page)
+            });
+            if let Some(b) = other.and_then(|o| doc.world_bounds(o)) {
+                for (l, d) in jd_vector::snap::measure(a, b) {
+                    let (p, q) = (app.camera.to_screen(l.from), app.camera.to_screen(l.to));
+                    frame.stroke(&Path::line(p, q), Stroke::default().with_width(1.0).with_color(red));
+                    let label = format!("{}", (d * 100.0).round() / 100.0);
+                    let w = label.chars().count() as f32 * 6.0 + 8.0;
+                    let at = Point::new((p.x + q.x) / 2.0 - w / 2.0, (p.y + q.y) / 2.0 - 8.0);
+                    frame.fill(&Path::rounded_rectangle(at, Size::new(w, 16.0), 3.0.into()), red);
+                    frame.fill_text(Text { content: label, position: Point::new(at.x + 4.0, at.y + 2.0), color: Color::WHITE, size: 10.0.into(), ..Text::default() });
+                }
+                let r = Rectangle::new(app.camera.to_screen(kurbo::Point::new(b.x0, b.y0)), Size::new((b.width() * app.camera.zoom) as f32, (b.height() * app.camera.zoom) as f32));
+                frame.stroke(&Path::rectangle(r.position(), r.size()), Stroke::default().with_width(1.0).with_color(red));
+            }
+        }
+
         match &app.drag {
             Some(Drag::Marquee { start, now }) => {
                 let (a, b) = (app.camera.to_screen(*start), app.camera.to_screen(*now));

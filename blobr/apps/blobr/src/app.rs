@@ -7,11 +7,13 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use iced::keyboard::{self, Key, key::Named};
-use iced::widget::image;
+use iced::widget::{image, operation};
 use iced::{Point, Size, Subscription, Task, Vector, mouse, window};
 use iced_runtime::image::Allocation;
 use jd_core::Rgba;
 use jd_ui::chrome::{self, WindowChrome};
+use jd_vector::arrange::{self, Order};
+use jd_vector::snap::{self, Edges, Line};
 use jd_vector::{
     AutoLayout, Direction, Document, Editor, ExportFormat, NodeId, NodeKind, NodeSpec, Op, Padding, Paint, PaintKind, Patch, PropDef,
     PropValue, Sizing, TextStyle, file,
@@ -76,11 +78,37 @@ pub enum Drag {
     Pan { start: Point, origin: kurbo::Point },
     /// Each node with its starting x/y and the map from page to its parent's space.
     /// `started` once the pointer has gone past the drag threshold (a click doesn't move).
-    Move { start: kurbo::Point, items: Vec<(NodeId, f64, f64, Affine)>, started: bool },
-    Resize { id: NodeId, handle: Handle, start: kurbo::Point, rect: Rect, to_parent: Affine, started: bool },
+    /// `bounds` is the selection's page box at the start, `targets` what it can snap to.
+    Move { start: kurbo::Point, items: Vec<(NodeId, f64, f64, Affine)>, started: bool, bounds: Rect, targets: Vec<Rect> },
+    Resize { id: NodeId, handle: Handle, start: kurbo::Point, rect: Rect, to_parent: Affine, started: bool, targets: Vec<Rect> },
     Marquee { start: kurbo::Point, now: kurbo::Point },
     Create { tool: Tool, start: kurbo::Point, now: kurbo::Point },
 }
+
+/// What a press-and-drag in the Layers panel will do on release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Drop {
+    Above,
+    Below,
+    Inside,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LayerDrag {
+    pub id: NodeId,
+    pub target: Option<(NodeId, Drop)>,
+}
+
+/// What to do once unsaved changes are dealt with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum After {
+    Quit,
+    New,
+    Open,
+}
+
+/// Id of the layer-name box in the Layers panel.
+pub const RENAME_INPUT: &str = "layer-rename";
 
 /// A Design-panel value box being typed into.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -125,7 +153,6 @@ pub enum Message {
     CanvasMove(Point),
     CanvasRelease(Point),
     CanvasScroll { delta: Vector, at: Point },
-    Select(NodeId, bool),
     SelectPage(NodeId),
     AddPage,
     ToggleExpand(NodeId),
@@ -142,6 +169,20 @@ pub enum Message {
     RemoveStroke(usize),
     SetBool(String, bool),
     SetVariant(String, String),
+    Group,
+    FrameSelection,
+    Ungroup,
+    Reorder(Order),
+    LayerPress(NodeId),
+    LayerHover(NodeId, f32),
+    LayerRelease,
+    StartRename(NodeId),
+    RenameInput(String),
+    RenameSubmit,
+    /// The unsaved-changes dialog: save first, discard, or cancel.
+    ConfirmSave,
+    ConfirmDiscard,
+    ConfirmCancel,
     Undo,
     Redo,
     Delete,
@@ -198,6 +239,14 @@ pub struct Blobr {
     pub expanded: BTreeSet<NodeId>,
     pub status: Status,
     pub drafts: HashMap<Field, String>,
+    /// Lines to draw while a drag snaps.
+    pub guides: Vec<Line>,
+    pub layer_drag: Option<LayerDrag>,
+    pub renaming: Option<(NodeId, String)>,
+    /// The unsaved-changes dialog is open for this.
+    pub confirm: Option<After>,
+    /// Continue with this once the Save As dialog has saved.
+    after_save: Option<After>,
     last_click: Option<(Instant, Point)>,
     fit_pending: bool,
 }
@@ -205,6 +254,17 @@ pub struct Blobr {
 const MIN_ZOOM: f64 = 0.02;
 /// Screen pixels the pointer must travel before a press becomes a drag.
 const DRAG_THRESHOLD: f64 = 3.0;
+/// Screen pixels within which edges snap.
+const SNAP: f64 = 6.0;
+
+/// A page-space displacement in a parent's space (`c`: that map's coefficients).
+fn local_vec(c: [f64; 6], d: Vec2) -> Vec2 {
+    Vec2::new(c[0] * d.x + c[2] * d.y, c[1] * d.x + c[3] * d.y)
+}
+
+fn round2(v: f64) -> f64 {
+    (v * 100.0).round() / 100.0
+}
 const MAX_ZOOM: f64 = 256.0;
 
 impl Blobr {
@@ -234,6 +294,11 @@ impl Blobr {
             expanded: BTreeSet::new(),
             status: Status { text: "Press F and drag to draw a frame".into(), error: false },
             drafts: HashMap::new(),
+            guides: Vec::new(),
+            layer_drag: None,
+            renaming: None,
+            confirm: None,
+            after_save: None,
             last_click: None,
             fit_pending: false,
         };
@@ -302,7 +367,77 @@ impl Blobr {
                     self.canvas = Some(a);
                 }
             }
-            Message::Quit => return self.chrome.close(),
+            Message::Quit => return self.guard(After::Quit),
+            Message::ConfirmCancel => self.confirm = None,
+            Message::ConfirmDiscard => {
+                if let Some(a) = self.confirm.take() {
+                    return self.proceed(a);
+                }
+            }
+            Message::ConfirmSave => {
+                let Some(a) = self.confirm.take() else { return Task::none() };
+                match self.path.clone() {
+                    Some(path) => {
+                        self.save_to(path);
+                        if !self.ed.history.is_dirty() {
+                            return self.proceed(a);
+                        }
+                    }
+                    None => {
+                        self.after_save = Some(a);
+                        return self.handle(Message::SaveAs);
+                    }
+                }
+            }
+            Message::Group => self.group(false),
+            Message::FrameSelection => self.group(true),
+            Message::Ungroup => match arrange::ungroup(self.doc(), &self.selection) {
+                Ok((ops, freed)) => {
+                    if self.run("Ungroup", &ops).is_some() {
+                        self.selection = freed;
+                    }
+                }
+                Err(e) => self.error(e),
+            },
+            Message::Reorder(order) => {
+                let ops = arrange::reorder(self.doc(), &self.selection, order);
+                self.run("Reorder", &ops);
+            }
+            Message::LayerPress(id) => {
+                if self.renaming.as_ref().is_some_and(|(r, _)| *r != id) {
+                    self.commit_rename();
+                }
+                if self.modifiers.shift() || self.modifiers.command() {
+                    self.select(id, true);
+                } else if !self.selection.contains(&id) {
+                    self.select(id, false);
+                }
+                self.layer_drag = Some(LayerDrag { id, target: None });
+            }
+            Message::LayerHover(target, y) => self.layer_hover(target, y),
+            Message::LayerRelease => {
+                if let Some(LayerDrag { id, target: Some((t, drop)) }) = self.layer_drag.take() {
+                    self.drop_layer(id, t, drop);
+                } else if let Some(LayerDrag { id, target: None }) = self.layer_drag.take()
+                    && !self.modifiers.shift()
+                    && !self.modifiers.command()
+                {
+                    // A plain click on an already-selected layer selects just it.
+                    self.select(id, false);
+                }
+            }
+            Message::StartRename(id) => {
+                let name = self.doc().node(id).map(|n| n.name.clone()).unwrap_or_default();
+                self.layer_drag = None;
+                self.renaming = Some((id, name));
+                return Task::batch([operation::focus(RENAME_INPUT), operation::select_all(RENAME_INPUT)]);
+            }
+            Message::RenameInput(s) => {
+                if let Some((_, name)) = &mut self.renaming {
+                    *name = s;
+                }
+            }
+            Message::RenameSubmit => self.commit_rename(),
             Message::Key(e) => return self.on_key(e),
             Message::ScaleFactor(s) => self.scale_factor = s.max(0.5),
             Message::Viewport(size) => {
@@ -319,7 +454,6 @@ impl Blobr {
             Message::CanvasMove(at) => self.drag_to(at),
             Message::CanvasRelease(at) => self.release(at),
             Message::CanvasScroll { delta, at } => self.scroll(delta, at),
-            Message::Select(id, add) => self.select(id, add),
             Message::SelectPage(p) => {
                 if p != self.page {
                     self.page = p;
@@ -430,22 +564,11 @@ impl Blobr {
             Message::ZoomFit => self.zoom_fit(false),
             Message::ZoomSelection => self.zoom_fit(true),
             Message::Zoom100 => self.zoom_at(1.0 / self.camera.zoom, None),
-            Message::New => {
-                // Unsaved-changes prompts come with dialogs; until then, refuse when dirty.
-                if self.ed.history.is_dirty() {
-                    self.error("Save first: there are unsaved changes (prompts come later)".into());
-                } else {
-                    self.load(Document::new(), None);
-                }
-            }
-            Message::Open => {
-                return Task::perform(
-                    rfd::AsyncFileDialog::new().add_filter("Blobr document", &[file::EXTENSION]).pick_file(),
-                    |f| Message::Opened(f.map(|f| f.path().to_path_buf())),
-                );
-            }
+            Message::New => return self.guard(After::New),
+            Message::Open => return self.guard(After::Open),
             Message::Opened(Some(path)) => self.open_path(path),
-            Message::Opened(None) | Message::SavedAs(None) | Message::Exported(None, _) => {}
+            Message::SavedAs(None) => self.after_save = None,
+            Message::Opened(None) | Message::Exported(None, _) => {}
             Message::Save => match self.path.clone() {
                 Some(path) => self.save_to(path),
                 None => return self.handle(Message::SaveAs),
@@ -462,6 +585,11 @@ impl Blobr {
                     path.set_extension(file::EXTENSION);
                 }
                 self.save_to(path);
+                if let Some(a) = self.after_save.take()
+                    && !self.ed.history.is_dirty()
+                {
+                    return self.proceed(a);
+                }
             }
             Message::Export(format) => {
                 let target = self.selection.first().copied().unwrap_or(self.page);
@@ -503,8 +631,16 @@ impl Blobr {
             _ => return Task::none(),
         }
         let keyboard::Event::KeyPressed { key, modifiers, .. } = event else { return Task::none() };
-        if self.chrome.open_menu.is_some() && matches!(key.as_ref(), Key::Named(Named::Escape)) {
-            self.chrome.open_menu = None;
+        if matches!(key.as_ref(), Key::Named(Named::Escape)) {
+            if self.chrome.open_menu.is_some() {
+                self.chrome.open_menu = None;
+                return Task::none();
+            }
+            if self.confirm.take().is_some() || self.renaming.take().is_some() {
+                return Task::none();
+            }
+        }
+        if self.confirm.is_some() {
             return Task::none();
         }
         let (cmd, shift, alt) = (modifiers.command(), modifiers.shift(), modifiers.alt());
@@ -533,6 +669,14 @@ impl Blobr {
                     ("z", true, false, false) => Some(Message::Undo),
                     ("z", true, true, false) | ("y", true, false, false) => Some(Message::Redo),
                     ("d", true, false, false) => Some(Message::Duplicate),
+                    ("g", true, false, false) => Some(Message::Group),
+                    ("g", true, false, true) => Some(Message::FrameSelection),
+                    ("g", true, true, false) => Some(Message::Ungroup),
+                    ("]", true, false, false) => Some(Message::Reorder(Order::Front)),
+                    ("[", true, false, false) => Some(Message::Reorder(Order::Back)),
+                    ("]" | "}", true, true, false) => Some(Message::Reorder(Order::Forward)),
+                    ("[" | "{", true, true, false) => Some(Message::Reorder(Order::Backward)),
+                    ("r", true, false, false) => self.selection.first().map(|&id| Message::StartRename(id)),
                     ("a", true, false, false) => Some(Message::SelectAll),
                     ("a", true, true, false) => Some(Message::Deselect),
                     ("q", true, false, false) => Some(Message::Quit),
@@ -769,6 +913,104 @@ impl Blobr {
         self.patch_selection("Edit", patch);
     }
 
+    // ----- Arranging ---------------------------------------------------------------------
+
+    fn group(&mut self, frame: bool) {
+        match arrange::group(self.doc(), &self.selection, frame) {
+            Ok(ops) => {
+                if let Some(done) = self.run(if frame { "Frame selection" } else { "Group" }, &ops)
+                    && let Some(g) = done.id("group")
+                {
+                    self.select(g, false);
+                }
+            }
+            Err(e) => self.error(e),
+        }
+    }
+
+    fn commit_rename(&mut self) {
+        let Some((id, name)) = self.renaming.take() else { return };
+        let name = name.trim().to_owned();
+        if !name.is_empty() && self.doc().node(id).is_some_and(|n| n.name != name) {
+            self.run("Rename", &[Op::set(id, Patch { name: Some(name), ..Patch::default() })]);
+        }
+    }
+
+    /// The pointer is `y` px into `target`'s row while a layer is dragged.
+    fn layer_hover(&mut self, target: NodeId, y: f32) {
+        let Some(drag) = &mut self.layer_drag else { return };
+        let doc = &self.ed.doc;
+        if target == drag.id || doc.is_ancestor(drag.id, target) {
+            drag.target = None;
+            return;
+        }
+        let f = y / crate::view::LAYER_ROW;
+        let container = doc.node(target).is_some_and(|n| n.kind.is_container()) && !doc.is_inside_instance(target);
+        let drop = if container && (0.3..0.7).contains(&f) {
+            Drop::Inside
+        } else if f < 0.5 {
+            Drop::Above
+        } else {
+            Drop::Below
+        };
+        drag.target = Some((target, drop));
+    }
+
+    /// Moves `id` next to (or into) `target`, keeping it where it is on the page.
+    fn drop_layer(&mut self, id: NodeId, target: NodeId, drop: Drop) {
+        let doc = self.doc();
+        let (parent, index) = match drop {
+            Drop::Inside => (target, None),
+            _ => {
+                let Some(parent) = doc.parent(target) else { return };
+                let kids = doc.children(parent);
+                let t = kids.iter().position(|&c| c == target).unwrap_or(0);
+                // The list shows the top of the stack first: "above" is a higher index.
+                let mut i = if drop == Drop::Above { t + 1 } else { t };
+                if let Some(cur) = kids.iter().position(|&c| c == id)
+                    && cur < t
+                {
+                    i -= 1;
+                }
+                (parent, Some(i))
+            }
+        };
+        let Some(world) = doc.node(id).map(|_| doc.world_transform(id)) else { return };
+        let local = doc.world_transform(parent).inverse() * world;
+        let [.., x, y] = local.as_coeffs();
+        let ops = [Op::Move { id: id.into(), parent: parent.into(), index }, Op::set(id, Patch { x: Some(round2(x)), y: Some(round2(y)), ..Patch::default() })];
+        if self.run("Move layer", &ops).is_some() && drop == Drop::Inside {
+            self.expanded.insert(target);
+        }
+    }
+
+    // ----- Unsaved changes --------------------------------------------------------------
+
+    /// Asks about unsaved changes before `after`, or just does it.
+    fn guard(&mut self, after: After) -> Task<Message> {
+        if self.ed.history.is_dirty() {
+            self.chrome.open_menu = None;
+            self.confirm = Some(after);
+            Task::none()
+        } else {
+            self.proceed(after)
+        }
+    }
+
+    fn proceed(&mut self, after: After) -> Task<Message> {
+        match after {
+            After::Quit => self.chrome.close(),
+            After::New => {
+                self.load(Document::new(), None);
+                Task::none()
+            }
+            After::Open => Task::perform(
+                rfd::AsyncFileDialog::new().add_filter("Blobr document", &[file::EXTENSION]).pick_file(),
+                |f| Message::Opened(f.map(|f| f.path().to_path_buf())),
+            ),
+        }
+    }
+
     // ----- Files ------------------------------------------------------------------------
 
     fn open_path(&mut self, path: PathBuf) {
@@ -887,6 +1129,11 @@ impl Blobr {
         Some(iced::Rectangle::new(a, Size::new(c.x - a.x, c.y - a.y)))
     }
 
+    /// The selection's page box.
+    pub fn selection_bounds(&self) -> Option<Rect> {
+        self.selection.iter().filter_map(|&id| self.doc().world_bounds(id)).reduce(|a, b| a.union(b))
+    }
+
     pub fn handle_at(&self, at: Point) -> Option<(NodeId, Handle)> {
         let [id] = self.selection[..] else { return None };
         let n = self.doc().node(id)?;
@@ -948,7 +1195,8 @@ impl Blobr {
             let n = self.doc().node(id).expect("selected");
             let to_parent = n.parent.map_or(Affine::IDENTITY, |p| self.doc().world_transform(p).inverse());
             let rect = Rect::new(n.props.x, n.props.y, n.props.x + n.props.width, n.props.y + n.props.height);
-            self.drag = Some(Drag::Resize { id, handle, start: page, rect, to_parent, started: false });
+            let targets = snap::targets(self.doc(), &[id]);
+            self.drag = Some(Drag::Resize { id, handle, start: page, rect, to_parent, started: false, targets });
             return;
         }
         let shift = self.modifiers.shift();
@@ -960,7 +1208,10 @@ impl Blobr {
                     self.select(id, false);
                 }
                 let items = self.movable();
-                self.drag = Some(Drag::Move { start: page, items, started: false });
+                let ids: Vec<NodeId> = items.iter().map(|i| i.0).collect();
+                let bounds = ids.iter().filter_map(|&id| self.doc().world_bounds(id)).reduce(|a, b| a.union(b)).unwrap_or_default();
+                let targets = snap::targets(self.doc(), &ids);
+                self.drag = Some(Drag::Move { start: page, items, started: false, bounds, targets });
             }
             None => {
                 if !shift {
@@ -1008,14 +1259,30 @@ impl Blobr {
                 let z = self.camera.zoom;
                 self.camera.origin = kurbo::Point::new(origin.x - (at.x - start.x) as f64 / z, origin.y - (at.y - start.y) as f64 / z);
             }
-            Drag::Move { start, items, .. } => {
+            Drag::Move { start, items, bounds, targets, .. } => {
                 if items.is_empty() {
                     if !self.selection.is_empty() {
                         self.error("Auto layout places this layer; change its order in the Layers panel".into());
                     }
                     return;
                 }
-                let d = page - start;
+                let mut d = page - start;
+                // Shift keeps to one axis.
+                if self.modifiers.shift() {
+                    if d.x.abs() > d.y.abs() {
+                        d.y = 0.0;
+                    } else {
+                        d.x = 0.0;
+                    }
+                }
+                // Snap to whole pixels first, then to nearby layers (Ctrl turns snapping off).
+                d = Vec2::new((bounds.x0 + d.x).round() - bounds.x0, (bounds.y0 + d.y).round() - bounds.y0);
+                self.guides.clear();
+                if !self.modifiers.command() {
+                    let s = snap::snap(bounds + d, Edges::ALL, &targets, SNAP / self.camera.zoom);
+                    d += Vec2::new(s.dx, s.dy);
+                    self.guides = s.guides;
+                }
                 let ops: Vec<Op> = items
                     .iter()
                     .map(|(id, x, y, to_parent)| {
@@ -1023,16 +1290,27 @@ impl Blobr {
                         // Only the linear part applies to a displacement.
                         let dx = ld[0] * d.x + ld[2] * d.y;
                         let dy = ld[1] * d.x + ld[3] * d.y;
-                        Op::set(*id, Patch { x: Some((x + dx).round()), y: Some((y + dy).round()), ..Patch::default() })
+                        Op::set(*id, Patch { x: Some(round2(x + dx)), y: Some(round2(y + dy)), ..Patch::default() })
                     })
                     .collect();
                 self.run_gesture("Move", &ops);
             }
-            Drag::Resize { id, handle, start, rect, to_parent, .. } => {
+            Drag::Resize { id, handle, start, rect, to_parent, targets, .. } => {
                 let c = to_parent.as_coeffs();
-                let d = page - start;
-                let d = Vec2::new(c[0] * d.x + c[2] * d.y, c[1] * d.x + c[3] * d.y);
-                let r = resize_rect(rect, handle, d, self.modifiers.shift());
+                let mut d = page - start;
+                self.guides.clear();
+                // Snap the dragged edges (not with Shift's fixed ratio, or Ctrl).
+                if !self.modifiers.shift() && !self.modifiers.command() {
+                    let from_parent = to_parent.inverse();
+                    let moved = resize_rect(rect, handle, local_vec(c, d), false);
+                    let pr = from_parent.transform_rect_bbox(moved);
+                    let (ax, ay) = handle.anchor();
+                    let edges = Edges { x: [ax == 0.0, false, ax == 1.0], y: [ay == 0.0, false, ay == 1.0] };
+                    let s = snap::snap(pr, edges, &targets, SNAP / self.camera.zoom);
+                    d += Vec2::new(s.dx, s.dy);
+                    self.guides = s.guides;
+                }
+                let r = resize_rect(rect, handle, local_vec(c, d), self.modifiers.shift());
                 let ops = [
                     Op::Resize { id: id.into(), width: r.width().round(), height: r.height().round() },
                     Op::set(id, Patch { x: Some(r.x0.round()), y: Some(r.y0.round()), ..Patch::default() }),
@@ -1048,7 +1326,10 @@ impl Blobr {
         let page = self.camera.to_page(at);
         let Some(drag) = self.drag.take() else { return };
         match drag {
-            Drag::Move { .. } | Drag::Resize { .. } => self.ed.end_gesture(),
+            Drag::Move { .. } | Drag::Resize { .. } => {
+                self.ed.end_gesture();
+                self.guides.clear();
+            }
             Drag::Pan { .. } => {}
             Drag::Marquee { start, .. } => {
                 let r = Rect::from_points(start, page);
@@ -1265,7 +1546,7 @@ mod tests {
         let mut app = app();
         let p = app.page;
         let r = app.run("Add", &[Op::create(p, NodeSpec::rect("R", 50.0, 50.0))]).unwrap().created[0];
-        let _ = app.update(Message::Select(r, false));
+        app.select(r, false);
         let _ = app.update(Message::FieldInput(Field::W, "120".into()));
         let _ = app.update(Message::FieldSubmit(Field::W));
         let _ = app.update(Message::FieldInput(Field::Fill(0), "#4C8DFF".into()));
@@ -1283,7 +1564,7 @@ mod tests {
         let mut app = app();
         let p = app.page;
         let r = app.run("Add", &[Op::create(p, NodeSpec::rect("R", 50.0, 50.0).at(100.0, 100.0))]).unwrap().created[0];
-        let _ = app.update(Message::Select(r, false));
+        app.select(r, false);
         let _ = app.update(Message::FieldInput(Field::W, "999".into()));
         let _ = app.update(Message::Deselect);
         assert!(app.drafts.is_empty(), "a draft for one layer must not show on the next");
@@ -1296,6 +1577,117 @@ mod tests {
         assert_eq!(app.doc().node(r).unwrap().props.x, 100.0);
         assert_eq!(app.ed.history.labels().count(), steps);
         assert_eq!(app.selection, vec![r]);
+    }
+
+    fn three_rects(app: &mut Blobr) -> Vec<NodeId> {
+        let p = app.page;
+        app.run(
+            "Add",
+            &[
+                Op::create(p, NodeSpec::rect("A", 50.0, 50.0).at(100.0, 100.0)),
+                Op::create(p, NodeSpec::rect("B", 50.0, 50.0).at(300.0, 100.0)),
+                Op::create(p, NodeSpec::rect("C", 50.0, 50.0).at(100.0, 300.0)),
+            ],
+        )
+        .unwrap()
+        .created
+    }
+
+    fn drag(app: &mut Blobr, from: Point, to: Point) {
+        let _ = app.update(Message::CanvasPress { at: from, button: mouse::Button::Left });
+        let _ = app.update(Message::CanvasMove(to));
+        let _ = app.update(Message::CanvasRelease(to));
+    }
+
+    #[test]
+    fn moving_snaps_to_neighbours_with_guides_unless_ctrl() {
+        let mut app = app();
+        let ids = three_rects(&mut app);
+        // Drag B so its top lands 4px below A's top: snaps back in line.
+        let _ = app.update(Message::CanvasPress { at: Point::new(320.0, 120.0), button: mouse::Button::Left });
+        let _ = app.update(Message::CanvasMove(Point::new(340.0, 124.0)));
+        assert!(!app.guides.is_empty(), "a guide shows while snapped");
+        let _ = app.update(Message::CanvasRelease(Point::new(340.0, 124.0)));
+        let b = &app.doc().node(ids[1]).unwrap().props;
+        assert_eq!((b.x, b.y), (320.0, 100.0));
+        assert!(app.guides.is_empty());
+
+        app.modifiers = keyboard::Modifiers::CTRL;
+        drag(&mut app, Point::new(330.0, 120.0), Point::new(330.0, 124.0));
+        assert_eq!(app.doc().node(ids[1]).unwrap().props.y, 104.0, "Ctrl turns snapping off");
+    }
+
+    #[test]
+    fn group_frame_ungroup_and_restack_from_the_app() {
+        let mut app = app();
+        let ids = three_rects(&mut app);
+        app.selection = vec![ids[0], ids[1]];
+        let _ = app.update(Message::Group);
+        let g = app.selection[0];
+        assert!(matches!(app.doc().node(g).unwrap().kind, NodeKind::Group));
+        assert_eq!(app.doc().children(g), &ids[..2]);
+        let _ = app.update(Message::Ungroup);
+        assert_eq!(app.selection, ids[..2].to_vec());
+        assert!(!app.doc().contains(g));
+
+        app.selection = vec![ids[0]];
+        let _ = app.update(Message::Reorder(Order::Front));
+        assert_eq!(app.doc().children(app.page).last(), Some(&ids[0]));
+
+        app.selection = vec![ids[2], ids[0]];
+        let _ = app.update(Message::FrameSelection);
+        let f = app.doc().node(app.selection[0]).unwrap();
+        assert_eq!((f.props.x, f.props.y, f.props.width, f.props.height), (100.0, 100.0, 50.0, 250.0));
+    }
+
+    #[test]
+    fn dragging_layers_in_the_panel_and_renaming() {
+        let mut app = app();
+        let ids = three_rects(&mut app);
+        let p = app.page;
+        let f = app.run("Frame", &[Op::create(p, NodeSpec::frame("F", 400.0, 400.0).at(50.0, 50.0))]).unwrap().created[0];
+        // A into F (middle of its row): stays where it is on the page.
+        let _ = app.update(Message::LayerPress(ids[0]));
+        let _ = app.update(Message::LayerHover(f, crate::view::LAYER_ROW / 2.0));
+        let _ = app.update(Message::LayerRelease);
+        assert_eq!(app.doc().parent(ids[0]), Some(f));
+        assert_eq!(app.doc().world_bounds(ids[0]).unwrap().x0, 100.0);
+        // C above B (top of B's row): one higher in the stack than B.
+        let _ = app.update(Message::LayerPress(ids[2]));
+        let _ = app.update(Message::LayerHover(ids[1], 2.0));
+        let _ = app.update(Message::LayerRelease);
+        let kids = app.doc().children(p);
+        assert_eq!(kids.iter().position(|&c| c == ids[2]), Some(kids.iter().position(|&c| c == ids[1]).unwrap() + 1));
+        // Can't drop a frame into its own child.
+        let _ = app.update(Message::LayerPress(f));
+        let _ = app.update(Message::LayerHover(ids[0], 13.0));
+        assert_eq!(app.layer_drag.unwrap().target, None);
+        let _ = app.update(Message::LayerRelease);
+
+        let _ = app.update(Message::StartRename(ids[1]));
+        let _ = app.update(Message::RenameInput("Card".into()));
+        let _ = app.update(Message::RenameSubmit);
+        assert_eq!(app.doc().node(ids[1]).unwrap().name, "Card");
+    }
+
+    #[test]
+    fn unsaved_changes_are_asked_about() {
+        let mut app = app();
+        three_rects(&mut app);
+        let _ = app.update(Message::New);
+        assert_eq!(app.confirm, Some(After::New), "dirty: ask first");
+        assert_eq!(app.doc().children(app.page).len(), 3);
+        let _ = app.update(Message::ConfirmCancel);
+        assert_eq!(app.confirm, None);
+        assert_eq!(app.doc().children(app.page).len(), 3);
+        let _ = app.update(Message::Quit);
+        assert_eq!(app.confirm, Some(After::Quit));
+        let _ = app.update(Message::ConfirmCancel);
+        let _ = app.update(Message::New);
+        let _ = app.update(Message::ConfirmDiscard);
+        assert!(app.doc().children(app.page).is_empty(), "discarded");
+        let _ = app.update(Message::New);
+        assert_eq!(app.confirm, None, "clean: no question");
     }
 
     #[test]
