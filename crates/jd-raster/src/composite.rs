@@ -74,7 +74,7 @@ pub fn dissolve_seed(layer_index: usize) -> u32 {
     layer_index as u32 + 1
 }
 
-fn layer_source(layer: &Layer, pixels: &TileGrid, index: usize, x: u32, y: u32, space: BlendSpace) -> Option<[f32; 4]> {
+pub(crate) fn layer_source(layer: &Layer, pixels: &TileGrid, index: usize, x: u32, y: u32, space: BlendSpace) -> Option<[f32; 4]> {
     if !layer.visible || layer.opacity <= 0.0 {
         return None;
     }
@@ -105,7 +105,7 @@ pub fn pixel(doc: &Document, x: u32, y: u32) -> [f32; 4] {
 
 /// Every layer's look (pixels plus effects), computed once for many pixel lookups.
 fn rendered(doc: &Document) -> Vec<TileGrid> {
-    doc.layers().iter().map(|l| l.rendered().into_owned()).collect()
+    doc.rendered_layers().into_iter().map(|g| g.into_owned()).collect()
 }
 
 fn pixel_in(doc: &Document, grids: &[TileGrid], x: u32, y: u32) -> [f32; 4] {

@@ -117,6 +117,10 @@ impl Document {
             return false;
         }
         let (lower, upper) = (&self.layers()[i - 1], &self.layers()[i]);
+        // Like Photoshop, nothing merges into an adjustment layer.
+        if lower.adjustment.is_some() {
+            return false;
+        }
         let base = Layer { opacity: 1.0, blend: BlendMode::Normal, visible: true, ..lower.clone() };
         let top = Layer { visible: upper.visible, ..upper.clone() };
         let merged = merge(&[&base, &top], self.blend_space, self.width, self.height, None);
@@ -125,6 +129,7 @@ impl Document {
             l.pixels = merged;
             l.style = Default::default();
             l.mask = None;
+            l.text = None;
         }
         self.remove_layer(upper_id);
         self.set_active(lower_id);
@@ -147,6 +152,8 @@ impl Document {
             l.pixels = merged;
             l.style = Default::default();
             l.mask = None;
+            l.adjustment = None;
+            l.text = None;
             l.opacity = 1.0;
             l.blend = BlendMode::Normal;
         }
@@ -173,7 +180,7 @@ impl Document {
 /// one grid. With `matte`, the result is flattened over that colour (opaque).
 pub fn merge(layers: &[&Layer], space: BlendSpace, w: u32, h: u32, matte: Option<[u8; 3]>) -> TileGrid {
     // Effects are baked in, like Photoshop's merge.
-    let grids: Vec<TileGrid> = layers.iter().map(|l| l.rendered().into_owned()).collect();
+    let grids: Vec<TileGrid> = crate::render::render_layers(layers, space, w, h).into_iter().map(|g| g.into_owned()).collect();
     let bounds = layers
         .iter()
         .zip(&grids)

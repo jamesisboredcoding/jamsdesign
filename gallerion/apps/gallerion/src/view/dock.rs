@@ -157,6 +157,25 @@ fn swatches<'a>() -> Element<'a, Message> {
 
 fn properties_panel(app: &Photo) -> Element<'_, Message> {
     let content: Element<'_, Message> = match (app.props_tab, app.document().and_then(|d| d.active())) {
+        (0, Some(layer)) if layer.adjustment.is_some() => {
+            let name = layer.adjustment.as_ref().map_or("", |a| a.name());
+            column![
+                row![icon(Icon::Adjust, 14.0, ICON), text(&layer.name).size(TEXT_SIZE_SMALL).font(bold())].spacing(6).align_y(Vertical::Center),
+                label(format!("{name} adjustment layer: it changes every layer below it. Paint its mask to limit where.")),
+                button(text("Edit Adjustment...").size(TEXT_SIZE_SMALL))
+                    .padding(Padding::from([5, 10]))
+                    .style(style::ghost(false))
+                    .on_press_maybe(app.adjusting.is_none().then_some(Message::EditAdjustment(layer.id))),
+                row![
+                    label("Opacity").width(Fill),
+                    super::field::number(app, "props-opacity", format!("{:.0}%", layer.opacity * 100.0), 52, 100.0, 0.0..=1.0, Message::LayerOpacity),
+                ]
+                .align_y(Vertical::Center),
+                slider(0.0..=1.0, layer.opacity, Message::LayerOpacity).step(0.01_f32).on_release(Message::EndGesture).style(style::slider),
+            ]
+            .spacing(8)
+            .into()
+        }
         (0, Some(layer)) => column![
             row![icon(Icon::Layers, 14.0, ICON), text(&layer.name).size(TEXT_SIZE_SMALL).font(bold())]
                 .spacing(6)
@@ -186,10 +205,12 @@ fn properties_panel(app: &Photo) -> Element<'_, Message> {
 
 /// The Adjustments tab: every adjustment and filter one click away (they apply to the active
 /// layer, like the Image and Filter menus; adjustment layers aren't there yet).
+/// Photoshop's Adjustments panel: adjustment layers (non-destructive), plus the filters, which
+/// apply to the active layer.
 fn adjustments(app: &Photo) -> Element<'_, Message> {
     use crate::adjust::OpKind::*;
-    let editable = app.document().and_then(|d| d.active()).is_some_and(|l| !l.locked);
-    let items = [
+    let doc = app.document().is_some() && app.adjusting.is_none();
+    let layers = [
         ("Brightness/Contrast", BrightnessContrast),
         ("Levels", Levels),
         ("Curves", Curves),
@@ -198,6 +219,23 @@ fn adjustments(app: &Photo) -> Element<'_, Message> {
         ("Posterize", Posterize),
         ("Invert", Invert),
         ("Desaturate", Desaturate),
+    ];
+    let mut adjust_grid = column![].spacing(4);
+    for pair in layers.chunks(2) {
+        let mut r = row![].spacing(4);
+        for &(name, kind) in pair {
+            r = r.push(
+                button(text(name).size(TEXT_SIZE_SMALL))
+                    .width(Fill)
+                    .padding(Padding::from([5, 8]))
+                    .style(style::ghost(false))
+                    .on_press_maybe(doc.then_some(Message::NewAdjustmentLayer(kind))),
+            );
+        }
+        adjust_grid = adjust_grid.push(r);
+    }
+    let editable = app.document().and_then(|d| d.active()).is_some_and(|l| !l.locked && l.adjustment.is_none());
+    let items = [
         ("Gaussian Blur", GaussianBlur),
         ("Box Blur", BoxBlur),
         ("Sharpen", Sharpen),
@@ -221,8 +259,10 @@ fn adjustments(app: &Photo) -> Element<'_, Message> {
         grid = grid.push(r);
     }
     column![
+        label("Add an adjustment layer (changes everything below it, editable later):"),
+        adjust_grid,
+        label(if editable { "Filters (applied to the active layer):" } else { "Filters (select an unlocked pixel layer):" }),
         grid,
-        label(if editable { "Applies to the active layer (Ctrl+Z undoes)." } else { "Select an unlocked layer to adjust." }),
     ]
     .spacing(8)
     .into()
@@ -357,7 +397,15 @@ fn layers_panel(app: &Photo) -> Element<'_, Message> {
             }
         };
         // Pressing a thumbnail picks what edits go to (and still selects / drags the layer).
-        let thumb: Element<'_, Message> = mouse_area(thumb_image(open.thumbs.get(&layer.id).map(|t| &t.1))).on_press(Message::ThumbPress(layer.id, false)).into();
+        let thumb: Element<'_, Message> = if layer.adjustment.is_some() {
+            // Adjustment layers have no pixels: an icon; double-click edits the adjustment.
+            mouse_area(container(icon(Icon::Adjust, 18.0, iced::Color::from_rgb8(0x30, 0x30, 0x30))).center(Fill))
+                .on_press(Message::ThumbPress(layer.id, false))
+                .on_double_click(Message::EditAdjustment(layer.id))
+                .into()
+        } else {
+            mouse_area(thumb_image(open.thumbs.get(&layer.id).map(|t| &t.1))).on_press(Message::ThumbPress(layer.id, false)).into()
+        };
         let mask = layer.mask.as_ref().map(|m| {
             let mut s = iced::widget::stack![thumb_image(open.mask_thumbs.get(&layer.id).map(|t| &t.1))];
             if !m.enabled {
@@ -411,7 +459,7 @@ fn layers_panel(app: &Photo) -> Element<'_, Message> {
         (Icon::Link, None, "Link layers (not available yet)"),
         (Icon::Fx, Some(Message::ShowDialog(crate::app::DialogKind::BlendingOptions)), "Layer style"),
         (Icon::Mask, Some(Message::AddMask), "Add layer mask (Alt: hide all)"),
-        (Icon::Adjust, None, "New adjustment layer (not available yet)"),
+        (Icon::Adjust, Some(Message::OpenAdjustMenu), "New adjustment layer"),
         (Icon::Folder, None, "New group (not available yet)"),
         (Icon::Plus, Some(Message::AddLayer), "New layer"),
         (Icon::Trash, Some(Message::DeleteLayer), "Delete layer"),

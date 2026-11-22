@@ -72,15 +72,17 @@ impl Scene {
             layers: doc
                 .layers()
                 .iter()
+                .zip(doc.rendered_layers())
                 .enumerate()
-                .map(|(i, l)| SceneLayer {
+                .map(|(i, (l, look))| SceneLayer {
                     visible: l.visible,
                     opacity: l.opacity,
                     blend: l.blend,
                     dissolve_seed: composite::dissolve_seed(i),
                     transform: IDENTITY,
                     // Pixels plus layer effects (cached, so the tiles stay the same between frames).
-                    tiles: l.rendered().iter_all().map(|(x, y, t)| ([x, y], t.clone())).collect(),
+                    // (Adjustment layers: the adjusted layers below.)
+                    tiles: look.iter_all().map(|(x, y, t)| ([x, y], t.clone())).collect(),
                 })
                 .collect(),
             retain: Vec::new(),

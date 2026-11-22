@@ -79,6 +79,33 @@ pub enum OpKind {
 }
 
 impl OpKind {
+    /// The adjustments (what adjustment layers can be).
+    pub const ADJUSTMENTS: [OpKind; 8] = [
+        OpKind::BrightnessContrast,
+        OpKind::Levels,
+        OpKind::Curves,
+        OpKind::HueSaturation,
+        OpKind::Threshold,
+        OpKind::Posterize,
+        OpKind::Invert,
+        OpKind::Desaturate,
+    ];
+
+    /// Which dialog edits this adjustment (`None`: it has no dialog, like Auto Tone's tables).
+    pub fn of(adj: &Adjustment) -> Option<OpKind> {
+        Some(match adj {
+            Adjustment::BrightnessContrast { .. } => OpKind::BrightnessContrast,
+            Adjustment::Levels { .. } => OpKind::Levels,
+            Adjustment::Curves { .. } => OpKind::Curves,
+            Adjustment::HueSaturation { .. } => OpKind::HueSaturation,
+            Adjustment::Threshold { .. } => OpKind::Threshold,
+            Adjustment::Posterize { .. } => OpKind::Posterize,
+            Adjustment::Invert => OpKind::Invert,
+            Adjustment::Desaturate => OpKind::Desaturate,
+            Adjustment::ChannelLut(_) => return None,
+        })
+    }
+
     /// Applied straight away, without a dialog (like Photoshop's Invert / Desaturate).
     pub fn is_instant(self) -> bool {
         matches!(self, OpKind::Invert | OpKind::Desaturate | OpKind::Sharpen)
@@ -117,6 +144,9 @@ pub struct Session {
     /// Matches render results to the settings that produced them.
     generation: u64,
     preview_generation: u64,
+    /// Editing an adjustment layer (its settings before the dialog opened): changes apply to
+    /// the layer live instead of rendering a preview.
+    pub layer_original: Option<Adjustment>,
 }
 
 impl Session {
@@ -124,6 +154,9 @@ impl Session {
         let layer = doc.active().ok_or("No layer selected")?;
         if layer.locked {
             return Err("The layer is locked");
+        }
+        if layer.adjustment.is_some() && !doc.editing_mask() {
+            return Err("Adjustment layers have no pixels: double-click the thumbnail to change the adjustment");
         }
         if layer.lock_pixels {
             return Err("The layer's pixels are locked");
@@ -153,7 +186,54 @@ impl Session {
             generation,
             first_generation: generation,
             preview_generation: 0,
+            layer_original: None,
         })
+    }
+
+    /// Opens the dialog for an adjustment layer's settings.
+    pub fn begin_layer(doc_id: u64, doc: &Document, id: LayerId) -> Result<Self, &'static str> {
+        let index = doc.layers().iter().position(|l| l.id == id).ok_or("No layer selected")?;
+        let adj = doc.layers()[index].adjustment.clone().ok_or("Not an adjustment layer")?;
+        let kind = OpKind::of(&adj).ok_or("This adjustment has no settings to change")?;
+        // Levels / Curves show the histogram of what the layer adjusts: everything below.
+        let histogram = if index == 0 {
+            [0; 256]
+        } else {
+            let mut below = doc.clone();
+            for l in &doc.layers()[index..] {
+                below.remove_layer(l.id);
+            }
+            let flat = jd_raster::composite::flatten(&below);
+            adjust::histogram(&TileGrid::from_rgba8(doc.width, doc.height, &flat), None)
+        };
+        let generation = next_generation();
+        Ok(Self {
+            doc: doc_id,
+            layer: id,
+            mask: false,
+            kind,
+            op: Op::Adjust(adj.clone()),
+            original: TileGrid::empty(1, 1),
+            selection: None,
+            histogram,
+            preview: None,
+            preview_enabled: true,
+            rendering: false,
+            stale: false,
+            generation,
+            first_generation: generation,
+            preview_generation: 0,
+            layer_original: Some(adj),
+        })
+    }
+
+    /// The adjustment an adjustment layer should show now (`None`: not editing a layer).
+    pub fn layer_adjustment(&self) -> Option<Adjustment> {
+        let original = self.layer_original.as_ref()?;
+        match (&self.op, self.preview_enabled) {
+            (Op::Adjust(a), true) => Some(a.clone()),
+            _ => Some(original.clone()),
+        }
     }
 
     pub fn set_op(&mut self, op: Op) {
@@ -170,7 +250,7 @@ impl Session {
 
     /// Starts a preview render if one is due and none is running.
     pub fn schedule(&mut self) -> Task<Message> {
-        if self.rendering || !self.stale || !self.preview_enabled {
+        if self.rendering || !self.stale || !self.preview_enabled || self.layer_original.is_some() {
             return Task::none();
         }
         self.rendering = true;

@@ -27,6 +27,7 @@ use rayon::prelude::*;
 use std::path::Path;
 use std::sync::Arc;
 
+use jd_raster::adjust::Adjustment;
 use jd_raster::mask::Mask;
 use jd_raster::style::{LayerStyle, StrokePosition};
 use jd_raster::text::{Align, TextLayer};
@@ -90,6 +91,62 @@ struct LayerEntry {
     /// Layer mask; its tiles are under `masks/<i>/`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mask: Option<MaskEntry>,
+    /// Adjustment layers: what they do to the layers below.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    adjustment: Option<AdjustmentEntry>,
+}
+
+/// An adjustment as `kind` plus its numbers (see `from_adjustment` for the layout).
+#[derive(Debug, Serialize, Deserialize)]
+struct AdjustmentEntry {
+    kind: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    values: Vec<f32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    points: Vec<[u8; 2]>,
+}
+
+impl AdjustmentEntry {
+    fn from_adjustment(a: &Adjustment) -> Self {
+        let (kind, values, points): (&str, Vec<f32>, Vec<[u8; 2]>) = match a {
+            Adjustment::BrightnessContrast { brightness, contrast } => ("brightness_contrast", vec![*brightness, *contrast], vec![]),
+            Adjustment::Levels { in_black, in_white, gamma, out_black, out_white } => {
+                ("levels", vec![*in_black as f32, *in_white as f32, *gamma, *out_black as f32, *out_white as f32], vec![])
+            }
+            Adjustment::Curves { points } => ("curves", vec![], points.iter().map(|&(i, o)| [i, o]).collect()),
+            Adjustment::HueSaturation { hue, saturation, lightness } => ("hue_saturation", vec![*hue, *saturation, *lightness], vec![]),
+            Adjustment::Threshold { level } => ("threshold", vec![*level as f32], vec![]),
+            Adjustment::Posterize { levels } => ("posterize", vec![*levels as f32], vec![]),
+            Adjustment::Invert => ("invert", vec![], vec![]),
+            Adjustment::Desaturate => ("desaturate", vec![], vec![]),
+            Adjustment::ChannelLut(t) => ("channel_lut", t.iter().flatten().map(|&v| v as f32).collect(), vec![]),
+        };
+        Self { kind: kind.into(), values, points }
+    }
+
+    /// `None` for unknown kinds or malformed numbers (the layer then loads as a plain layer).
+    fn to_adjustment(&self) -> Option<Adjustment> {
+        let v = |i: usize| self.values.get(i).copied();
+        let b = |i: usize| v(i).map(|x| x.clamp(0.0, 255.0) as u8);
+        Some(match self.kind.as_str() {
+            "brightness_contrast" => Adjustment::BrightnessContrast { brightness: v(0)?, contrast: v(1)? },
+            "levels" => Adjustment::Levels { in_black: b(0)?, in_white: b(1)?, gamma: v(2)?.clamp(0.1, 9.99), out_black: b(3)?, out_white: b(4)? },
+            "curves" if self.points.len() >= 2 => Adjustment::Curves { points: self.points.iter().map(|p| (p[0], p[1])).collect() },
+            "hue_saturation" => Adjustment::HueSaturation { hue: v(0)?, saturation: v(1)?, lightness: v(2)? },
+            "threshold" => Adjustment::Threshold { level: b(0)? },
+            "posterize" => Adjustment::Posterize { levels: b(0)?.max(2) },
+            "invert" => Adjustment::Invert,
+            "desaturate" => Adjustment::Desaturate,
+            "channel_lut" if self.values.len() == 768 => {
+                let mut t = Box::new([[0u8; 256]; 3]);
+                for (i, x) in self.values.iter().enumerate() {
+                    t[i / 256][i % 256] = x.clamp(0.0, 255.0) as u8;
+                }
+                Adjustment::ChannelLut(t)
+            }
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -283,6 +340,7 @@ pub fn write<W: Write + Seek>(doc: &Document, out: W) -> Result<W, SaveError> {
                 x: t.x,
                 y: t.y,
             }),
+            adjustment: layer.adjustment.as_ref().map(AdjustmentEntry::from_adjustment),
             mask: layer.mask.as_ref().map(|m| MaskEntry {
                 default: m.default,
                 enabled: m.enabled,
@@ -378,6 +436,7 @@ pub fn read<R: Read + Seek>(name: impl Into<String>, input: R) -> Result<Documen
         layer.blend = BlendMode::from_key(&entry.blend).unwrap_or_default();
         layer.pixels = grid;
         layer.mask = mask;
+        layer.adjustment = entry.adjustment.as_ref().and_then(AdjustmentEntry::to_adjustment);
         if let Some(style) = &entry.style {
             layer.style = style.to_style();
         }
@@ -469,6 +528,24 @@ mod tests {
         let bytes = write(&doc, std::io::Cursor::new(Vec::new())).unwrap().into_inner();
         let back = read("t", std::io::Cursor::new(bytes)).unwrap();
         assert_eq!(back.layers().last().unwrap().style, style);
+    }
+
+    #[test]
+    fn roundtrip_keeps_adjustment_layers() {
+        let mut doc = Document::blank("t", 20, 20);
+        for adj in [
+            Adjustment::Levels { in_black: 10, in_white: 240, gamma: 1.3, out_black: 5, out_white: 250 },
+            Adjustment::Curves { points: vec![(0, 10), (128, 140), (255, 255)] },
+            Adjustment::HueSaturation { hue: 30.0, saturation: -20.0, lightness: 5.0 },
+            Adjustment::Invert,
+        ] {
+            let id = doc.add_layer(adj.name());
+            doc.layer_mut(id).unwrap().adjustment = Some(adj);
+        }
+        let bytes = write(&doc, std::io::Cursor::new(Vec::new())).unwrap().into_inner();
+        let back = read("t", std::io::Cursor::new(bytes)).unwrap();
+        let a = |d: &Document| d.layers().iter().map(|l| l.adjustment.clone()).collect::<Vec<_>>();
+        assert_eq!(a(&back), a(&doc));
     }
 
     #[test]

@@ -26,6 +26,7 @@ pub fn popup(app: &Photo) -> Option<Element<'_, Message>> {
         PopupKind::Workspace => (workspaces(app), 200.0),
         PopupKind::ToolPresets => (tool_presets(app), 300.0),
         PopupKind::Panel(panel) => (panel_menu(app, panel), 200.0),
+        PopupKind::NewAdjustment => (new_adjustment(app), 220.0),
         PopupKind::Font => return None,
     };
     let height = menu_height(&entries);
@@ -273,6 +274,7 @@ fn menu_bar(app: &Photo, i: usize) -> Vec<MenuEntry<'_, Message>> {
                 ],
             ),
             Submenu("Layer Mask", mask_menu(app, doc, sel)),
+            Submenu("New Adjustment Layer", new_adjustment(app)),
             Separator,
             item("Merge Down", "Ctrl+E", s.can_merge_down, Message::MergeDown),
             item("Merge Visible", "Shift+Ctrl+E", doc, Message::MergeVisible),
@@ -419,12 +421,17 @@ fn layer_menu(app: &Photo) -> Vec<MenuEntry<'_, Message>> {
         .collect();
     let mut entries = vec![
         item("Blending Options...", "", s.doc && !locked, Message::ShowDialog(DialogKind::BlendingOptions)),
+    ];
+    if let Some(l) = layer.filter(|l| l.adjustment.is_some()) {
+        entries.push(item("Edit Adjustment...", "", app.adjusting.is_none(), Message::EditAdjustment(l.id)));
+    }
+    entries.extend(vec![
         item("Clear Layer Style", "", has_style && !locked, Message::ClearLayerStyle),
         item("Rasterize Layer Style", "", has_style && !locked, Message::RasterizeLayerStyle),
         Separator,
         item("Select Pixels", "", s.doc, Message::SelectPixels),
         Separator,
-    ];
+    ]);
     let mask = layer.and_then(|l| l.mask.as_ref());
     entries.extend(match mask {
         None => vec![item("Add Layer Mask", "", s.doc, Message::AddMask)],
@@ -456,6 +463,31 @@ fn layer_menu(app: &Photo) -> Vec<MenuEntry<'_, Message>> {
     ]);
     entries
 }
+
+/// New adjustment layer kinds (Layer > New Adjustment Layer, the Layers panel button).
+fn new_adjustment<'a>(app: &Photo) -> Vec<MenuEntry<'a, Message>> {
+    let ok = app.document().is_some() && app.adjusting.is_none();
+    crate::adjust::OpKind::ADJUSTMENTS
+        .iter()
+        .map(|&k| {
+            let name = match crate::adjust::Op::default_for(k) {
+                crate::adjust::Op::Adjust(a) => a.name(),
+                crate::adjust::Op::Filter(f) => f.name(),
+            };
+            item(if k.is_instant() { name } else { DIALOG_NAMES.iter().find(|(n, _)| *n == name).map_or(name, |(_, d)| d) }, "", ok, Message::NewAdjustmentLayer(k))
+        })
+        .collect()
+}
+
+/// Adjustments that open a dialog get "..." in menus.
+const DIALOG_NAMES: [(&str, &str); 6] = [
+    ("Brightness/Contrast", "Brightness/Contrast..."),
+    ("Levels", "Levels..."),
+    ("Curves", "Curves..."),
+    ("Hue/Saturation", "Hue/Saturation..."),
+    ("Threshold", "Threshold..."),
+    ("Posterize", "Posterize..."),
+];
 
 /// A dock panel's ≡ menu.
 fn panel_menu(app: &Photo, panel: Panel) -> Vec<MenuEntry<'_, Message>> {

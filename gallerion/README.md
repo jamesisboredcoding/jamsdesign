@@ -111,6 +111,11 @@ left-click in, right-click out.
       saved presets, Reset Tool / Reset All Tools); dock panels resize by the strip below
       them and move by dragging their tab strip (or their ≡ menu); Lock Image Pixels and
       Lock Position
+- [x] 6e: adjustment layers (Layer > New Adjustment Layer, the Layers panel's adjustment
+      button, or the Adjustments panel): Brightness/Contrast, Levels, Curves, Hue/Saturation,
+      Threshold, Posterize, Invert, Desaturate. They change every layer below, through their
+      mask (a selection becomes the mask), with their own opacity and blend mode; double-click
+      the thumbnail to change the settings (live, one undo step). Saved in .jdp
 - [ ] 6: PSD import, Flatpak, Pen tool
 
 ## App icon
@@ -169,7 +174,10 @@ Try it: `cargo run -p jd-io --example demo_doc -- demo.jdp base.jpg top.jpg`
 - The clipboard is internal to Gallerion (iced only exposes text clipboard access).
 - Marching ants don't animate. Transforms use bilinear resampling (Photoshop uses bicubic by
   default), so large downscales can alias.
-- Adjustments are destructive (applied to the layer); adjustment layers come later. Levels and
+- Image > Adjustments are destructive (applied to the layer); use adjustment layers to keep
+  them editable. Adjustment layers are computed on the CPU (cached per tile: about 0.2 s the
+  first time on a 15 MP image, 30 ms per settings change); while a filter dialog or a
+  transform previews a layer below one, the adjustment shows the layer as it was. Levels and
   Curves work on all channels together (no per-channel R/G/B yet). Brightness/Contrast is close
   to, not identical to, Photoshop's. Large blurs take about 0.4 s per update on a 15 MP layer,
   and OK waits for the final render if the preview hasn't caught up. Filters refuse images over

@@ -12,6 +12,7 @@ pub mod style;
 pub mod text;
 pub mod image_ops;
 pub mod mask;
+pub mod render;
 mod history;
 pub mod paint;
 pub mod selection;
@@ -46,6 +47,9 @@ pub struct Layer {
     pub text: Option<text::TextLayer>,
     /// Layer mask: hides parts of the layer without changing its pixels.
     pub mask: Option<mask::Mask>,
+    /// Set on adjustment layers: instead of pixels, they show the layers below adjusted
+    /// (see [`render`]).
+    pub adjustment: Option<adjust::Adjustment>,
 }
 
 impl Layer {
@@ -146,6 +150,7 @@ impl Document {
             style: style::LayerStyle::default(),
             text: None,
             mask: None,
+            adjustment: None,
         };
         let index = self
             .active
@@ -230,9 +235,17 @@ impl Document {
         }
     }
 
-    /// Whether edits currently go to the active layer's mask.
+    /// Whether edits currently go to the active layer's mask (always, on an adjustment
+    /// layer: it has no pixels of its own).
     pub fn editing_mask(&self) -> bool {
-        self.mask_target && self.active().is_some_and(|l| l.mask.is_some())
+        self.active().is_some_and(|l| l.mask.is_some() && (self.mask_target || l.adjustment.is_some()))
+    }
+
+    /// What each layer looks like, bottom to top: pixels with mask and effects, and for
+    /// adjustment layers the adjusted layers below. Everything that draws layers uses this.
+    pub fn rendered_layers(&self) -> Vec<std::borrow::Cow<'_, TileGrid>> {
+        let layers: Vec<&Layer> = self.layers.iter().collect();
+        render::render_layers(&layers, self.blend_space, self.width, self.height)
     }
 
     fn index_of(&self, id: LayerId) -> Option<usize> {

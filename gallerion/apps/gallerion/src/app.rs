@@ -293,6 +293,8 @@ pub enum PopupKind {
     ToolPresets,
     /// A panel's menu (its ≡ icon).
     Panel(Panel),
+    /// New adjustment layer kinds (the Layers panel's adjustment button).
+    NewAdjustment,
 }
 
 impl Default for TypeOptions {
@@ -721,6 +723,12 @@ pub enum Message {
     FieldCommit,
     /// Escape anywhere, even inside a text field (which swallows it).
     EscapePressed,
+    /// Layer > New Adjustment Layer (adds it above the active layer and opens its settings).
+    NewAdjustmentLayer(adj::OpKind),
+    /// Opens an adjustment layer's settings (double-click its thumbnail).
+    EditAdjustment(LayerId),
+    /// The Layers panel's adjustment button: a menu of adjustment layers.
+    OpenAdjustMenu,
     /// Typed zoom (stored units: 1 = 100%), keeping the view's centre.
     ZoomPercent(f32),
     /// A typed Free Transform value (scale as a fraction, angle in degrees).
@@ -1369,7 +1377,9 @@ impl Photo {
             Message::AdjustSet(op) => {
                 if let Some(s) = self.adjusting.as_mut() {
                     s.set_op(op);
-                    return s.schedule();
+                    let task = s.schedule();
+                    self.sync_adjustment_layer();
+                    return task;
                 }
             }
             Message::AdjustPreviewReady(generation, grid) => {
@@ -1379,18 +1389,42 @@ impl Photo {
             }
             Message::AdjustTogglePreview => {
                 if let Some(s) = self.adjusting.as_mut() {
-                    return s.toggle_preview();
+                    let task = s.toggle_preview();
+                    self.sync_adjustment_layer();
+                    return task;
                 }
             }
             Message::AdjustReset => {
                 if let Some(s) = self.adjusting.as_mut() {
                     s.reset();
-                    return s.schedule();
+                    let task = s.schedule();
+                    self.sync_adjustment_layer();
+                    return task;
                 }
             }
             Message::AdjustOk => {
                 let Some(s) = self.adjusting.take() else { return Task::none() };
                 let Some(i) = self.doc_index(s.doc) else { return Task::none() };
+                // An adjustment layer: the layer already shows the new settings; record the
+                // old ones as one undo step.
+                if let Some(original) = s.layer_original.clone() {
+                    let now = match &s.op {
+                        Op::Adjust(a) => a.clone(),
+                        Op::Filter(_) => original.clone(),
+                    };
+                    let d = &mut self.docs[i];
+                    if let Some(l) = d.doc.layer_mut(s.layer) {
+                        l.adjustment = Some(now.clone());
+                    }
+                    if now != original {
+                        let mut before = d.doc.clone();
+                        if let Some(l) = before.layer_mut(s.layer) {
+                            l.adjustment = Some(original);
+                        }
+                        d.history.record(&format!("Modify {} Layer", now.name()), &before, None);
+                    }
+                    return Task::none();
+                }
                 if matches!(s.op, Op::Filter(_)) {
                     self.last_filter = Some(s.op.clone());
                 }
@@ -1401,7 +1435,56 @@ impl Photo {
                     *l.target_mut(s.mask) = pixels;
                 }
             }
-            Message::AdjustCancel => self.adjusting = None,
+            Message::AdjustCancel => {
+                if let Some(s) = self.adjusting.take()
+                    && let Some(original) = s.layer_original
+                    && let Some(i) = self.doc_index(s.doc)
+                    && let Some(l) = self.docs[i].doc.layer_mut(s.layer)
+                {
+                    l.adjustment = Some(original);
+                }
+            }
+            Message::NewAdjustmentLayer(kind) => {
+                let Op::Adjust(adj) = Op::default_for(kind) else { return Task::none() };
+                if self.adjusting.is_some() || self.document().is_none() {
+                    return Task::none();
+                }
+                let name = adj.name();
+                self.edit(&format!("New {name} Layer"), None, |doc| {
+                    let n = doc.layers().iter().filter(|l| l.adjustment.as_ref().is_some_and(|a| a.name() == name)).count() + 1;
+                    let (w, h) = (doc.width, doc.height);
+                    // The selection becomes its mask, like Photoshop.
+                    let mask = match doc.selection.take() {
+                        Some(sel) => Mask::from_selection(&sel, false),
+                        None => Mask::new(w, h, 255),
+                    };
+                    let id = doc.add_layer(format!("{name} {n}"));
+                    let Some(l) = doc.layer_mut(id) else { return false };
+                    l.adjustment = Some(adj);
+                    l.mask = Some(mask);
+                    true
+                });
+                if !kind.is_instant()
+                    && let Some(id) = self.document().and_then(|d| d.active_id())
+                {
+                    return self.update(Message::EditAdjustment(id));
+                }
+            }
+            Message::EditAdjustment(id) => {
+                if self.adjusting.is_some() {
+                    return Task::none();
+                }
+                let _ = self.update(Message::SelectLayer(id));
+                let Some(d) = self.doc() else { return Task::none() };
+                match adj::Session::begin_layer(d.id, &d.doc, id) {
+                    Ok(s) => self.adjusting = Some(s),
+                    Err(e) => self.error(e),
+                }
+            }
+            Message::OpenAdjustMenu => {
+                let at = Point::new(self.window_size.width - self.dock_width + self.dock_pointer.x - 120.0, crate::view::TOOLBAR_TOP + self.dock_pointer.y);
+                self.popup = Some(Popup { kind: PopupKind::NewAdjustment, at, sub: None });
+            }
 
             Message::LayerPress(id) => {
                 let _ = self.update(Message::SelectLayer(id));
@@ -2758,11 +2841,13 @@ impl Photo {
         self.edit("Duplicate Layer", None, |doc| {
             let pixels = centred(&layer.pixels, doc.width, doc.height);
             let mask = layer.mask.as_ref().map(|m| Mask { pixels: centred(&m.pixels, doc.width, doc.height), ..m.clone() });
+            let adjustment = layer.adjustment.clone();
             let id = doc.add_layer(layer.name.clone());
             doc.layer_mut(id)
                 .map(|l| {
                     l.pixels = pixels;
                     l.mask = mask;
+                    l.adjustment = adjustment;
                     l.opacity = layer.opacity;
                     l.blend = layer.blend;
                     l.visible = layer.visible;
@@ -2961,6 +3046,10 @@ impl Photo {
                 self.error("The layer's pixels are locked");
                 false
             }
+            Some(l) if l.adjustment.is_some() && l.mask.is_none() => {
+                self.error("Adjustment layers have no pixels: add a mask to paint on");
+                false
+            }
             Some(_) => true,
         }
     }
@@ -2989,6 +3078,18 @@ impl Photo {
                 self.error(e);
                 false
             }
+        }
+    }
+
+    /// Shows an adjustment layer's dialog settings on the layer itself (live preview).
+    fn sync_adjustment_layer(&mut self) {
+        let Some(s) = &self.adjusting else { return };
+        let Some(adj) = s.layer_adjustment() else { return };
+        let (doc, layer) = (s.doc, s.layer);
+        if let Some(i) = self.doc_index(doc)
+            && let Some(l) = self.docs[i].doc.layer_mut(layer)
+        {
+            l.adjustment = Some(adj);
         }
     }
 
@@ -3363,6 +3464,10 @@ impl Photo {
         }
         if layer.lock_pixels {
             self.error("The layer's pixels are locked");
+            return;
+        }
+        if layer.adjustment.is_some() && layer.mask.is_none() {
+            self.error("Adjustment layers have no pixels: add a mask to paint on");
             return;
         }
         if !layer.visible {
@@ -4064,6 +4169,54 @@ mod tests {
         assert!((app.zoom_factor() - 0.5).abs() < 1e-6);
         let after = doc_point_under(&app, centre);
         assert!((before.0 - after.0).abs() < 0.5 && (before.1 - after.1).abs() < 0.5, "{before:?} {after:?}");
+    }
+
+    fn flat(app: &Photo, x: u32, y: u32) -> [u8; 4] {
+        jd_raster::composite::pixel_srgb8(app.document().unwrap(), x, y)
+    }
+
+    #[test]
+    fn adjustment_layers_change_whats_below_and_stay_editable() {
+        let (mut app, _) = Photo::new();
+        white(&mut app, 60, 40);
+        // Invert has no dialog: one undo step, white below becomes black.
+        let _ = app.update(Message::NewAdjustmentLayer(OpKind::Invert));
+        assert!(app.adjusting.is_none());
+        assert_eq!(flat(&app, 5, 5), [0, 0, 0, 255]);
+        assert_eq!(px(&app, 5, 5), [255, 255, 255, 255], "the pixels below are untouched");
+        // Its mask is what edits go to: painting black there brings back the original.
+        app.brush.size = 6.0;
+        app.brush.hardness = 1.0;
+        app.brush.smoothing = 0.0;
+        let _ = app.update(Message::StrokeBegin { at: Point::new(30.0, 20.0), pressure: 1.0, erase: false, line: false });
+        let _ = app.update(Message::StrokeEnd);
+        assert_eq!(flat(&app, 30, 20), [255, 255, 255, 255]);
+        let _ = app.update(Message::Undo);
+        let _ = app.update(Message::Undo);
+        assert_eq!(app.document().unwrap().layers().len(), 1);
+
+        // Levels opens its dialog; changes show live, Cancel puts them back.
+        let _ = app.update(Message::NewAdjustmentLayer(OpKind::Levels));
+        assert!(app.adjusting.as_ref().is_some_and(|s| s.layer_original.is_some()));
+        let dark = jd_raster::adjust::Adjustment::Levels { in_black: 0, in_white: 255, gamma: 1.0, out_black: 0, out_white: 100 };
+        let _ = app.update(Message::AdjustSet(Op::Adjust(dark.clone())));
+        assert_eq!(flat(&app, 5, 5)[0], 100, "live");
+        let _ = app.update(Message::AdjustCancel);
+        assert_eq!(flat(&app, 5, 5)[0], 255);
+        // Reopen (double-click), change, OK: one more undo step that Ctrl+Z reverts.
+        let id = app.document().unwrap().active_id().unwrap();
+        let _ = app.update(Message::EditAdjustment(id));
+        let _ = app.update(Message::AdjustSet(Op::Adjust(dark)));
+        let _ = app.update(Message::AdjustOk);
+        assert_eq!(flat(&app, 5, 5)[0], 100);
+        let _ = app.update(Message::Undo);
+        assert_eq!(flat(&app, 5, 5)[0], 255);
+        assert!(app.document().unwrap().active().unwrap().adjustment.is_some(), "only the change was undone");
+        // Image > Adjustments on it work on its mask (it has no pixels).
+        let _ = app.update(Message::OpenOp(OpKind::Invert));
+        assert_eq!(flat(&app, 5, 5)[0], 255);
+        let m = app.document().unwrap().active().unwrap().mask.as_ref().unwrap().value_at(5, 5);
+        assert_eq!(m, 0, "the mask was inverted");
     }
 
     #[test]
