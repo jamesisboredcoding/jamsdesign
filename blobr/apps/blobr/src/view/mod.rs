@@ -1,10 +1,12 @@
 //! The main window, laid out like the Figma mockup: toolbar, Layers panel, canvas and Design
 //! panel on a dark gutter, under the suite's title bar.
 
+mod assets;
 mod canvas;
 mod design;
 mod layers;
 mod menus;
+mod variables;
 
 use iced::alignment::Vertical;
 use iced::widget::{button, column, container, mouse_area, row, space, stack, text};
@@ -67,6 +69,9 @@ pub fn view(app: &Blobr) -> Element<'_, Message> {
     }
     if let Some(popup) = menus::popup(app) {
         layers = layers.push(popup);
+    }
+    if app.variables_open {
+        layers = layers.push(variables::view(app));
     }
     if let Some(after) = app.confirm {
         layers = layers.push(confirm(app, after));

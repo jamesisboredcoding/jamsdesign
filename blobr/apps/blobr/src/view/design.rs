@@ -9,7 +9,85 @@ use jd_vector::component::parse_variant;
 use jd_vector::{Direction, ExportFormat, Node, NodeKind, Paint, PaintKind, PropDef, PropValue, Sizing};
 
 use super::COMPONENT;
-use crate::app::{Blobr, Field, Message};
+use crate::app::{Blobr, Field, Message, PropLink};
+
+/// A choice in a pick list: an id and what to show.
+#[derive(Debug, Clone, PartialEq)]
+struct Choice<T>(T, String);
+
+impl<T> std::fmt::Display for Choice<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.1)
+    }
+}
+
+fn picker<'a, T: Clone + PartialEq + 'a>(options: Vec<Choice<T>>, selected: Option<Choice<T>>, on: impl Fn(T) -> Message + 'a) -> Element<'a, Message> {
+    pick_list(options, selected, move |c: Choice<T>| on(c.0))
+        .text_size(TEXT_SIZE_SMALL)
+        .padding(Padding::from([3, 6]))
+        .style(style::pick_list)
+        .width(Fill)
+        .into()
+}
+
+/// The selected component's properties: add, remove, defaults.
+fn component_props<'a>(app: &'a Blobr, n: &'a Node) -> Option<Element<'a, Message>> {
+    let NodeKind::Component { properties, .. } = &n.kind else { return None };
+    let mut col = column![].spacing(6);
+    for (name, def) in properties {
+        let control: Element<'_, Message> = match def {
+            PropDef::Text { default } => field(app, "", Field::PropDefault(name.clone()), || default.clone()),
+            PropDef::Boolean { default } => {
+                let nm = name.clone();
+                checkbox(*default).on_toggle(move |b| Message::SetPropertyDefault(nm.clone(), PropValue::Bool(b))).size(14).into()
+            }
+            PropDef::InstanceSwap { .. } => text("instance swap").size(TEXT_SIZE_SMALL).color(TEXT_MUTED).into(),
+        };
+        col = col.push(
+            row![
+                text(name.clone()).size(TEXT_SIZE_SMALL).color(COMPONENT).width(70),
+                control,
+                button(icon(Icon::Minus, 12.0, ICON)).padding(3).style(style::ghost(false)).on_press(Message::RemoveProperty(name.clone())),
+            ]
+            .spacing(6)
+            .align_y(Vertical::Center),
+        );
+    }
+    let add = |label: &'static str, kind: &'static str| {
+        button(text(label).size(TEXT_SIZE_SMALL)).padding(Padding::from([3, 8])).style(style::ghost(false)).on_press(Message::AddProperty(kind))
+    };
+    col = col.push(row![add("+ Text", "text"), add("+ Boolean", "boolean")].spacing(6));
+    if properties.is_empty() {
+        col = col.push(text("Then link layers inside the component to them.").size(10).color(TEXT_MUTED));
+    }
+    Some(column![section("Properties", None), body(col)].into())
+}
+
+/// For a layer inside a component: which component properties drive it.
+fn property_links<'a>(app: &'a Blobr, n: &'a Node) -> Option<Element<'a, Message>> {
+    let owner = app.owning_component(n.id).filter(|&c| c != n.id)?;
+    let NodeKind::Component { properties, .. } = &app.doc().node(owner)?.kind else { return None };
+    let of = |want: fn(&PropDef) -> bool| -> Vec<Choice<Option<String>>> {
+        std::iter::once(Choice(None, "None".into()))
+            .chain(properties.iter().filter(|(_, d)| want(d)).map(|(k, _)| Choice(Some(k.clone()), k.clone())))
+            .collect()
+    };
+    let current = |v: &Option<String>| Some(Choice(v.clone(), v.clone().unwrap_or_else(|| "None".into())));
+    let line = |label: &'static str, opts: Vec<Choice<Option<String>>>, cur: &Option<String>, link: PropLink| {
+        row![text(label).size(TEXT_SIZE_SMALL).color(TEXT_SECONDARY).width(70), picker(opts, current(cur), move |p| Message::LinkProperty(link, p))]
+            .align_y(Vertical::Center)
+    };
+    let refs = &n.props.refs;
+    let mut col = column![line("Visible", of(|d| matches!(d, PropDef::Boolean { .. })), &refs.visible, PropLink::Visible)].spacing(6);
+    if matches!(n.kind, NodeKind::Text { .. }) {
+        col = col.push(line("Text", of(|d| matches!(d, PropDef::Text { .. })), &refs.text, PropLink::Text));
+    }
+    if matches!(n.kind, NodeKind::Instance { .. }) {
+        col = col.push(line("Swap", of(|d| matches!(d, PropDef::InstanceSwap { .. })), &refs.swap, PropLink::Swap));
+    }
+    let name = app.doc().node(owner).map_or(String::new(), |c| c.name.clone());
+    Some(column![section(format!("Component property ({name})"), None), body(col)].into())
+}
 
 pub fn view(app: &Blobr) -> Element<'_, Message> {
     let body: Element<'_, Message> = match app.selection.as_slice() {
@@ -35,7 +113,7 @@ fn input_style(_: &Theme, status: text_input::Status) -> text_input::Style {
 }
 
 /// A labelled value box.
-fn field<'a>(app: &Blobr, label: &'a str, f: Field, value: impl FnOnce() -> String) -> Element<'a, Message> {
+pub(super) fn field<'a>(app: &Blobr, label: &'a str, f: Field, value: impl FnOnce() -> String) -> Element<'a, Message> {
     let current = app.draft(&f, value);
     let f2 = f.clone();
     row![
@@ -143,6 +221,14 @@ fn page(app: &Blobr) -> Element<'_, Message> {
     column![
         section("Page", None),
         body(column![row![swatch(&bg), field(app, "", Field::PageBackground, || bg.clone())].spacing(8).align_y(Vertical::Center)]),
+        section("Local variables", None),
+        body(
+            button(text(variables_summary(app)).size(TEXT_SIZE_SMALL))
+                .padding(Padding::from([4, 10]))
+                .style(style::ghost(false))
+                .on_press(Message::ShowVariables(true))
+        ),
+        local_styles(app),
         section("Get started", None),
         body(
             text("F frame  ·  R rectangle  ·  O ellipse  ·  T text\nDrag to draw, click to select, Space or middle-drag to pan, Ctrl+scroll to zoom.")
@@ -153,7 +239,7 @@ fn page(app: &Blobr) -> Element<'_, Message> {
     .into()
 }
 
-fn swatch<'a>(hex: &str) -> Element<'a, Message> {
+pub(super) fn swatch<'a>(hex: &str) -> Element<'a, Message> {
     let c = jd_core::Rgba::from_hex(hex).map_or(Color::TRANSPARENT, |c| {
         let [r, g, b] = c.to_srgb();
         Color::from_rgb(r, g, b)
@@ -186,6 +272,19 @@ fn node<'a>(app: &'a Blobr, n: &'a Node) -> Element<'a, Message> {
 
     if !many && let NodeKind::Instance { component, .. } = &n.kind {
         col = col.push(instance(app, n.id, *component));
+    }
+    if many && all(app, |n| matches!(n.kind, NodeKind::Component { .. })) {
+        col = col.push(body(
+            button(text("Combine as variants").size(TEXT_SIZE_SMALL)).padding(Padding::from([4, 10])).style(style::ghost(false)).on_press(Message::CombineVariants),
+        ));
+    }
+    if !many {
+        if let Some(props) = component_props(app, n) {
+            col = col.push(props);
+        }
+        if let Some(links) = property_links(app, n) {
+            col = col.push(links);
+        }
     }
 
     col = col.push(section("Layout", None));
@@ -249,6 +348,12 @@ fn node<'a>(app: &'a Blobr, n: &'a Node) -> Element<'a, Message> {
         }
     }
 
+    if !many
+        && n.kind.is_frame_like()
+        && let Some(m) = modes(app, n)
+    {
+        col = col.push(m);
+    }
     col = col.push(section("Appearance", None));
     col = col.push(body(field(app, "%", Field::Opacity, || shared(app, |n| num(n.props.opacity as f64 * 100.0)))));
 
@@ -262,6 +367,7 @@ fn node<'a>(app: &'a Blobr, n: &'a Node) -> Element<'a, Message> {
         col = col.push(section("Text", None));
         col = col.push(body(
             column![
+                text_tokens(app, n),
                 field(app, "", Field::Text, || shared(app, |n| text_of(n).map_or(String::new(), |t| t.content.replace('\n', "\\n")))),
                 pair(
                     field(app, "Sz", Field::FontSize, || shared(app, |n| text_of(n).map_or(String::new(), |t| num(t.style.size as f64)))),
@@ -285,7 +391,7 @@ fn node<'a>(app: &'a Blobr, n: &'a Node) -> Element<'a, Message> {
             }
         };
         col = col.push(section("Fill", Some((Icon::Plus, Message::AddFill))));
-        col = col.push(body(mixed(true)));
+        col = col.push(body(column![fill_tokens(app, n), mixed(true)].spacing(8)));
         col = col.push(section("Stroke", Some((Icon::Plus, Message::AddStroke))));
         let mut stroke = column![mixed(false)].spacing(8);
         if !p.strokes.is_empty() {
@@ -378,7 +484,137 @@ fn instance<'a>(app: &'a Blobr, id: jd_vector::NodeId, component: jd_vector::Nod
         };
         col = col.push(row![label, control].align_y(Vertical::Center));
     }
+    // Swap: any other placeable component (a set places its first variant).
+    let doc = app.doc();
+    let options: Vec<Choice<jd_vector::NodeId>> = app
+        .components()
+        .into_iter()
+        .filter_map(|(c, _)| {
+            let n = doc.node(c)?;
+            let target = if matches!(n.kind, NodeKind::ComponentSet { .. }) { *doc.children(c).first()? } else { c };
+            Some(Choice(target, n.name.clone()))
+        })
+        .collect();
+    let current = options.iter().find(|c| c.0 == component || doc.parent(component) == doc.parent(c.0) && doc.component_set_of(component).is_some()).cloned();
+    col = col.push(row![text("Component").size(TEXT_SIZE_SMALL).color(TEXT_SECONDARY).width(70), picker(options, current, Message::SwapComponent)].align_y(Vertical::Center));
     let action = |label: &'a str, m: Message| button(text(label).size(TEXT_SIZE_SMALL)).padding(Padding::from([4, 10])).style(style::ghost(false)).on_press(m);
     col = col.push(row![action("Detach", Message::Detach), action("Reset", Message::ResetOverrides)].spacing(8));
     body(col)
+}
+
+fn variables_summary(app: &Blobr) -> String {
+    let t = app.doc().tokens();
+    match (t.collections.len(), t.variables.len()) {
+        (0, _) => "Open variables".into(),
+        (c, v) => format!("{v} variable{} in {c} collection{}", if v == 1 { "" } else { "s" }, if c == 1 { "" } else { "s" }),
+    }
+}
+
+/// The document's styles (nothing selected): swatch or sample, name to rename, delete.
+fn local_styles(app: &Blobr) -> Element<'_, Message> {
+    let styles = &app.doc().tokens().styles;
+    let mut col = column![].spacing(6);
+    for (&id, st) in styles {
+        let sample: Element<'_, Message> = match &st.kind {
+            jd_vector::StyleKind::Paint { paints } => match paints.first().map(|p| &p.kind) {
+                Some(PaintKind::Solid { color }) => swatch(&color.to_hex()),
+                _ => icon(Icon::Gradient, 12.0, ICON).into(),
+            },
+            jd_vector::StyleKind::Text { text: t } => text(format!("Ag {}", t.size)).size(10).color(TEXT_SECONDARY).width(36).into(),
+            jd_vector::StyleKind::Effect { .. } => icon(Icon::Fx, 12.0, ICON).into(),
+        };
+        col = col.push(
+            row![
+                sample,
+                field(app, "", Field::StyleName(id), || st.name.clone()),
+                button(icon(Icon::Minus, 12.0, ICON)).padding(3).style(style::ghost(false)).on_press(Message::DeleteToken(id)),
+            ]
+            .spacing(8)
+            .align_y(Vertical::Center),
+        );
+    }
+    if styles.is_empty() {
+        col = col.push(text("Select a layer and use the style button by Fill or Text to make one.").size(10).color(TEXT_MUTED));
+    }
+    column![section("Local styles", None), body(col)].into()
+}
+
+/// Style and variable controls for the first selected layer's fills.
+fn fill_tokens<'a>(app: &'a Blobr, n: &'a Node) -> Element<'a, Message> {
+    let tokens = app.doc().tokens();
+    let paint_styles: Vec<Choice<Option<jd_vector::NodeId>>> = std::iter::once(Choice(None, "No style".into()))
+        .chain(tokens.styles.iter().filter(|(_, s)| matches!(s.kind, jd_vector::StyleKind::Paint { .. })).map(|(&id, s)| Choice(Some(id), s.name.clone())))
+        .collect();
+    let current_style = paint_styles.iter().find(|c| c.0 == n.props.styles.fill).cloned();
+    let mut col = column![
+        row![
+            text("Style").size(TEXT_SIZE_SMALL).color(TEXT_SECONDARY).width(56),
+            picker(paint_styles, current_style, Message::UseFillStyle),
+            jd_ui::widget::hover_tip(
+                button(icon(Icon::Plus, 12.0, ICON)).padding(3).style(style::ghost(false)).on_press(Message::CreateFillStyle),
+                "Create a style from these fills",
+                iced::widget::tooltip::Position::Bottom,
+            ),
+        ]
+        .spacing(6)
+        .align_y(Vertical::Center)
+    ]
+    .spacing(6);
+    if n.props.styles.fill.is_none() && !n.props.fills.is_empty() {
+        let colors: Vec<Choice<Option<jd_vector::NodeId>>> = std::iter::once(Choice(None, "No variable".into()))
+            .chain(
+                tokens
+                    .variables
+                    .iter()
+                    .filter(|(_, v)| v.values.values().next().is_some_and(|x| matches!(x, jd_vector::VarValue::Color(_) | jd_vector::VarValue::Alias(_))))
+                    .map(|(&id, v)| Choice(Some(id), v.name.clone())),
+            )
+            .collect();
+        let bound = n.props.bind.get("fills/0").copied();
+        let current = colors.iter().find(|c| c.0 == bound).cloned();
+        col = col.push(
+            row![text("Variable").size(TEXT_SIZE_SMALL).color(TEXT_SECONDARY).width(56), picker(colors, current, |v| Message::BindFill(0, v))]
+                .spacing(6)
+                .align_y(Vertical::Center),
+        );
+    }
+    col.into()
+}
+
+/// A text layer's text style.
+fn text_tokens<'a>(app: &'a Blobr, n: &'a Node) -> Element<'a, Message> {
+    let tokens = app.doc().tokens();
+    let styles: Vec<Choice<Option<jd_vector::NodeId>>> = std::iter::once(Choice(None, "No style".into()))
+        .chain(tokens.styles.iter().filter(|(_, s)| matches!(s.kind, jd_vector::StyleKind::Text { .. })).map(|(&id, s)| Choice(Some(id), s.name.clone())))
+        .collect();
+    let current = styles.iter().find(|c| c.0 == n.props.styles.text).cloned();
+    row![
+        text("Style").size(TEXT_SIZE_SMALL).color(TEXT_SECONDARY).width(56),
+        picker(styles, current, Message::UseTextStyle),
+        jd_ui::widget::hover_tip(
+            button(icon(Icon::Plus, 12.0, ICON)).padding(3).style(style::ghost(false)).on_press(Message::CreateTextStyle),
+            "Create a text style from this text",
+            iced::widget::tooltip::Position::Bottom,
+        ),
+    ]
+    .spacing(6)
+    .align_y(Vertical::Center)
+    .into()
+}
+
+/// A frame's mode for each collection with more than one mode.
+fn modes<'a>(app: &'a Blobr, n: &'a Node) -> Option<Element<'a, Message>> {
+    let tokens = app.doc().tokens();
+    let mut col = column![].spacing(6);
+    let mut any = false;
+    for (&cid, c) in tokens.collections.iter().filter(|(_, c)| c.modes.len() > 1) {
+        any = true;
+        let opts: Vec<Choice<Option<String>>> = std::iter::once(Choice(None, "Auto (inherit)".into())).chain(c.modes.iter().map(|m| Choice(Some(m.clone()), m.clone()))).collect();
+        let current = opts.iter().find(|o| o.0.as_ref() == n.props.modes.get(&cid)).cloned();
+        col = col.push(
+            row![text(c.name.clone()).size(TEXT_SIZE_SMALL).color(TEXT_SECONDARY).width(70), picker(opts, current, move |m| Message::SetMode(cid, m))]
+                .align_y(Vertical::Center),
+        );
+    }
+    any.then(|| column![section("Variable modes", None), body(col)].into())
 }

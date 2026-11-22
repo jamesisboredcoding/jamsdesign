@@ -74,6 +74,18 @@ impl History {
         Some(step.label)
     }
 
+    /// Folds the last step into the one before it (two batches that are one action for the
+    /// user, like creating a style and then using it).
+    pub fn merge_last(&mut self) {
+        if self.undo.len() >= 2 {
+            self.undo.pop();
+            self.gesture = None;
+            if self.saved_at.is_some_and(|s| s > self.undo.len()) {
+                self.saved_at = None;
+            }
+        }
+    }
+
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }

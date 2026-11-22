@@ -18,7 +18,7 @@ use jd_vector::clip::Clip;
 use jd_vector::snap::{self, Edges, Line};
 use jd_vector::{
     AutoLayout, Direction, Document, Editor, ExportFormat, NodeId, NodeKind, NodeSpec, Op, Padding, Paint, PaintKind, Patch, PropDef,
-    PropValue, Sizing, TextStyle, file,
+    PropValue, Sizing, StyleKind, TextStyle, VarValue, file,
 };
 use jd_vector_render::{CosmicMeasure, RenderOptions, export_svg, render_png, render_region};
 use kurbo::{Affine, Rect, Vec2};
@@ -108,6 +108,17 @@ pub struct LayerDrag {
     pub target: Option<(NodeId, Drop)>,
 }
 
+/// How a layer inside a component follows a component property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PropLink {
+    /// A text property sets the characters.
+    Text,
+    /// A boolean property shows or hides it.
+    Visible,
+    /// An instance-swap property picks the component.
+    Swap,
+}
+
 /// What to do once unsaved changes are dealt with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum After {
@@ -143,6 +154,11 @@ pub enum Field {
     Stroke(usize),
     StrokeWeight,
     Prop(String),
+    /// A component's text property default.
+    PropDefault(String),
+    VarName(NodeId),
+    VarValue(NodeId, String),
+    StyleName(NodeId),
     PageBackground,
 }
 
@@ -191,6 +207,38 @@ pub enum Message {
     CopyAsPng,
     Align(Align),
     Boolean(BoolOp),
+    LeftTab(usize),
+    /// The Local variables dialog.
+    ShowVariables(bool),
+    SelectCollection(NodeId),
+    AddCollection,
+    AddMode,
+    /// Add a variable of a type: "color", "number", "text" or "bool".
+    AddVariable(&'static str),
+    DeleteToken(NodeId),
+    SetVarBool(NodeId, String, bool),
+    /// Bind fill `index` of the selection to a colour variable (None unbinds).
+    BindFill(usize, Option<NodeId>),
+    /// Use a paint style for the fills, or a text style (None detaches).
+    UseFillStyle(Option<NodeId>),
+    UseTextStyle(Option<NodeId>),
+    /// Make a style from the selection's fills or text.
+    CreateFillStyle,
+    CreateTextStyle,
+    /// Pick a frame's mode for a collection (None: inherit).
+    SetMode(NodeId, Option<String>),
+    AssetFilter(String),
+    /// Place an instance of this component.
+    InsertComponent(NodeId),
+    CombineVariants,
+    SwapComponent(NodeId),
+    /// Add a component property: "text" or "boolean".
+    AddProperty(&'static str),
+    RemoveProperty(String),
+    SetPropertyDefault(String, PropValue),
+    /// Link the selected layer (inside a component) to a property: which link, and the
+    /// property's name (None unlinks).
+    LinkProperty(PropLink, Option<String>),
     Flatten,
     Distribute(bool),
     Group,
@@ -279,6 +327,15 @@ pub struct Blobr {
     pub pen: Option<PenPath>,
     /// A vector whose points are being edited.
     pub vector_edit: Option<VectorEdit>,
+    /// The left panel's tab: 0 Layers, 1 Assets.
+    pub left_tab: usize,
+    /// The Local variables dialog is open, showing this collection.
+    pub variables_open: bool,
+    pub var_collection: Option<NodeId>,
+    pub asset_filter: String,
+    /// Small pictures of components for the Assets panel, and the version they show.
+    pub thumbnails: HashMap<NodeId, image::Handle>,
+    thumbs_version: u64,
     last_click: Option<(Instant, Point)>,
     fit_pending: bool,
 }
@@ -335,6 +392,12 @@ impl Blobr {
             text_edit: None,
             pen: None,
             vector_edit: None,
+            left_tab: 0,
+            variables_open: false,
+            var_collection: None,
+            asset_filter: String::new(),
+            thumbnails: HashMap::new(),
+            thumbs_version: u64::MAX,
             last_click: None,
             fit_pending: false,
         };
@@ -395,6 +458,7 @@ impl Blobr {
             self.drafts.clear();
         }
         // While dragging, mouse moves can outpace the screen: render once per frame instead.
+        self.refresh_thumbnails();
         if self.drag.is_none() { Task::batch([task, self.refresh()]) } else { task }
     }
 
@@ -473,6 +537,134 @@ impl Blobr {
                     }
                     None => self.error("Nothing to copy: the layer is empty or hidden".into()),
                 }
+            }
+            Message::LeftTab(t) => self.left_tab = t,
+            Message::ShowVariables(open) => {
+                self.variables_open = open;
+                if self.var_collection.is_none_or(|c| !self.doc().tokens().collections.contains_key(&c)) {
+                    self.var_collection = self.doc().tokens().collections.keys().next().copied();
+                }
+            }
+            Message::SelectCollection(c) => self.var_collection = Some(c),
+            Message::AddCollection => {
+                let n = self.doc().tokens().collections.len() + 1;
+                let op = Op::CreateCollection { name: format!("Collection {n}"), modes: vec!["Mode 1".into()], key: Some("c".into()) };
+                if let Some(done) = self.run("Add collection", &[op]) {
+                    self.var_collection = done.id("c");
+                }
+            }
+            Message::AddMode => {
+                if let Some(c) = self.var_collection {
+                    let n = self.doc().tokens().collections.get(&c).map_or(1, |c| c.modes.len() + 1);
+                    self.run("Add mode", &[Op::SetCollection { id: c.into(), name: None, add_mode: Some(format!("Mode {n}")) }]);
+                }
+            }
+            Message::AddVariable(kind) => {
+                if self.var_collection.is_none() {
+                    let _ = self.handle(Message::AddCollection);
+                }
+                let Some(c) = self.var_collection else { return Task::none() };
+                let Some(col) = self.doc().tokens().collections.get(&c) else { return Task::none() };
+                let value = match kind {
+                    "color" => VarValue::Color(Rgba::from_hex("#4C8DFF").expect("valid")),
+                    "number" => VarValue::Number(8.0),
+                    "text" => VarValue::Text("Text".into()),
+                    _ => VarValue::Bool(true),
+                };
+                let label = match kind {
+                    "color" => "Color",
+                    "number" => "Number",
+                    "text" => "Text",
+                    _ => "Boolean",
+                };
+                let n = (1..)
+                    .find(|i| !self.doc().tokens().variables.values().any(|v| v.collection == c && v.name == format!("{label} {i}")))
+                    .expect("endless");
+                let values = [(col.modes[0].clone(), value)].into();
+                self.run("Add variable", &[Op::CreateVariable { collection: c.into(), name: format!("{label} {n}"), values, key: None }]);
+            }
+            Message::DeleteToken(id) => {
+                self.run("Delete", &[Op::DeleteToken { id: id.into() }]);
+                if self.var_collection == Some(id) {
+                    self.var_collection = self.doc().tokens().collections.keys().next().copied();
+                }
+            }
+            Message::SetVarBool(id, mode, b) => {
+                self.run("Set variable", &[Op::SetVariable { id: id.into(), name: None, mode: Some(mode), value: Some(VarValue::Bool(b)) }]);
+            }
+            Message::BindFill(i, var) => {
+                let key = format!("fills/{i}");
+                self.per_node("Bind variable", |n| {
+                    (n.props.fills.len() > i || var.is_none()).then(|| Patch { bind: Some([(key.clone(), var)].into()), ..Patch::default() })
+                });
+            }
+            Message::UseFillStyle(style) => self.per_node("Fill style", |n| {
+                let mut refs = n.props.styles.clone();
+                refs.fill = style;
+                Some(Patch { styles: Some(refs), ..Patch::default() })
+            }),
+            Message::UseTextStyle(style) => self.per_node("Text style", |n| {
+                if !matches!(n.kind, NodeKind::Text { .. }) {
+                    return None;
+                }
+                let mut refs = n.props.styles.clone();
+                refs.text = style;
+                Some(Patch { styles: Some(refs), ..Patch::default() })
+            }),
+            Message::CreateFillStyle => {
+                let Some(n) = self.selection.first().and_then(|&id| self.doc().node(id)) else { return Task::none() };
+                let count = self.doc().tokens().styles.len() + 1;
+                let op = Op::CreateStyle { name: format!("Color {count}"), style: StyleKind::Paint { paints: n.props.fills.clone() }, key: Some("s".into()) };
+                // Styles are referenced by id, known only once created: two batches, one step.
+                if let Some(done) = self.run("Create style", &[op])
+                    && let Some(sid) = done.id("s")
+                {
+                    let _ = self.handle(Message::UseFillStyle(Some(sid)));
+                    self.ed.history.merge_last();
+                }
+            }
+            Message::CreateTextStyle => {
+                let Some(NodeKind::Text { text }) = self.selection.first().and_then(|&id| self.doc().node(id)).map(|n| &n.kind) else { return Task::none() };
+                let count = self.doc().tokens().styles.len() + 1;
+                let op = Op::CreateStyle { name: format!("Text {count}"), style: StyleKind::Text { text: text.style.clone() }, key: Some("s".into()) };
+                if let Some(done) = self.run("Create style", &[op])
+                    && let Some(sid) = done.id("s")
+                {
+                    let _ = self.handle(Message::UseTextStyle(Some(sid)));
+                    self.ed.history.merge_last();
+                }
+            }
+            Message::SetMode(collection, mode) => self.per_node("Variable mode", |n| {
+                n.kind.is_frame_like().then(|| Patch { modes: Some([(collection, mode.clone())].into()), ..Patch::default() })
+            }),
+            Message::AssetFilter(f) => self.asset_filter = f,
+            Message::InsertComponent(c) => self.insert_component(c),
+            Message::CombineVariants => self.combine_variants(),
+            Message::SwapComponent(c) => self.patch_selection("Swap instance", Patch { component: Some(c), ..Patch::default() }),
+            Message::AddProperty(kind) => self.add_property(kind),
+            Message::RemoveProperty(name) => self.edit_properties("Remove property", |props| {
+                props.remove(&name);
+            }),
+            Message::SetPropertyDefault(name, v) => self.edit_properties("Property default", move |props| {
+                if let Some(d) = props.get_mut(&name) {
+                    match (d, &v) {
+                        (PropDef::Text { default }, PropValue::Text(t)) => *default = t.clone(),
+                        (PropDef::Boolean { default }, PropValue::Bool(b)) => *default = *b,
+                        (PropDef::InstanceSwap { default }, PropValue::Node(n)) => *default = *n,
+                        _ => {}
+                    }
+                }
+            }),
+            Message::LinkProperty(link, prop) => {
+                self.per_node("Link property", |n| {
+                    let mut refs = n.props.refs.clone();
+                    match link {
+                        PropLink::Text => refs.text = prop.clone(),
+                        PropLink::Visible => refs.visible = prop.clone(),
+                        PropLink::Swap => refs.swap = prop.clone(),
+                    }
+                    Some(Patch { refs: Some(refs), ..Patch::default() })
+                });
             }
             Message::Boolean(op) => {
                 let ops = boolean::boolean(self.doc(), &self.selection, op);
@@ -872,6 +1064,8 @@ impl Blobr {
                     ("n", true, false, false) => Some(Message::New),
                     ("e", true, true, false) => Some(Message::Export(ExportFormat::Png)),
                     ("k", true, false, true) => Some(Message::CreateComponent),
+                    ("i", false, false, true) => Some(Message::LeftTab(1)),
+                    ("l", false, false, true) => Some(Message::LeftTab(0)),
                     ("b", true, false, true) => Some(Message::Detach),
                     ("a", false, true, false) => Some(Message::ToggleAutoLayout),
                     ("=" | "+", true, _, false) => Some(Message::ZoomIn),
@@ -1009,6 +1203,41 @@ impl Blobr {
         let Some(input) = self.drafts.remove(&f) else { return };
         let input = input.trim().to_owned();
         let num = || input.trim_end_matches(['%', '°']).parse::<f64>().ok();
+        // Variables and styles don't need a selection.
+        match &f {
+            Field::VarName(id) => {
+                if !input.is_empty() {
+                    self.run("Rename variable", &[Op::SetVariable { id: (*id).into(), name: Some(input), mode: None, value: None }]);
+                }
+                return;
+            }
+            Field::VarValue(id, mode) => {
+                let doc = self.doc();
+                let Some(var) = doc.tokens().variables.get(id) else { return };
+                let current = var.values.values().next().cloned();
+                let value = match current {
+                    Some(VarValue::Color(_)) => Rgba::from_hex(&input).map(VarValue::Color),
+                    Some(VarValue::Number(_)) => num().map(VarValue::Number),
+                    Some(VarValue::Bool(_)) => input.parse().ok().map(VarValue::Bool),
+                    // An alias can be replaced by a plain value of the same text.
+                    _ => Some(VarValue::Text(input.clone())),
+                };
+                match value {
+                    Some(v) => {
+                        self.run("Set variable", &[Op::SetVariable { id: (*id).into(), name: None, mode: Some(mode.clone()), value: Some(v) }]);
+                    }
+                    None => self.error(format!("{input:?} isn't a valid value")),
+                }
+                return;
+            }
+            Field::StyleName(id) => {
+                if !input.is_empty() {
+                    self.run("Rename style", &[Op::SetStyle { id: (*id).into(), name: Some(input), style: None }]);
+                }
+                return;
+            }
+            _ => {}
+        }
         let Some(&first) = self.selection.first() else {
             if f == Field::PageBackground
                 && let Some(c) = Rgba::from_hex(&input)
@@ -1105,7 +1334,8 @@ impl Blobr {
                 None => return bad(self),
             },
             Field::Prop(name) => Patch { values: Some([(name.clone(), PropValue::Text(input.clone()))].into()), ..Patch::default() },
-            Field::PageBackground => return,
+            Field::PropDefault(name) => return self.handle_default(name.clone(), input.clone()),
+            Field::PageBackground | Field::VarName(_) | Field::VarValue(..) | Field::StyleName(_) => return,
         };
         self.patch_selection("Edit", patch);
     }
@@ -1191,6 +1421,128 @@ impl Blobr {
         let spec = NodeSpec::text("Text", text.trim_end(), TextStyle { size: 16.0, ..TextStyle::default() }).at(c.x.round(), c.y.round());
         if let Some(done) = self.run("Paste text", &[Op::create(self.page, spec)]) {
             self.select(done.created[0], false);
+        }
+    }
+
+    // ----- Components --------------------------------------------------------------------
+
+    /// Every component in the document that can be placed: plain components and component
+    /// sets (not the variants inside a set), with the page each is on.
+    pub fn components(&self) -> Vec<(NodeId, NodeId)> {
+        let doc = self.doc();
+        let mut out = Vec::new();
+        for &p in doc.pages() {
+            for id in doc.descendants(p) {
+                let Some(n) = doc.node(id) else { continue };
+                let in_set = n.parent.and_then(|q| doc.node(q)).is_some_and(|q| matches!(q.kind, NodeKind::ComponentSet { .. }));
+                let placeable = matches!(n.kind, NodeKind::ComponentSet { .. }) || (matches!(n.kind, NodeKind::Component { .. }) && !in_set);
+                if placeable && !doc.is_inside_instance(id) {
+                    out.push((id, p));
+                }
+            }
+        }
+        out
+    }
+
+    /// The component that `id` sits in (or is), not counting instances.
+    pub fn owning_component(&self, id: NodeId) -> Option<NodeId> {
+        let doc = self.doc();
+        let mut cur = Some(id);
+        while let Some(c) = cur {
+            let n = doc.node(c)?;
+            match n.kind {
+                NodeKind::Component { .. } => return Some(c),
+                NodeKind::Instance { .. } | NodeKind::Page { .. } => return None,
+                _ => cur = n.parent,
+            }
+        }
+        None
+    }
+
+    /// An instance of `c` (a component set places its first variant) in the middle of the
+    /// view, or of the selected frame.
+    fn insert_component(&mut self, c: NodeId) {
+        let doc = self.doc();
+        let component = match doc.node(c).map(|n| &n.kind) {
+            Some(NodeKind::ComponentSet { .. }) => match doc.children(c).first() {
+                Some(&v) => v,
+                None => return self.error("this component set has no variants".into()),
+            },
+            Some(NodeKind::Component { .. }) => c,
+            _ => return,
+        };
+        let (parent, index) = self.paste_target(&[]);
+        let size = doc.node(component).map_or(kurbo::Size::ZERO, |n| kurbo::Size::new(n.props.width, n.props.height));
+        let center = if parent == self.page { self.view_rect().center() } else { doc.world_bounds(parent).map_or(self.view_rect().center(), |b| b.center()) };
+        let at = doc.world_transform(parent).inverse() * (center - size.to_vec2() / 2.0);
+        let op = Op::CreateInstance { parent: parent.into(), component: component.into(), key: Some("i".into()), index, x: at.x.round(), y: at.y.round() };
+        if let Some(done) = self.run("Place instance", &[op])
+            && let Some(i) = done.id("i")
+        {
+            self.select(i, false);
+        }
+    }
+
+    /// Puts the selected components in a component set, naming plain ones as variants.
+    fn combine_variants(&mut self) {
+        let doc = self.doc();
+        let comps: Vec<NodeId> = self.selection.iter().copied().filter(|&id| doc.node(id).is_some_and(|n| matches!(n.kind, NodeKind::Component { .. }))).collect();
+        if comps.len() < 2 {
+            return self.error("select two or more components to combine".into());
+        }
+        let mut ops = Vec::new();
+        for &c in &comps {
+            let name = &doc.node(c).expect("checked").name;
+            if jd_vector::component::parse_variant(name).is_empty() {
+                ops.push(Op::set(c, Patch { name: Some(format!("Property 1={name}")), ..Patch::default() }));
+            }
+        }
+        let base = doc.node(comps[0]).map(|n| n.name.split('=').next_back().unwrap_or("Component").trim().to_owned()).unwrap_or_default();
+        ops.push(Op::CombineAsVariants { ids: comps.iter().map(|&c| c.into()).collect(), name: base, key: Some("set".into()) });
+        if let Some(done) = self.run("Combine as variants", &ops)
+            && let Some(set) = done.id("set")
+        {
+            self.select(set, false);
+        }
+    }
+
+    fn handle_default(&mut self, name: String, value: String) {
+        let _ = self.handle(Message::SetPropertyDefault(name, PropValue::Text(value)));
+    }
+
+    /// Changes the selected component's property definitions.
+    fn edit_properties(&mut self, label: &str, f: impl Fn(&mut std::collections::BTreeMap<String, PropDef>)) {
+        let [id] = self.selection[..] else { return };
+        let Some(NodeKind::Component { properties, .. }) = self.doc().node(id).map(|n| &n.kind) else { return };
+        let mut props = properties.clone();
+        f(&mut props);
+        self.run(label, &[Op::set(id, Patch { properties: Some(props), ..Patch::default() })]);
+    }
+
+    fn add_property(&mut self, kind: &'static str) {
+        let [id] = self.selection[..] else { return };
+        let Some(NodeKind::Component { properties, .. }) = self.doc().node(id).map(|n| &n.kind) else { return };
+        let base = if kind == "text" { "Text" } else { "Show" };
+        let name = (1..).map(|i| if i == 1 { base.to_owned() } else { format!("{base} {i}") }).find(|n| !properties.contains_key(n)).expect("endless");
+        let def = if kind == "text" { PropDef::Text { default: "Text".into() } } else { PropDef::Boolean { default: true } };
+        self.edit_properties("Add property", move |props| {
+            props.insert(name.clone(), def.clone());
+        });
+    }
+
+    /// Re-renders component thumbnails when the document changed and Assets is showing.
+    fn refresh_thumbnails(&mut self) {
+        if self.left_tab != 1 || self.thumbs_version == self.version {
+            return;
+        }
+        self.thumbs_version = self.version;
+        self.thumbnails.clear();
+        for (id, _) in self.components() {
+            let Some(n) = self.doc().node(id) else { continue };
+            let scale = (40.0 / n.props.width.max(n.props.height).max(1.0)).min(2.0) * self.scale_factor as f64;
+            if let Some(pm) = jd_vector_render::render_node(self.doc(), id, RenderOptions { scale, ..RenderOptions::default() }) {
+                self.thumbnails.insert(id, image::Handle::from_rgba(pm.width(), pm.height(), clipboard::to_rgba(&pm)));
+            }
         }
     }
 
@@ -2365,6 +2717,105 @@ mod tests {
         assert!(app.status.error);
         let _ = app.update(Message::Flatten);
         assert!(matches!(app.doc().node(app.selection[0]).unwrap().kind, NodeKind::Vector { .. }));
+    }
+
+    #[test]
+    fn components_properties_assets_and_variants() {
+        let mut app = app();
+        let p = app.page;
+        let done = app
+            .run(
+                "Add",
+                &[
+                    Op::create_as("btn", p, NodeSpec::frame("Button", 120.0, 40.0).at(0.0, 0.0)),
+                    Op::create_as("label", "btn", NodeSpec::text("Label", "OK", TextStyle::default()).at(10.0, 10.0)),
+                ],
+            )
+            .unwrap();
+        let (btn, label) = (done.id("btn").unwrap(), done.id("label").unwrap());
+        app.selection = vec![btn];
+        let _ = app.update(Message::CreateComponent);
+        let _ = app.update(Message::AddProperty("text"));
+        let _ = app.update(Message::FieldInput(Field::PropDefault("Text".into()), "Go".into()));
+        let _ = app.update(Message::FieldSubmit(Field::PropDefault("Text".into())));
+        app.select(label, false);
+        assert_eq!(app.owning_component(label), Some(btn));
+        let _ = app.update(Message::LinkProperty(PropLink::Text, Some("Text".into())));
+
+        // Assets lists it; clicking places an instance whose label follows the property.
+        let _ = app.update(Message::LeftTab(1));
+        assert_eq!(app.components().iter().map(|c| c.0).collect::<Vec<_>>(), vec![btn]);
+        assert!(app.thumbnails.contains_key(&btn), "a picture for the Assets panel");
+        app.selection.clear();
+        let _ = app.update(Message::InsertComponent(btn));
+        let inst = app.selection[0];
+        let text_in = |app: &Blobr| {
+            app.doc().descendants(inst).into_iter().find_map(|d| match &app.doc().node(d)?.kind {
+                NodeKind::Text { text } => Some(text.content.clone()),
+                _ => None,
+            })
+        };
+        assert_eq!(text_in(&app).as_deref(), Some("Go"));
+        let _ = app.update(Message::FieldInput(Field::Prop("Text".into()), "Send".into()));
+        let _ = app.update(Message::FieldSubmit(Field::Prop("Text".into())));
+        assert_eq!(text_in(&app).as_deref(), Some("Send"));
+
+        // A second component, combined with the first into a set; then swap the instance.
+        let other = app.run("Add", &[Op::create(p, NodeSpec::frame("Ghost", 120.0, 40.0).at(0.0, 100.0))]).unwrap().created[0];
+        app.selection = vec![other];
+        let _ = app.update(Message::CreateComponent);
+        app.selection = vec![btn, other];
+        let _ = app.update(Message::CombineVariants);
+        let set = app.selection[0];
+        assert!(matches!(app.doc().node(set).unwrap().kind, NodeKind::ComponentSet { .. }), "{}", app.status.text);
+        assert_eq!(app.doc().node(btn).unwrap().name, "Property 1=Button");
+        app.selection = vec![inst];
+        let _ = app.update(Message::SwapComponent(other));
+        assert!(matches!(app.doc().node(inst).unwrap().kind, NodeKind::Instance { component, .. } if component == other));
+    }
+
+    #[test]
+    fn variables_modes_and_styles() {
+        let mut app = app();
+        let p = app.page;
+        let done = app
+            .run(
+                "Add",
+                &[
+                    Op::create_as("f", p, NodeSpec::frame("Screen", 200.0, 200.0)),
+                    Op::create_as("r", "f", NodeSpec::rect("Card", 50.0, 50.0)),
+                ],
+            )
+            .unwrap();
+        let (f, r) = (done.id("f").unwrap(), done.id("r").unwrap());
+        let _ = app.update(Message::ShowVariables(true));
+        let _ = app.update(Message::AddVariable("color"));
+        let c = app.var_collection.expect("a collection was made");
+        let _ = app.update(Message::AddMode);
+        let var = *app.doc().tokens().variables.keys().next().unwrap();
+        let _ = app.update(Message::FieldInput(Field::VarValue(var, "Mode 2".into()), "#111111".into()));
+        let _ = app.update(Message::FieldSubmit(Field::VarValue(var, "Mode 2".into())));
+        let _ = app.update(Message::ShowVariables(false));
+
+        let fill = |app: &Blobr| app.doc().node(r).unwrap().props.fills[0].clone();
+        app.select(r, false);
+        let _ = app.update(Message::BindFill(0, Some(var)));
+        assert_eq!(fill(&app), Paint::hex("#4C8DFF"), "the first mode's value");
+        app.select(f, false);
+        let _ = app.update(Message::SetMode(c, Some("Mode 2".into())));
+        assert_eq!(fill(&app), Paint::hex("#111111"), "the frame's mode applies inside it");
+
+        // A style made from a fill, in one undo step; renaming it.
+        app.select(r, false);
+        let _ = app.update(Message::BindFill(0, None));
+        let steps = app.ed.history.labels().count();
+        let _ = app.update(Message::CreateFillStyle);
+        assert_eq!(app.ed.history.labels().count(), steps + 1);
+        let sid = app.doc().node(r).unwrap().props.styles.fill.expect("uses the new style");
+        app.selection.clear();
+        let _ = app.update(Message::FieldInput(Field::StyleName(sid), "Brand/Dark".into()));
+        let _ = app.update(Message::FieldSubmit(Field::StyleName(sid)));
+        assert_eq!(app.doc().tokens().styles[&sid].name, "Brand/Dark");
     }
 
     #[test]

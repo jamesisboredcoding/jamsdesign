@@ -15,6 +15,9 @@ pub const ROW: f32 = 26.0;
 const INDENT: f32 = 14.0;
 
 pub fn view(app: &Blobr) -> Element<'_, Message> {
+    if app.left_tab == 1 {
+        return super::assets::view(app);
+    }
     let doc = app.doc();
     let mut pages = column![];
     for &p in doc.pages() {
@@ -38,7 +41,7 @@ pub fn view(app: &Blobr) -> Element<'_, Message> {
     let tree = iced::widget::Column::with_children(tree);
 
     column![
-        panel_header(&["Layers", "Assets"], 0, |_| Message::Noop),
+        panel_header(&["Layers", "Assets"], 0, Message::LeftTab),
         section("Pages", Some(Message::AddPage)),
         container(pages).padding(Padding::from([0, 6])),
         container(hline(BG_PANEL)).padding(Padding::from([6, 0])),

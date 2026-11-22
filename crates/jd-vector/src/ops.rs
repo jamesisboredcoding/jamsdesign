@@ -418,6 +418,15 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         key: Option<String>,
     },
+    /// Rename a collection and/or add a mode to it (variables use the first mode's value in a
+    /// new mode until given one).
+    SetCollection {
+        id: Ref,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        add_mode: Option<String>,
+    },
     CreateVariable {
         collection: Ref,
         name: String,
@@ -474,6 +483,7 @@ impl Op {
             Self::Detach { .. } => "detach",
             Self::ResetOverrides { .. } => "reset_overrides",
             Self::CreateCollection { .. } => "create_collection",
+            Self::SetCollection { .. } => "set_collection",
             Self::CreateVariable { .. } => "create_variable",
             Self::SetVariable { .. } => "set_variable",
             Self::CreateStyle { .. } => "create_style",
@@ -824,6 +834,19 @@ impl Batch {
                 self.remember(key, id)?;
                 doc.tokens.collections.insert(id, Collection { name: name.clone(), modes: modes.clone() });
                 self.created.push(id);
+            }
+            Op::SetCollection { id, name, add_mode } => {
+                let id = self.resolve_token(doc, id)?;
+                let c = doc.tokens.collections.get_mut(&id).ok_or("that isn't a collection")?;
+                if let Some(n) = name {
+                    c.name = n.clone();
+                }
+                if let Some(m) = add_mode {
+                    if m.trim().is_empty() || c.modes.contains(m) {
+                        return Err(format!("the collection already has a mode called {m:?}"));
+                    }
+                    c.modes.push(m.clone());
+                }
             }
             Op::CreateVariable { collection, name, values, key } => {
                 let collection = self.resolve_token(doc, collection)?;

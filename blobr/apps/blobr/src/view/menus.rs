@@ -80,6 +80,7 @@ fn entries(app: &Blobr, menu: usize) -> Vec<MenuEntry<'_, Message>> {
             item("Add Auto Layout", "Shift+A", on(sel, Message::ToggleAutoLayout)),
             Separator,
             item("Create Component", "Ctrl+Alt+K", on(sel, Message::CreateComponent)),
+            item("Combine as Variants", "", on(app.selection.len() >= 2, Message::CombineVariants)),
             item("Detach Instance", "Ctrl+Alt+B", on(sel, Message::Detach)),
             item("Reset All Overrides", "", on(sel, Message::ResetOverrides)),
             Separator,
@@ -113,7 +114,11 @@ fn entries(app: &Blobr, menu: usize) -> Vec<MenuEntry<'_, Message>> {
             item("Distribute Vertical Spacing", "Alt+Shift+V", on(app.selection.len() >= 3, Message::Distribute(false))),
         ],
         "Plugins" => vec![todo("Manage Plugins...", "")],
-        "Window" => vec![todo("Layers", "Alt+1"), todo("Assets", "Alt+2"), todo("Design", "")],
+        "Window" => vec![
+            item("Layers", "Alt+L", Some(Message::LeftTab(0))),
+            item("Assets", "Alt+I", Some(Message::LeftTab(1))),
+            item("Local Variables...", "", Some(Message::ShowVariables(true))),
+        ],
         "Help" => vec![todo("Keyboard Shortcuts", "Ctrl+Shift+?"), todo("About Blobr", "")],
         _ => Vec::new(),
     }

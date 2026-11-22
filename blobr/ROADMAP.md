@@ -132,9 +132,18 @@ CLI argument as a file to open. Names are provisional until Step 0.
   - Copy/paste within Blobr and to/from other apps as SVG/PNG; Comment tool with local pins
   - Boolean operations (union, subtract, intersect, exclude), flatten, outline stroke
 - [ ] Step 5: components and assets in the app
-  - Create component, instances, detach, reset overrides, variant switching from the
-    Design panel (as in the mockup)
-  - Assets panel; styles and variables panels with modes
+  - [x] Create component, instances, detach, reset overrides, variant switching from the
+        Design panel; combine as variants (plain names become `Property 1=...`), swap an
+        instance's component
+  - [x] Component properties (text, boolean) with defaults; layers inside a component link
+        to them (text, visibility, swap); instances set them
+  - [x] Assets panel: the document's components with thumbnails and search; click to place
+  - [x] Local variables dialog: collections, a column per mode, add/rename/delete variables
+        (colour, number, text, boolean) and modes
+  - [x] Fills bound to colour variables, frames pick a mode per collection; paint and text
+        styles created from a layer, applied, renamed and deleted
+  - [ ] Binding numbers (gap, padding, radius) from the panel, effect styles, instance-swap
+        properties, publishing components across files (a library)
 - [ ] Step 6: prototype and inspect
   - Prototype tab: connections between frames (on click, navigate, overlay, back), simple
     transitions, a presentation window
