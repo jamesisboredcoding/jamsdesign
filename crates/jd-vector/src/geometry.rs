@@ -17,7 +17,14 @@ pub fn outline(node: &Node) -> BezPath {
     let rect = Rect::new(0.0, 0.0, w, h);
     match &node.kind {
         NodeKind::Page { .. } => BezPath::new(),
-        NodeKind::Frame | NodeKind::Section | NodeKind::Rectangle | NodeKind::Group | NodeKind::Text { .. } => {
+        NodeKind::Frame
+        | NodeKind::Section
+        | NodeKind::Rectangle
+        | NodeKind::Group
+        | NodeKind::Text { .. }
+        | NodeKind::Component { .. }
+        | NodeKind::ComponentSet { .. }
+        | NodeKind::Instance { .. } => {
             rounded(rect, node.props.corner)
         }
         NodeKind::Ellipse { arc } => {
@@ -117,7 +124,13 @@ fn has_area(node: &Node) -> bool {
     match &node.kind {
         NodeKind::Line => false,
         NodeKind::Vector { path } => path.subpaths.iter().any(|s| s.closed) && node.props.fills.iter().any(|f| f.visible),
-        NodeKind::Frame | NodeKind::Section | NodeKind::Group | NodeKind::Text { .. } => true,
+        NodeKind::Frame
+        | NodeKind::Section
+        | NodeKind::Group
+        | NodeKind::Text { .. }
+        | NodeKind::Component { .. }
+        | NodeKind::ComponentSet { .. }
+        | NodeKind::Instance { .. } => true,
         _ => node.props.fills.iter().any(|f| f.visible),
     }
 }

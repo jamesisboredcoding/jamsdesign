@@ -145,7 +145,7 @@ impl Writer<'_> {
             }
         }
         if n.kind.is_container() {
-            let clips = n.props.clip && matches!(n.kind, NodeKind::Frame | NodeKind::Section);
+            let clips = n.props.clip && (n.kind.is_frame_like() || matches!(n.kind, NodeKind::Section));
             if clips {
                 let c = self.clip_path(&d);
                 let _ = write!(self.body, r#"<g clip-path="url(#{c})">"#);

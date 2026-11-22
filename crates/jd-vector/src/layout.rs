@@ -20,6 +20,8 @@ use crate::node::*;
 use crate::text::TextMeasure;
 
 const EPS: f64 = 1e-9;
+/// Space around the variants in a component set.
+pub const SET_PADDING: f64 = 20.0;
 
 pub fn run(doc: &mut Document, measure: &dyn TextMeasure) {
     for page in doc.pages().to_vec() {
@@ -56,12 +58,18 @@ fn layout(doc: &mut Document, id: NodeId, given: Given, m: &dyn TextMeasure) {
                 set_size(doc, id, props.width, props.clamp_height(h));
             }
         }
-        NodeKind::Frame if props.layout.is_some() => auto(doc, id, given, m),
+        k if k.is_frame_like() && props.layout.is_some() => auto(doc, id, given, m),
         NodeKind::Group => {
             for c in doc.children(id).to_vec() {
                 layout(doc, c, Given::NONE, m);
             }
-            fit_group(doc, id);
+            fit_group(doc, id, 0.0);
+        }
+        NodeKind::ComponentSet { .. } => {
+            for c in doc.children(id).to_vec() {
+                layout(doc, c, Given::NONE, m);
+            }
+            fit_group(doc, id, SET_PADDING);
         }
         _ => {
             for c in doc.children(id).to_vec() {
@@ -313,9 +321,9 @@ fn wrap(doc: &mut Document, id: NodeId, props: &Props, l: &AutoLayout, flow: &[N
     }
 }
 
-/// Shrinks or grows a group to its children's bounds, keeping the children where they are on
-/// the page.
-fn fit_group(doc: &mut Document, id: NodeId) {
+/// Shrinks or grows a group (or component set) to its children's bounds plus `pad`, keeping
+/// the children where they are on the page.
+fn fit_group(doc: &mut Document, id: NodeId, pad: f64) {
     let kids = doc.children(id).to_vec();
     let mut bounds: Option<Rect> = None;
     for &c in &kids {
@@ -331,6 +339,7 @@ fn fit_group(doc: &mut Document, id: NodeId) {
         }
     }
     let Some(b) = bounds else { return };
+    let b = b.inflate(pad, pad);
     if b.x0.abs() > EPS || b.y0.abs() > EPS {
         for &c in &kids {
             let p = &doc.node(c).expect("child").props;

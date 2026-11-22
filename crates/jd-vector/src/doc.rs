@@ -15,6 +15,7 @@ pub struct Document {
     pub(crate) pages: Vec<NodeId>,
     pub(crate) next_id: u64,
     pub(crate) images: BTreeMap<String, Arc<Vec<u8>>>,
+    pub(crate) tokens: crate::tokens::Tokens,
 }
 
 impl Default for Document {
@@ -42,7 +43,7 @@ impl Document {
 
     /// No pages at all (only valid as a starting point for loading).
     pub(crate) fn empty() -> Self {
-        Self { nodes: BTreeMap::new(), pages: Vec::new(), next_id: 1, images: BTreeMap::new() }
+        Self { nodes: BTreeMap::new(), pages: Vec::new(), next_id: 1, images: BTreeMap::new(), tokens: Default::default() }
     }
 
     pub fn pages(&self) -> &[NodeId] {

@@ -5,6 +5,7 @@
 //! counter-clockwise, about that corner (the same convention Figma uses, so it's familiar).
 //! Children are ordered bottom to top: the last child draws on top.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use jd_core::Rgba;
@@ -12,6 +13,7 @@ use kurbo::{BezPath, PathEl, Point};
 use serde::{Deserialize, Serialize};
 
 use crate::color;
+use crate::ops::Patch;
 
 /// A node's identity. Stable for the life of the document, including across saves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -80,12 +82,108 @@ pub enum NodeKind {
     Text {
         text: TextData,
     },
+    /// A reusable design. Behaves like a frame; its instances follow it.
+    Component {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        description: String,
+        /// Properties instances can set, by name.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        properties: BTreeMap<String, PropDef>,
+    },
+    /// Holds the variants of one component. Each child component is named like
+    /// `Size=Large, State=Default`. Sized to fit its children.
+    ComponentSet {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        description: String,
+    },
+    /// A copy of a component that follows it. Its children are rebuilt from the component
+    /// after every batch; edits to them are kept as overrides.
+    Instance {
+        component: NodeId,
+        /// Component property values set on this instance.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        values: BTreeMap<String, PropValue>,
+        /// Changes to the copied layers, by source key (see [`crate::component`]). The key
+        /// `""` is the instance itself.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        overrides: BTreeMap<String, Patch>,
+        /// Which of this instance's nodes copies which source node, by source key, so ids stay
+        /// the same each time the copy is rebuilt.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        map: BTreeMap<String, NodeId>,
+    },
+}
+
+/// A component property and its default.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PropDef {
+    Text { default: String },
+    Boolean { default: bool },
+    /// Which component a nested instance shows.
+    InstanceSwap { default: NodeId },
+}
+
+impl PropDef {
+    pub fn default_value(&self) -> PropValue {
+        match self {
+            Self::Text { default } => PropValue::Text(default.clone()),
+            Self::Boolean { default } => PropValue::Bool(*default),
+            Self::InstanceSwap { default } => PropValue::Node(*default),
+        }
+    }
+}
+
+/// A component property value. In JSON: `true`/`false`, a node id number, or a string.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PropValue {
+    Bool(bool),
+    Node(NodeId),
+    Text(String),
+}
+
+/// Which component properties drive this node (set on nodes inside a component).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PropRefs {
+    /// A text property that sets this text node's characters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// A boolean property that shows or hides this node.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visible: Option<String>,
+    /// An instance-swap property that picks this nested instance's component.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub swap: Option<String>,
+}
+
+/// Styles a node uses (ids of styles in [`crate::tokens`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StyleRefs {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fill: Option<NodeId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stroke: Option<NodeId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<NodeId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effect: Option<NodeId>,
 }
 
 impl NodeKind {
     /// Kinds that can hold children.
     pub fn is_container(&self) -> bool {
-        matches!(self, Self::Page { .. } | Self::Frame | Self::Group | Self::Section)
+        matches!(
+            self,
+            Self::Page { .. } | Self::Frame | Self::Group | Self::Section | Self::Component { .. } | Self::ComponentSet { .. } | Self::Instance { .. }
+        )
+    }
+
+    /// Kinds that behave like a frame: a box with fills, clipping and optional auto layout.
+    pub fn is_frame_like(&self) -> bool {
+        matches!(self, Self::Frame | Self::Component { .. } | Self::Instance { .. })
     }
 
     pub fn type_name(&self) -> &'static str {
@@ -101,6 +199,9 @@ impl NodeKind {
             Self::Star { .. } => "star",
             Self::Vector { .. } => "vector",
             Self::Text { .. } => "text",
+            Self::Component { .. } => "component",
+            Self::ComponentSet { .. } => "component_set",
+            Self::Instance { .. } => "instance",
         }
     }
 }
@@ -186,6 +287,17 @@ pub struct Props {
     /// What File > Export makes of this node.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub exports: Vec<ExportSetting>,
+    /// Inside a component: properties that drive this node.
+    #[serde(skip_serializing_if = "is_default")]
+    pub refs: PropRefs,
+    /// Variables bound to properties, by property path (see [`crate::tokens`]).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub bind: BTreeMap<String, NodeId>,
+    /// Variable modes chosen for this node and everything in it, by collection id.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub modes: BTreeMap<NodeId, String>,
+    #[serde(skip_serializing_if = "is_default")]
+    pub styles: StyleRefs,
 }
 
 /// One file to export a node as.
@@ -244,6 +356,10 @@ impl Default for Props {
             min_height: None,
             max_height: None,
             exports: Vec::new(),
+            refs: PropRefs::default(),
+            bind: BTreeMap::new(),
+            modes: BTreeMap::new(),
+            styles: StyleRefs::default(),
         }
     }
 }

@@ -15,6 +15,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::doc::Document;
 use crate::node::*;
 use crate::text::TextMeasure;
+use crate::tokens::{Collection, Expect, Style, StyleKind, VarValue, Variable, binding_type, unbinds};
 
 /// A node reference in an op: an existing id, or the `key` of a node created earlier in the
 /// same batch. In JSON, a number is an id and a string is a key.
@@ -52,9 +53,14 @@ impl NodeSpec {
     pub fn new(name: &str, kind: NodeKind) -> Self {
         let mut props = Props { width: 100.0, height: 100.0, ..Props::default() };
         match &kind {
-            NodeKind::Frame => {
+            NodeKind::Frame | NodeKind::Component { .. } => {
                 props.fills = vec![Paint::hex("#FFFFFF")];
                 props.clip = true;
+            }
+            NodeKind::ComponentSet { .. } => {
+                props.strokes = vec![Paint::hex("#9747FF")];
+                props.stroke.dash = vec![10.0, 5.0];
+                props.corner = CornerRadii::all(5.0);
             }
             NodeKind::Section => props.fills = vec![Paint::hex("#2C2C2C")],
             NodeKind::Rectangle | NodeKind::Ellipse { .. } | NodeKind::Polygon { .. } | NodeKind::Star { .. } => {
@@ -72,7 +78,7 @@ impl NodeSpec {
                 props.sizing_h = Sizing::Hug;
                 props.sizing_v = Sizing::Hug;
             }
-            NodeKind::Group | NodeKind::Page { .. } => {}
+            NodeKind::Group | NodeKind::Page { .. } | NodeKind::Instance { .. } => {}
         }
         Self { name: name.to_owned(), kind, props }
     }
@@ -241,6 +247,49 @@ pub struct Patch {
     /// Pages.
     #[serde(with = "opt_hex", skip_serializing_if = "Option::is_none")]
     pub background: Option<Rgba>,
+    /// Components and component sets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Components: the properties instances can set (replaces them all).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub properties: Option<BTreeMap<String, PropDef>>,
+    /// Instances: show another component (a swap, or another variant).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub component: Option<NodeId>,
+    /// Instances: property values to set. A variant property name (`"Size": "Large"`)
+    /// switches to that variant.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values: Option<BTreeMap<String, PropValue>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refs: Option<PropRefs>,
+    /// Variable bindings to add (`null` removes one), by property path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bind: Option<BTreeMap<String, Option<NodeId>>>,
+    /// Variable modes to pick (`null` goes back to inheriting), by collection id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modes: Option<BTreeMap<NodeId, Option<String>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub styles: Option<StyleRefs>,
+}
+
+impl Patch {
+    /// Layers `other` on top: its fields win, maps are merged.
+    pub fn merge(&mut self, other: &Patch) {
+        macro_rules! take {
+            ($($f:ident),*) => { $( if other.$f.is_some() { self.$f = other.$f.clone(); } )* };
+        }
+        take!(name, x, y, width, height, rotation, visible, locked, opacity, blend, fills, strokes, stroke, corner, effects, clip);
+        take!(layout, sizing_h, sizing_v, absolute, constraints, min_width, max_width, min_height, max_height, exports);
+        take!(text, text_style, path, sides, points, inner, arc, background, description, properties, component, refs, styles);
+        macro_rules! join {
+            ($($f:ident),*) => { $(
+                if let Some(o) = &other.$f {
+                    self.$f.get_or_insert_with(Default::default).extend(o.iter().map(|(k, v)| (k.clone(), v.clone())));
+                }
+            )* };
+        }
+        join!(values, bind, modes);
+    }
 }
 
 /// Distinguishes a missing field (`None`) from an explicit `null` (`Some(None)`).
@@ -318,6 +367,82 @@ pub enum Op {
     Delete {
         id: Ref,
     },
+    /// Place an instance of a component.
+    CreateInstance {
+        parent: Ref,
+        component: Ref,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<usize>,
+        #[serde(default)]
+        x: f64,
+        #[serde(default)]
+        y: f64,
+    },
+    /// Turn a frame into a component.
+    MakeComponent {
+        id: Ref,
+    },
+    /// Put components (named like `Size=Large, State=Default`) into a new component set.
+    CombineAsVariants {
+        ids: Vec<Ref>,
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key: Option<String>,
+    },
+    /// Turn an instance into a plain frame that no longer follows its component.
+    Detach {
+        id: Ref,
+    },
+    /// Drop the overrides on an instance (all of them) or on one layer inside it.
+    ResetOverrides {
+        id: Ref,
+    },
+    /// A variable collection with modes (the first is the default).
+    CreateCollection {
+        name: String,
+        modes: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key: Option<String>,
+    },
+    CreateVariable {
+        collection: Ref,
+        name: String,
+        /// Value per mode name.
+        #[serde(default)]
+        values: BTreeMap<String, VarValue>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key: Option<String>,
+    },
+    /// Rename a variable and/or set its value in one mode (the first mode if not given).
+    SetVariable {
+        id: Ref,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<VarValue>,
+    },
+    CreateStyle {
+        name: String,
+        style: StyleKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key: Option<String>,
+    },
+    SetStyle {
+        id: Ref,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        style: Option<StyleKind>,
+    },
+    /// Delete a collection (with its variables), a variable or a style. Nodes using it keep
+    /// their current values.
+    DeleteToken {
+        id: Ref,
+    },
 }
 
 impl Op {
@@ -330,6 +455,17 @@ impl Op {
             Self::Move { .. } => "move",
             Self::Duplicate { .. } => "duplicate",
             Self::Delete { .. } => "delete",
+            Self::CreateInstance { .. } => "create_instance",
+            Self::MakeComponent { .. } => "make_component",
+            Self::CombineAsVariants { .. } => "combine_as_variants",
+            Self::Detach { .. } => "detach",
+            Self::ResetOverrides { .. } => "reset_overrides",
+            Self::CreateCollection { .. } => "create_collection",
+            Self::CreateVariable { .. } => "create_variable",
+            Self::SetVariable { .. } => "set_variable",
+            Self::CreateStyle { .. } => "create_style",
+            Self::SetStyle { .. } => "set_style",
+            Self::DeleteToken { .. } => "delete_token",
         }
     }
 
@@ -389,6 +525,8 @@ impl Document {
         for (index, op) in ops.iter().enumerate() {
             batch.apply(&mut work, op).map_err(|message| OpError { index, op: op.name(), message })?;
         }
+        crate::component::sync_all(&mut work);
+        crate::tokens::resolve_all(&mut work);
         crate::layout::run(&mut work, measure);
 
         let created: std::collections::BTreeSet<NodeId> = batch.created.iter().copied().collect();
@@ -410,13 +548,27 @@ struct Batch {
     created: Vec<NodeId>,
 }
 
+const IN_INSTANCE: &str = "layers inside an instance can't be added, removed or moved; detach the instance first";
+
 impl Batch {
     fn resolve(&self, doc: &Document, r: &Ref) -> Result<NodeId, String> {
         match r {
             Ref::Id(id) if doc.contains(*id) => Ok(*id),
             Ref::Id(id) => Err(format!("node {id} doesn't exist")),
-            Ref::Key(k) => self.keys.get(k).copied().ok_or_else(|| format!("no node was created with key {k:?} earlier in this batch")),
+            Ref::Key(k) => self.key(k),
         }
+    }
+
+    fn resolve_token(&self, doc: &Document, r: &Ref) -> Result<NodeId, String> {
+        match r {
+            Ref::Id(id) if doc.tokens.contains(*id) => Ok(*id),
+            Ref::Id(id) => Err(format!("token {id} doesn't exist")),
+            Ref::Key(k) => self.key(k),
+        }
+    }
+
+    fn key(&self, k: &str) -> Result<NodeId, String> {
+        self.keys.get(k).copied().ok_or_else(|| format!("nothing was created with key {k:?} earlier in this batch"))
     }
 
     fn remember(&mut self, key: &Option<String>, id: NodeId) -> Result<(), String> {
@@ -425,6 +577,17 @@ impl Batch {
                 return Err(format!("key {k:?} is used twice in this batch"));
             }
             self.keys.insert(k.clone(), id);
+        }
+        Ok(())
+    }
+
+    fn container(&self, doc: &Document, parent: NodeId) -> Result<(), String> {
+        let p = doc.node(parent).expect("resolved");
+        if !p.kind.is_container() {
+            return Err(format!("a {} can't hold other nodes", p.kind.type_name()));
+        }
+        if doc.owner_instance(parent).is_some() {
+            return Err(IN_INSTANCE.into());
         }
         Ok(())
     }
@@ -448,27 +611,49 @@ impl Batch {
             }
             Op::Create { parent, node, key, index } => {
                 let parent = self.resolve(doc, parent)?;
-                if matches!(node.kind, NodeKind::Page { .. }) {
-                    return Err("pages are made with create_page".into());
+                match node.kind {
+                    NodeKind::Page { .. } => return Err("pages are made with create_page".into()),
+                    NodeKind::Instance { .. } => return Err("instances are made with create_instance".into()),
+                    _ => {}
                 }
-                let p = doc.node(parent).expect("resolved");
-                if !p.kind.is_container() {
-                    return Err(format!("a {} can't hold other nodes", p.kind.type_name()));
+                self.container(doc, parent)?;
+                let id = doc.alloc_id();
+                self.remember(key, id)?;
+                doc.insert(Node { id, name: node.name.clone(), parent: Some(parent), children: Vec::new(), kind: node.kind.clone(), props: node.props.clone() });
+                insert_child(doc, parent, id, *index);
+                self.created.push(id);
+                validate(doc, id)?;
+            }
+            Op::CreateInstance { parent, component, key, index, x, y } => {
+                let parent = self.resolve(doc, parent)?;
+                let component = self.resolve(doc, component)?;
+                self.container(doc, parent)?;
+                let c = doc.node(component).expect("resolved");
+                if !matches!(c.kind, NodeKind::Component { .. }) {
+                    return Err(format!("node {component} is a {}, not a component", c.kind.type_name()));
                 }
+                if doc.would_cycle(parent, component) {
+                    return Err("that would make a component contain itself".into());
+                }
+                let name = match doc.component_set_of(component) {
+                    Some(set) => doc.node(set).expect("parent").name.clone(),
+                    None => c.name.clone(),
+                };
+                let mut props = c.props.clone();
+                props.x = *x;
+                props.y = *y;
                 let id = doc.alloc_id();
                 self.remember(key, id)?;
                 doc.insert(Node {
                     id,
-                    name: node.name.clone(),
+                    name,
                     parent: Some(parent),
                     children: Vec::new(),
-                    kind: node.kind.clone(),
-                    props: node.props.clone(),
+                    kind: NodeKind::Instance { component, values: BTreeMap::new(), overrides: BTreeMap::new(), map: BTreeMap::new() },
+                    props,
                 });
-                let kids = &mut doc.node_mut(parent).expect("resolved").children;
-                kids.insert(index.unwrap_or(kids.len()).min(kids.len()), id);
+                insert_child(doc, parent, id, *index);
                 self.created.push(id);
-                validate(doc, id)?;
             }
             Op::Set { id, patch } => {
                 let id = self.resolve(doc, id)?;
@@ -483,18 +668,33 @@ impl Batch {
                 if !(width.is_finite() && height.is_finite() && *width >= 0.0 && *height >= 0.0) {
                     return Err(format!("size must be finite and not negative, got {width} x {height}"));
                 }
+                if let Some(owner) = doc.owner_instance(id) {
+                    record(doc, owner, id, &Patch { width: Some(*width), height: Some(*height), ..Patch::default() })?;
+                }
                 resize(doc, id, *width, *height);
                 validate(doc, id)?;
             }
             Op::Move { id, parent, index } => {
                 let id = self.resolve(doc, id)?;
                 let parent = self.resolve(doc, parent)?;
+                if doc.is_inside_instance(id) {
+                    return Err(IN_INSTANCE.into());
+                }
+                self.container(doc, parent)?;
+                if let NodeKind::Instance { component, .. } = doc.node(id).expect("resolved").kind
+                    && doc.would_cycle(parent, component)
+                {
+                    return Err("that would make a component contain itself".into());
+                }
                 move_node(doc, id, parent, *index)?;
                 validate(doc, id)?;
             }
             Op::Duplicate { id, key } => {
                 let id = self.resolve(doc, id)?;
                 let Some(parent) = doc.parent(id) else { return Err("pages can't be duplicated yet".into()) };
+                if doc.is_inside_instance(id) {
+                    return Err(IN_INSTANCE.into());
+                }
                 let copy = copy_subtree(doc, id, parent, &mut self.created);
                 self.remember(key, copy)?;
                 let kids = &mut doc.node_mut(parent).expect("exists").children;
@@ -503,6 +703,9 @@ impl Batch {
             }
             Op::Delete { id } => {
                 let id = self.resolve(doc, id)?;
+                if doc.is_inside_instance(id) {
+                    return Err(IN_INSTANCE.into());
+                }
                 match doc.parent(id) {
                     None => {
                         if doc.pages.len() == 1 {
@@ -516,13 +719,211 @@ impl Batch {
                     doc.nodes.remove(&n);
                 }
             }
+            Op::MakeComponent { id } => {
+                let id = self.resolve(doc, id)?;
+                if doc.owner_instance(id).is_some() {
+                    return Err("an instance (or a layer in one) can't become a component; detach it first".into());
+                }
+                let n = doc.node_mut(id).expect("resolved");
+                if !matches!(n.kind, NodeKind::Frame) {
+                    return Err(format!("only frames can become components, not a {}", n.kind.type_name()));
+                }
+                n.kind = NodeKind::Component { description: String::new(), properties: BTreeMap::new() };
+            }
+            Op::CombineAsVariants { ids, name, key } => {
+                let ids: Vec<NodeId> = ids.iter().map(|r| self.resolve(doc, r)).collect::<Result<_, _>>()?;
+                let Some(&first) = ids.first() else { return Err("no components given".into()) };
+                let parent = doc.parent(first).ok_or("a page isn't a component")?;
+                for &c in &ids {
+                    let n = doc.node(c).expect("resolved");
+                    if !matches!(n.kind, NodeKind::Component { .. }) {
+                        return Err(format!("{:?} is a {}, not a component", n.name, n.kind.type_name()));
+                    }
+                    if n.parent != Some(parent) {
+                        return Err("variants must start out side by side, in the same parent".into());
+                    }
+                    if crate::component::parse_variant(&n.name).is_empty() {
+                        return Err(format!("{:?} isn't named like a variant (\"Size=Large, State=Default\")", n.name));
+                    }
+                }
+                let set = doc.alloc_id();
+                self.remember(key, set)?;
+                let index = doc.children(parent).iter().position(|&c| c == first);
+                let spec = NodeSpec::new(name, NodeKind::ComponentSet { description: String::new() });
+                doc.insert(Node { id: set, name: name.clone(), parent: Some(parent), children: Vec::new(), kind: spec.kind, props: Props { width: 0.0, height: 0.0, ..spec.props } });
+                insert_child(doc, parent, set, index);
+                for &c in &ids {
+                    move_node(doc, c, set, None)?;
+                }
+                self.created.push(set);
+            }
+            Op::Detach { id } => {
+                let id = self.resolve(doc, id)?;
+                if doc.owner_instance(id) != Some(id) {
+                    return Err("only an instance that isn't inside another one can be detached".into());
+                }
+                for n in std::iter::once(id).chain(doc.descendants(id)) {
+                    let node = doc.node_mut(n).expect("exists");
+                    if matches!(node.kind, NodeKind::Instance { .. }) {
+                        node.kind = NodeKind::Frame;
+                    }
+                }
+            }
+            Op::ResetOverrides { id } => {
+                let id = self.resolve(doc, id)?;
+                let owner = doc.owner_instance(id).ok_or("that isn't an instance or a layer in one")?;
+                let key = doc.source_key(owner, id).ok_or("that layer can't be traced back to its component")?;
+                let NodeKind::Instance { values, overrides, .. } = &mut doc.node_mut(owner).expect("exists").kind else { unreachable!() };
+                if key.is_empty() {
+                    overrides.clear();
+                    values.clear();
+                } else {
+                    let nested = format!("{key};");
+                    overrides.retain(|k, _| k != &key && !k.starts_with(&nested));
+                }
+            }
+            Op::CreateCollection { name, modes, key } => {
+                if modes.is_empty() {
+                    return Err("a collection needs at least one mode".into());
+                }
+                let unique: std::collections::BTreeSet<&String> = modes.iter().collect();
+                if unique.len() != modes.len() {
+                    return Err("mode names must be different".into());
+                }
+                let id = doc.alloc_id();
+                self.remember(key, id)?;
+                doc.tokens.collections.insert(id, Collection { name: name.clone(), modes: modes.clone() });
+                self.created.push(id);
+            }
+            Op::CreateVariable { collection, name, values, key } => {
+                let collection = self.resolve_token(doc, collection)?;
+                let c = doc.tokens.collections.get(&collection).ok_or("that isn't a collection")?;
+                check_values(doc, c, values, None)?;
+                let id = doc.alloc_id();
+                self.remember(key, id)?;
+                doc.tokens.variables.insert(id, Variable { name: name.clone(), collection, values: values.clone() });
+                self.created.push(id);
+            }
+            Op::SetVariable { id, name, mode, value } => {
+                let id = self.resolve_token(doc, id)?;
+                let v = doc.tokens.variables.get(&id).ok_or("that isn't a variable")?;
+                let c = doc.tokens.collections.get(&v.collection).expect("variables live in collections").clone();
+                let mode = mode.clone().unwrap_or_else(|| c.modes[0].clone());
+                if let Some(value) = value {
+                    let one: BTreeMap<String, VarValue> = [(mode.clone(), value.clone())].into();
+                    check_values(doc, &c, &one, Some(id))?;
+                }
+                let v = doc.tokens.variables.get_mut(&id).expect("checked");
+                if let Some(n) = name {
+                    v.name = n.clone();
+                }
+                if let Some(value) = value {
+                    v.values.insert(mode, value.clone());
+                }
+            }
+            Op::CreateStyle { name, style, key } => {
+                let id = doc.alloc_id();
+                self.remember(key, id)?;
+                doc.tokens.styles.insert(id, Style { name: name.clone(), kind: style.clone() });
+                self.created.push(id);
+            }
+            Op::SetStyle { id, name, style } => {
+                let id = self.resolve_token(doc, id)?;
+                let s = doc.tokens.styles.get_mut(&id).ok_or("that isn't a style")?;
+                if let Some(st) = style {
+                    if std::mem::discriminant(st) != std::mem::discriminant(&s.kind) {
+                        return Err("a style keeps its type (paint, text or effect)".into());
+                    }
+                    s.kind = st.clone();
+                }
+                if let Some(n) = name {
+                    s.name = n.clone();
+                }
+            }
+            Op::DeleteToken { id } => {
+                let id = self.resolve_token(doc, id)?;
+                let mut gone = vec![id];
+                gone.extend(doc.tokens.variables.iter().filter(|(_, v)| v.collection == id).map(|(k, _)| *k));
+                for g in &gone {
+                    doc.tokens.collections.remove(g);
+                    doc.tokens.variables.remove(g);
+                    doc.tokens.styles.remove(g);
+                }
+                let users: Vec<NodeId> = doc
+                    .nodes
+                    .iter()
+                    .filter(|(_, n)| {
+                        n.props.bind.values().any(|v| gone.contains(v))
+                            || n.props.modes.keys().any(|c| gone.contains(c))
+                            || [n.props.styles.fill, n.props.styles.stroke, n.props.styles.text, n.props.styles.effect]
+                                .iter()
+                                .any(|s| s.is_some_and(|s| gone.contains(&s)))
+                    })
+                    .map(|(id, _)| *id)
+                    .collect();
+                for u in users {
+                    let p = &mut doc.node_mut(u).expect("listed").props;
+                    p.bind.retain(|_, v| !gone.contains(v));
+                    p.modes.retain(|c, _| !gone.contains(c));
+                    for s in [&mut p.styles.fill, &mut p.styles.stroke, &mut p.styles.text, &mut p.styles.effect] {
+                        if s.is_some_and(|v| gone.contains(&v)) {
+                            *s = None;
+                        }
+                    }
+                }
+            }
         }
         Ok(())
     }
 }
 
-fn set(doc: &mut Document, id: NodeId, patch: &Patch) -> Result<(), String> {
-    let n = doc.node_mut(id).expect("resolved");
+fn insert_child(doc: &mut Document, parent: NodeId, id: NodeId, index: Option<usize>) {
+    let kids = &mut doc.node_mut(parent).expect("resolved").children;
+    kids.insert(index.unwrap_or(kids.len()).min(kids.len()), id);
+}
+
+/// Checks variable values: known modes, one type, aliases to existing variables.
+fn check_values(doc: &Document, c: &Collection, values: &BTreeMap<String, VarValue>, var: Option<NodeId>) -> Result<(), String> {
+    let mut ty = var.and_then(|v| var_type(doc, v)).filter(|t| *t != "any");
+    for (mode, v) in values {
+        if !c.modes.contains(mode) {
+            return Err(format!("collection {:?} has no mode {mode:?}", c.name));
+        }
+        let t = match v {
+            VarValue::Alias(a) => {
+                if Some(*a) == var {
+                    return Err("a variable can't refer to itself".into());
+                }
+                var_type(doc, *a).ok_or_else(|| format!("variable {a} doesn't exist"))?
+            }
+            other => other.type_name(),
+        };
+        match ty {
+            Some(existing) if existing != t => return Err(format!("this variable holds {existing} values, not {t}")),
+            _ => ty = Some(t),
+        }
+    }
+    Ok(())
+}
+
+/// The type of value a variable holds, following aliases.
+fn var_type(doc: &Document, var: NodeId) -> Option<&'static str> {
+    let mut v = var;
+    for _ in 0..16 {
+        let values = &doc.tokens.variables.get(&v)?.values;
+        match values.values().next() {
+            Some(VarValue::Alias(a)) => v = *a,
+            Some(other) => return Some(other.type_name()),
+            None => return Some("any"),
+        }
+    }
+    None
+}
+
+/// Applies a patch to one node: its properties and the data of its kind. Instance links
+/// (`component`, `values`) are handled by the caller. Setting a property directly unbinds
+/// any variable or style that drove it.
+pub(crate) fn apply_patch(n: &mut Node, patch: &Patch) -> Result<(), String> {
     let kind = n.kind.type_name();
     let wrong = |field: &str| Err(format!("{field} doesn't apply to a {kind}"));
     if let Some(v) = &patch.text {
@@ -557,6 +958,16 @@ fn set(doc: &mut Document, id: NodeId, patch: &Patch) -> Result<(), String> {
         let NodeKind::Page { background } = &mut n.kind else { return wrong("background") };
         *background = v;
     }
+    if let Some(v) = &patch.description {
+        match &mut n.kind {
+            NodeKind::Component { description, .. } | NodeKind::ComponentSet { description } => *description = v.clone(),
+            _ => return wrong("description"),
+        }
+    }
+    if let Some(v) = &patch.properties {
+        let NodeKind::Component { properties, .. } = &mut n.kind else { return wrong("properties") };
+        *properties = v.clone();
+    }
     if let Some(v) = &patch.name {
         n.name = v.clone();
     }
@@ -565,7 +976,7 @@ fn set(doc: &mut Document, id: NodeId, patch: &Patch) -> Result<(), String> {
         ($($f:ident),*) => { $( if let Some(v) = &patch.$f { p.$f = v.clone(); } )* };
     }
     copy!(x, y, rotation, visible, locked, opacity, blend, fills, strokes, stroke, corner, effects, clip);
-    copy!(layout, sizing_h, sizing_v, absolute, constraints, min_width, max_width, min_height, max_height, exports);
+    copy!(layout, sizing_h, sizing_v, absolute, constraints, min_width, max_width, min_height, max_height, exports, refs);
     // Typing a size turns hug/fill into a fixed size, as in the Design panel.
     if let Some(w) = patch.width {
         p.width = w;
@@ -579,6 +990,153 @@ fn set(doc: &mut Document, id: NodeId, patch: &Patch) -> Result<(), String> {
             p.sizing_v = Sizing::Fixed;
         }
     }
+
+    // Direct values replace the variables and styles behind them.
+    let set: [(&str, bool); 14] = [
+        ("x", patch.x.is_some()),
+        ("y", patch.y.is_some()),
+        ("width", patch.width.is_some()),
+        ("height", patch.height.is_some()),
+        ("rotation", patch.rotation.is_some()),
+        ("opacity", patch.opacity.is_some()),
+        ("visible", patch.visible.is_some()),
+        ("fills", patch.fills.is_some()),
+        ("strokes", patch.strokes.is_some()),
+        ("stroke", patch.stroke.is_some()),
+        ("corner", patch.corner.is_some()),
+        ("layout", patch.layout.is_some()),
+        ("text", patch.text.is_some()),
+        ("text_style", patch.text_style.is_some()),
+    ];
+    for (field, given) in set {
+        if given {
+            for prefix in unbinds(field) {
+                p.bind.retain(|k, _| k != prefix && !k.starts_with(&format!("{prefix}/")));
+            }
+        }
+    }
+    if patch.styles.is_none() {
+        if patch.fills.is_some() {
+            p.styles.fill = None;
+        }
+        if patch.strokes.is_some() {
+            p.styles.stroke = None;
+        }
+        if patch.effects.is_some() {
+            p.styles.effect = None;
+        }
+        if patch.text_style.is_some() {
+            p.styles.text = None;
+        }
+    }
+    if let Some(s) = patch.styles {
+        p.styles = s;
+    }
+    if let Some(b) = &patch.bind {
+        for (k, v) in b {
+            match v {
+                Some(var) => {
+                    p.bind.insert(k.clone(), *var);
+                }
+                None => {
+                    p.bind.remove(k);
+                }
+            }
+        }
+    }
+    if let Some(m) = &patch.modes {
+        for (k, v) in m {
+            match v {
+                Some(mode) => {
+                    p.modes.insert(*k, mode.clone());
+                }
+                None => {
+                    p.modes.remove(k);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Keeps a change to an instance (or a layer inside one) as an override on its owner.
+fn record(doc: &mut Document, owner: NodeId, id: NodeId, patch: &Patch) -> Result<(), String> {
+    let key = doc.source_key(owner, id).ok_or("that layer can't be traced back to its component")?;
+    let patch = if key.is_empty() { crate::component::without_own(patch) } else { patch.clone() };
+    let NodeKind::Instance { overrides, .. } = &mut doc.node_mut(owner).expect("exists").kind else { unreachable!() };
+    overrides.entry(key).or_default().merge(&patch);
+    Ok(())
+}
+
+fn set(doc: &mut Document, id: NodeId, patch: &Patch) -> Result<(), String> {
+    let owner = doc.owner_instance(id);
+    let is_instance = matches!(doc.node(id).expect("resolved").kind, NodeKind::Instance { .. });
+    if !is_instance && (patch.component.is_some() || patch.values.is_some()) {
+        return Err("component and values only apply to instances".into());
+    }
+
+    if is_instance {
+        // A variant property in `values` means "switch to that variant".
+        let NodeKind::Instance { component, .. } = doc.node(id).expect("resolved").kind else { unreachable!() };
+        let mut target = patch.component;
+        let mut values = patch.values.clone().unwrap_or_default();
+        if let Some(set) = doc.component_set_of(target.unwrap_or(component)) {
+            let props = doc.variant_properties(set);
+            let want: BTreeMap<String, String> = values
+                .iter()
+                .filter(|(k, _)| props.contains_key(*k))
+                .filter_map(|(k, v)| if let PropValue::Text(t) = v { Some((k.clone(), t.clone())) } else { None })
+                .collect();
+            if !want.is_empty() {
+                let v = doc.find_variant(set, Some(target.unwrap_or(component)), &want).ok_or_else(|| {
+                    let asked: Vec<String> = want.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                    format!("there's no variant {}", asked.join(", "))
+                })?;
+                target = Some(v);
+                values.retain(|k, _| !props.contains_key(k));
+            }
+        }
+        if let Some(t) = target {
+            let tn = doc.node(t).ok_or_else(|| format!("node {t} doesn't exist"))?;
+            if !matches!(tn.kind, NodeKind::Component { .. }) {
+                return Err(format!("node {t} is a {}, not a component", tn.kind.type_name()));
+            }
+            let parent = doc.parent(id).expect("instances have parents");
+            if doc.would_cycle(parent, t) {
+                return Err("that would make a component contain itself".into());
+            }
+        }
+        if owner == Some(id) {
+            // The instance itself: switch component (keeping overrides by layer name) and
+            // set values directly.
+            if let Some(t) = target.filter(|t| *t != component) {
+                let remapped = {
+                    let NodeKind::Instance { overrides, map, .. } = &doc.node(id).expect("resolved").kind else { unreachable!() };
+                    (crate::component::remap_keys(doc, component, t, overrides), crate::component::remap_keys(doc, component, t, map))
+                };
+                let NodeKind::Instance { component: c, overrides, map, .. } = &mut doc.node_mut(id).expect("resolved").kind else { unreachable!() };
+                *c = t;
+                (*overrides, *map) = remapped;
+            }
+            if !values.is_empty() {
+                let NodeKind::Instance { values: v, .. } = &mut doc.node_mut(id).expect("resolved").kind else { unreachable!() };
+                v.extend(values);
+            }
+        } else {
+            let owner = owner.expect("an instance has an owner");
+            let link = Patch { component: target, values: (!values.is_empty()).then_some(values), ..Patch::default() };
+            record(doc, owner, id, &link)?;
+        }
+    }
+
+    let plain = Patch { component: None, values: None, ..patch.clone() };
+    if let Some(o) = owner
+        && plain != Patch::default()
+    {
+        record(doc, o, id, &plain)?;
+    }
+    apply_patch(doc.node_mut(id).expect("resolved"), &plain)?;
+
     if patch.layout == Some(None) {
         // Without auto layout, children can't fill or be absolute: they keep their place.
         for c in doc.children(id).to_vec() {
@@ -602,13 +1160,15 @@ pub(crate) fn resize(doc: &mut Document, id: NodeId, width: f64, height: f64) {
     let (old_w, old_h) = (n.props.width, n.props.height);
     if width != old_w {
         n.props.sizing_h = Sizing::Fixed;
+        n.props.bind.remove("width");
     }
     if height != old_h {
         n.props.sizing_v = Sizing::Fixed;
+        n.props.bind.remove("height");
     }
     n.props.width = width;
     n.props.height = height;
-    if n.props.layout.is_some() || matches!(n.kind, NodeKind::Group) {
+    if n.props.layout.is_some() || matches!(n.kind, NodeKind::Group | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. }) {
         return;
     }
     for c in doc.children(id).to_vec() {
@@ -651,8 +1211,7 @@ fn move_node(doc: &mut Document, id: NodeId, parent: NodeId, index: Option<usize
     }
     let parent_has_layout = p.props.layout.is_some();
     doc.node_mut(old_parent).expect("exists").children.retain(|&c| c != id);
-    let kids = &mut doc.node_mut(parent).expect("resolved").children;
-    kids.insert(index.unwrap_or(kids.len()).min(kids.len()), id);
+    insert_child(doc, parent, id, index);
     let n = doc.node_mut(id).expect("exists");
     n.parent = Some(parent);
     if !parent_has_layout {
@@ -664,12 +1223,25 @@ fn move_node(doc: &mut Document, id: NodeId, parent: NodeId, index: Option<usize
 }
 
 /// Deep-copies `id` under `parent` (not yet listed in the parent's children) and returns the
-/// copy's id.
+/// copy's id. Instances in the copy get their maps pointed at the copied layers.
 fn copy_subtree(doc: &mut Document, id: NodeId, parent: NodeId, created: &mut Vec<NodeId>) -> NodeId {
+    let mut old_to_new = BTreeMap::new();
+    let copy = copy_nodes(doc, id, parent, created, &mut old_to_new);
+    for &new in old_to_new.values() {
+        let n = doc.node_mut(new).expect("just copied");
+        if let NodeKind::Instance { map, .. } = &mut n.kind {
+            *map = map.iter().filter_map(|(k, v)| old_to_new.get(v).map(|nv| (k.clone(), *nv))).collect();
+        }
+    }
+    copy
+}
+
+fn copy_nodes(doc: &mut Document, id: NodeId, parent: NodeId, created: &mut Vec<NodeId>, old_to_new: &mut BTreeMap<NodeId, NodeId>) -> NodeId {
     let src = doc.node(id).expect("exists").clone();
     let new = doc.alloc_id();
     created.push(new);
-    let children = src.children.iter().map(|&c| copy_subtree(doc, c, new, created)).collect();
+    old_to_new.insert(id, new);
+    let children = src.children.iter().map(|&c| copy_nodes(doc, c, new, created, old_to_new)).collect();
     doc.insert(Node { id: new, parent: Some(parent), children, ..src });
     new
 }
@@ -692,8 +1264,8 @@ fn validate(doc: &Document, id: NodeId) -> Result<(), String> {
     if !(0.0..=1.0).contains(&p.opacity) {
         return Err(format!("opacity must be between 0 and 1, got {}", p.opacity));
     }
-    if p.layout.is_some() && !matches!(n.kind, NodeKind::Frame) {
-        return Err(format!("auto layout needs a frame, not a {kind}"));
+    if p.layout.is_some() && !n.kind.is_frame_like() {
+        return Err(format!("auto layout needs a frame, component or instance, not a {kind}"));
     }
     let can_hug = matches!(n.kind, NodeKind::Text { .. }) || p.layout.is_some();
     for (axis, s) in [("width", p.sizing_h), ("height", p.sizing_v)] {
@@ -716,6 +1288,43 @@ fn validate(doc: &Document, id: NodeId) -> Result<(), String> {
     }
     if p.absolute && parent_layout.is_none() {
         return Err("absolute position only applies inside an auto layout parent".into());
+    }
+    for (path, var) in &p.bind {
+        let want = binding_type(path).ok_or_else(|| format!("{path:?} isn't a property that can be bound"))?;
+        let have = var_type(doc, *var).ok_or_else(|| format!("variable {var} doesn't exist"))?;
+        let ok = match want {
+            Expect::Number => have == "number",
+            Expect::Bool => have == "bool",
+            Expect::Text => have == "text" || have == "number",
+            Expect::Color => have == "color",
+        } || have == "any";
+        if !ok {
+            let w = match want {
+                Expect::Number => "number",
+                Expect::Bool => "bool",
+                Expect::Text => "text",
+                Expect::Color => "color",
+            };
+            return Err(format!("{path:?} needs a {w} variable, not a {have} one"));
+        }
+    }
+    for (c, mode) in &p.modes {
+        let col = doc.tokens.collections.get(c).ok_or_else(|| format!("collection {c} doesn't exist"))?;
+        if !col.modes.contains(mode) {
+            return Err(format!("collection {:?} has no mode {mode:?}", col.name));
+        }
+    }
+    let st = p.styles;
+    for (slot, id) in [("fill", st.fill), ("stroke", st.stroke), ("text", st.text), ("effect", st.effect)] {
+        let Some(id) = id else { continue };
+        let s = doc.tokens.styles.get(&id).ok_or_else(|| format!("style {id} doesn't exist"))?;
+        let fits = matches!(
+            (slot, &s.kind),
+            ("fill" | "stroke", StyleKind::Paint { .. }) | ("text", StyleKind::Text { .. }) | ("effect", StyleKind::Effect { .. })
+        );
+        if !fits {
+            return Err(format!("style {:?} can't be used as a {slot} style", s.name));
+        }
     }
     match &n.kind {
         NodeKind::Text { text } if !(text.style.size > 0.0) => Err("font size must be above 0".into()),

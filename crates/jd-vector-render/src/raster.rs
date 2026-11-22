@@ -242,7 +242,7 @@ impl<'a> Ctx<'a> {
         }
 
         if n.kind.is_container() {
-            let clips = n.props.clip && matches!(n.kind, NodeKind::Frame | NodeKind::Section);
+            let clips = n.props.clip && (n.kind.is_frame_like() || matches!(n.kind, NodeKind::Section));
             let own = match (&path, clips) {
                 (Some(p), true) => Some(self.clip_to(clip, p, rule, ts)),
                 _ => None,

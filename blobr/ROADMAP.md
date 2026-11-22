@@ -78,13 +78,20 @@ CLI argument as a file to open. Names are provisional until Step 0.
         rendering is decided with the app in Step 3 (tiny-skia into a texture first, GPU
         later if needed)
   - [x] Export settings saved on nodes (PNG/SVG, scale, suffix) and `export_files`
-- [ ] Step 2: components, variants and tokens in the core
-  - Components, instances, overrides, component properties (text, boolean, instance swap)
-    and variant sets
-  - Variables/tokens (colour, number, string) with modes (for example dark and light),
-    bindable to properties; colour and text styles
-  - Acceptance: an example builds the Blobr main-window mockup, components included, as a
-    `.jdb` and renders it to PNG
+- [x] Step 2: components, variants and tokens in the core
+  - [x] Components with text, boolean and instance-swap properties (`refs` on their layers)
+  - [x] Instances: full copies rebuilt after every batch, stable layer ids, overrides on any
+        layer (kept when the component changes), nested instances and swaps, reset, detach,
+        duplicate; adding/removing/moving layers inside an instance is refused, as in Figma
+  - [x] Variants: component sets named `Size=Large, State=Default`, switched through
+        property values, overrides carried across by layer name
+  - [x] A component can't end up containing itself (checked on create, move and swap)
+  - [x] Variables in collections with modes (colour, number, text, bool, aliases), bound to
+        properties by path (`fills/0`, `gap`, `padding/top`, ...), modes chosen per frame;
+        typing a value unbinds it
+  - [x] Paint, text and effect styles
+  - [ ] Acceptance: an example builds the Blobr main-window mockup, components included, as
+        a `.jdb` and renders it to PNG
 - [ ] Step 3: the app, viewing
   - Window, menus, toolbar and panels laid out like the mockup, built from `jd-ui` (theme
     tokens, icons, panel tabs) so it matches Photosplash and Cinematica

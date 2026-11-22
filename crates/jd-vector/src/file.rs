@@ -57,6 +57,8 @@ struct FileDoc {
     version: u32,
     next_id: u64,
     pages: Vec<FileNode>,
+    #[serde(default, skip_serializing_if = "crate::tokens::Tokens::is_empty")]
+    tokens: crate::tokens::Tokens,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -89,6 +91,7 @@ pub fn to_json(doc: &Document) -> String {
         version: VERSION,
         next_id: doc.next_id,
         pages: doc.pages.iter().map(|&p| to_file(doc, p)).collect(),
+        tokens: doc.tokens.clone(),
     };
     serde_json::to_string_pretty(&file).expect("documents always serialize")
 }
@@ -132,7 +135,8 @@ pub fn from_json(json: &str) -> Result<Document, FileError> {
         add(&mut doc, page, None)?;
         doc.pages.push(id);
     }
-    let max = doc.nodes.keys().last().map_or(0, |id| id.0);
+    doc.tokens = file.tokens;
+    let max = doc.nodes.keys().chain(doc.tokens.collections.keys()).chain(doc.tokens.variables.keys()).chain(doc.tokens.styles.keys()).map(|id| id.0).max().unwrap_or(0);
     doc.next_id = file.next_id.max(max + 1);
     Ok(doc)
 }

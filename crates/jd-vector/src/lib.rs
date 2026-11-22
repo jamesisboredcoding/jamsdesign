@@ -13,6 +13,7 @@
 //! without a window.
 
 mod color;
+pub mod component;
 mod doc;
 pub mod file;
 pub mod geometry;
@@ -21,6 +22,7 @@ pub mod layout;
 pub mod node;
 pub mod ops;
 pub mod text;
+pub mod tokens;
 
 pub use doc::Document;
 pub use history::{Editor, History};
@@ -28,3 +30,4 @@ pub use jd_core::Rgba;
 pub use node::*;
 pub use ops::{Applied, NodeSpec, Op, OpError, Patch, Ref};
 pub use text::{ApproxMeasure, TextMeasure};
+pub use tokens::{Collection, Style, StyleKind, Tokens, VarValue, Variable};
