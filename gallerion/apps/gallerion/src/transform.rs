@@ -99,6 +99,9 @@ impl Session {
         if layer.locked {
             return Err("The layer is locked");
         }
+        if layer.lock_position {
+            return Err("The layer's position is locked");
+        }
         if doc.selection.is_some() && doc.editing_mask() {
             return Err("Moving part of a layer mask isn't supported yet (deselect to move the whole layer)");
         }

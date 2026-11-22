@@ -5,11 +5,12 @@ use iced::widget::{button, column, container, mouse_area, pick_list, row, slider
 use iced::{Element, Fill, Padding, Point};
 use jd_raster::selection::Combine;
 use jd_raster::{BlendMode, BlendSpace};
-use jd_ui::widget::{bold, field_box, hline, hover_tip, icon_button, label, labeled, tool_button, value, vline};
+use jd_ui::widget::{bold, hline, hover_tip, icon_button, label, labeled, tool_button, value, vline};
 use jd_ui::{Icon, icon, style, tokens::*};
 
 use super::to_color;
-use crate::app::{Message, Photo, PopupKind, Zoom};
+use super::field::number;
+use crate::app::{Message, Photo, PopupKind, TransformField, Zoom};
 use crate::tool::Tool;
 use crate::APP_NAME;
 
@@ -113,14 +114,15 @@ pub fn title_bar(app: &Photo) -> Element<'_, Message> {
 }
 
 fn percent_slider<'a>(
-    name: &'a str,
+    app: &'a Photo,
+    name: &'static str,
     v: f32,
-    on_change: impl Fn(f32) -> Message + 'a,
+    on_change: impl Fn(f32) -> Message + Clone + 'a,
 ) -> Element<'a, Message> {
     labeled(
         name,
         row![
-            field_box(value(format!("{:.0}%", v * 100.0))).width(46),
+            super::field::number(app, name, format!("{:.0}%", v * 100.0), 46, 100.0, 0.0..=1.0, on_change.clone()),
             slider(0.0..=1.0, v, on_change).step(0.01_f32).width(70).style(style::slider),
         ]
         .spacing(6)
@@ -142,12 +144,20 @@ fn toggle<'a>(label_text: &'a str, on: bool, msg: Message, tip: &'a str) -> Elem
 
 pub fn options_bar(app: &Photo) -> Element<'_, Message> {
     let tool = app.tool;
+    // The tool preset picker: presets for the tool, Reset Tool, Reset All Tools.
+    let open = matches!(app.popup, Some(p) if p.kind == PopupKind::ToolPresets);
+    let presets = hover_tip(
+        button(row![icon(tool.icon(), 16.0, ICON), icon(Icon::Chevron, 10.0, TEXT_SECONDARY)].spacing(2).align_y(Vertical::Center))
+            .padding(Padding::from([2, 4]))
+            .style(style::ghost(open))
+            .on_press(Message::OpenPopup(PopupKind::ToolPresets, Point::new(app.options_pointer.x - 20.0, TOOLBAR_TOP - 2.0))),
+        "Tool presets",
+        tooltip::Position::Bottom,
+    );
     let mut bar = row![
-        icon(Icon::Home, 16.0, ICON),
+        hover_tip(icon(Icon::Home, 16.0, TEXT_MUTED), "Home screen (not available yet)", tooltip::Position::Bottom),
         vline(20.0, BORDER_SUBTLE),
-        row![icon(tool.icon(), 16.0, ICON), icon(Icon::Chevron, 10.0, TEXT_SECONDARY)]
-            .spacing(2)
-            .align_y(Vertical::Center),
+        presets,
     ]
     .spacing(14)
     .align_y(Vertical::Center);
@@ -163,9 +173,9 @@ pub fn options_bar(app: &Photo) -> Element<'_, Message> {
             .style(style::ghost(false))
             .on_press(Message::CancelTransform);
         bar = bar
-            .push(labeled("W:", field_box(value(format!("{:.1}%", p.sx * 100.0)))))
-            .push(labeled("H:", field_box(value(format!("{:.1}%", p.sy * 100.0)))))
-            .push(labeled("Angle:", field_box(value(format!("{:.1}°", p.angle.to_degrees())))))
+            .push(labeled("W:", number(app, "transform-w", format!("{:.1}%", p.sx * 100.0), 64, 100.0, -100.0..=100.0, |v| Message::TransformValue(TransformField::Width, v))))
+            .push(labeled("H:", number(app, "transform-h", format!("{:.1}%", p.sy * 100.0), 64, 100.0, -100.0..=100.0, |v| Message::TransformValue(TransformField::Height, v))))
+            .push(labeled("Angle:", number(app, "transform-angle", format!("{:.1}°", p.angle.to_degrees()), 58, 1.0, -180.0..=180.0, |v| Message::TransformValue(TransformField::Angle, v))))
             .push(label("Shift: free aspect / 15° steps · Alt: from centre · Enter commits, Esc cancels"))
             .push(space::horizontal())
             .push(cancel)
@@ -201,7 +211,7 @@ pub fn options_bar(app: &Photo) -> Element<'_, Message> {
                     .push(labeled(
                         "Tolerance:",
                         row![
-                            field_box(value(tol.to_string())).width(40),
+                            number(app, "wand-tolerance", tol.to_string(), 40, 1.0, 0.0..=255.0, Message::WandTolerance),
                             slider(0.0..=255.0, tol as f32, Message::WandTolerance).width(90).style(style::slider),
                         ]
                         .spacing(6)
@@ -234,13 +244,13 @@ pub fn options_bar(app: &Photo) -> Element<'_, Message> {
             .push(labeled(
                 "Size:",
                 row![
-                    field_box(value(format!("{:.0} px", b.size))).width(58),
+                    number(app, "brush-size", format!("{:.0} px", b.size), 58, 1.0, 1.0..=5000.0, Message::BrushSize),
                     slider(1.0..=500.0, b.size, Message::BrushSize).width(80).style(style::slider),
                 ]
                 .spacing(6)
                 .align_y(Vertical::Center),
             ))
-            .push(percent_slider("Hardness:", b.hardness, Message::BrushHardness))
+            .push(percent_slider(app, "Hardness:", b.hardness, Message::BrushHardness))
             .push(vline(20.0, BORDER_SUBTLE))
             .push(labeled(
                 "Mode:",
@@ -250,12 +260,12 @@ pub fn options_bar(app: &Photo) -> Element<'_, Message> {
                     .width(110)
                     .style(style::pick_list),
             ))
-            .push(percent_slider("Opacity:", b.opacity, Message::BrushOpacity))
-            .push(percent_slider("Flow:", b.flow, Message::BrushFlow))
-            .push(percent_slider("Smoothing:", b.smoothing, Message::BrushSmoothing))
+            .push(percent_slider(app, "Opacity:", b.opacity, Message::BrushOpacity))
+            .push(percent_slider(app, "Flow:", b.flow, Message::BrushFlow))
+            .push(percent_slider(app, "Smoothing:", b.smoothing, Message::BrushSmoothing))
             .push(vline(20.0, BORDER_SUBTLE));
         if matches!(tool, Tool::Dodge | Tool::Burn) {
-            bar = bar.push(percent_slider("Exposure:", b.exposure, Message::BrushExposure)).push(vline(20.0, BORDER_SUBTLE));
+            bar = bar.push(percent_slider(app, "Exposure:", b.exposure, Message::BrushExposure)).push(vline(20.0, BORDER_SUBTLE));
         }
         if tool == Tool::SpotHeal {
             bar = bar.push(label("Paint over what you want removed; it's filled from its surroundings when you let go"));
@@ -322,7 +332,7 @@ pub fn options_bar(app: &Photo) -> Element<'_, Message> {
             .push(labeled(
                 "Size:",
                 row![
-                    field_box(value(format!("{:.0} px", o.size))).width(58),
+                    number(app, "type-size", format!("{:.0} px", o.size), 58, 1.0, 1.0..=1000.0, Message::TypeSize),
                     slider(6.0..=400.0, o.size, Message::TypeSize).width(100).style(style::slider),
                 ]
                 .spacing(6)
@@ -346,7 +356,7 @@ pub fn options_bar(app: &Photo) -> Element<'_, Message> {
             .push(toggle("Linear", app.gradient_shape == Shape::Linear, Message::GradientShape(Shape::Linear), "Linear gradient"))
             .push(toggle("Radial", app.gradient_shape == Shape::Radial, Message::GradientShape(Shape::Radial), "Radial gradient"))
             .push(vline(20.0, BORDER_SUBTLE))
-            .push(percent_slider("Opacity:", app.brush.opacity, Message::BrushOpacity))
+            .push(percent_slider(app, "Opacity:", app.brush.opacity, Message::BrushOpacity))
             .push(label("Drag: foreground to background colour · Shift snaps to 45°"));
     } else if tool.is_shape() {
         bar = bar.push(label("Drag to draw a filled shape on a new layer, in the foreground colour · Shift: square · Alt: from centre"));
@@ -502,7 +512,15 @@ pub fn status_bar(app: &Photo) -> Element<'_, Message> {
             .style(style::ghost(open.zoom == Zoom::Fixed(1.0)))
             .on_press(Message::ZoomTo(Zoom::Fixed(1.0)));
         bar = bar
-            .push(field_box(value(format!("{:.2}%", app.zoom_factor() * 100.0))))
+            .push(number(
+                app,
+                "zoom",
+                format!("{:.2}%", app.zoom_factor() * 100.0),
+                72,
+                100.0,
+                crate::app::ZOOM_STEPS[0]..=crate::app::ZOOM_STEPS[crate::app::ZOOM_STEPS.len() - 1],
+                Message::ZoomPercent,
+            ))
             .push(fit)
             .push(actual)
             .push(label(format!("{} px × {} px", doc.width, doc.height)))

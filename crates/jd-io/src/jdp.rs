@@ -72,6 +72,10 @@ struct LayerEntry {
     name: String,
     visible: bool,
     locked: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    lock_pixels: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    lock_position: bool,
     opacity: f32,
     blend: String,
     /// Grid positions of stored tiles.
@@ -261,6 +265,8 @@ pub fn write<W: Write + Seek>(doc: &Document, out: W) -> Result<W, SaveError> {
             name: layer.name.clone(),
             visible: layer.visible,
             locked: layer.locked,
+            lock_pixels: layer.lock_pixels,
+            lock_position: layer.lock_position,
             opacity: layer.opacity,
             blend: layer.blend.key().into(),
             tiles,
@@ -367,6 +373,7 @@ pub fn read<R: Read + Seek>(name: impl Into<String>, input: R) -> Result<Documen
         let layer = doc.layer_mut(id).expect("just added");
         layer.visible = entry.visible;
         layer.locked = entry.locked;
+        (layer.lock_pixels, layer.lock_position) = (entry.lock_pixels, entry.lock_position);
         layer.opacity = entry.opacity.clamp(0.0, 1.0);
         layer.blend = BlendMode::from_key(&entry.blend).unwrap_or_default();
         layer.pixels = grid;

@@ -14,6 +14,8 @@ iced.workspace = true
 resvg = { version = "0.45", default-features = false }
 jd-io.workspace = true
 jd-ai.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 jd-gpu.workspace = true
 rfd.workspace = true
 octotablet.workspace = true

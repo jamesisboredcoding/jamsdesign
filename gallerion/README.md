@@ -105,6 +105,12 @@ left-click in, right-click out.
       adjustment works on the mask in greys, and the eraser paints the background colour.
       Ctrl+click a thumbnail loads it as a selection. Masks move with their layer and are
       saved in .jdp. Remove Background now adds a mask instead of deleting pixels
+- [x] 6d: every value box (options bar, Layers opacity, Color hex/RGB, zoom, Free Transform
+      W/H/Angle, adjustment dialogs) can be clicked and typed into: Enter applies, Esc
+      cancels, doing anything else applies it; tool preset picker (built-in round brushes,
+      saved presets, Reset Tool / Reset All Tools); dock panels resize by the strip below
+      them and move by dragging their tab strip (or their ≡ menu); Lock Image Pixels and
+      Lock Position
 - [ ] 6: PSD import, Flatpak, Pen tool
 
 ## App icon

@@ -125,6 +125,9 @@ impl Session {
         if layer.locked {
             return Err("The layer is locked");
         }
+        if layer.lock_pixels {
+            return Err("The layer's pixels are locked");
+        }
         if !layer.visible {
             return Err("The layer is hidden");
         }

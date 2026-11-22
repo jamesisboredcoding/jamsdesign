@@ -1,31 +1,57 @@
 //! Right-hand panel dock: Color, Properties, Layers.
 
 use iced::alignment::Vertical;
-use iced::widget::{button, column, container, image, mouse_area, pick_list, row, scrollable, slider, space, text, text_input, tooltip};
+use iced::widget::{button, column, container, image, mouse_area, pick_list, row, scrollable, sensor, slider, space, text, text_input, tooltip};
 use iced::{Color, Element, Fill, Length, Padding, Shrink};
 use jd_core::Hsv;
 use jd_raster::BlendMode;
-use jd_ui::widget::{bold, field_box, hline, icon_button, label, layer_row, panel, panel_header, value};
+use jd_ui::widget::{bold, hline, hover_tip, icon_button, label, layer_row, panel_header, panel_header_grip};
 use jd_ui::{Icon, icon, style, tokens::*};
 
 use super::{color, to_color};
-use crate::app::{DropTarget, Message, Photo, RENAME_INPUT};
+use crate::app::{DropTarget, Message, PANEL_SPLIT, Panel, Photo, RENAME_INPUT};
 
 pub fn view(app: &Photo) -> Element<'_, Message> {
-    // Window menu toggles which panels show; Layers takes the remaining height.
-    let mut col = column![].height(Fill);
-    if app.panels.color {
-        col = col.push(color_panel(app)).push(hline(BORDER_DEFAULT));
-    }
-    if app.panels.properties {
-        col = col.push(properties_panel(app)).push(hline(BORDER_DEFAULT));
-    }
-    if app.panels.layers {
-        col = col.push(layers_panel(app));
-    }
-    if !(app.panels.color || app.panels.properties || app.panels.layers) {
+    // Window menu toggles which panels show; the bottom one takes the remaining height.
+    // Drag the strip below a panel to resize it, or its tab strip to move it.
+    let shown = app.shown_panels();
+    if shown.is_empty() {
         // Minimal workspace: no dock at all.
         return space().into();
+    }
+    let drop_line = |slot: usize| {
+        let on = app.panel_drop == Some(slot);
+        container(space()).width(Fill).height(2).style(style::fill(if on { ACCENT_PRIMARY } else { iced::Color::TRANSPARENT }))
+    };
+    let mut col = column![drop_line(0)].height(Fill);
+    for (i, &p) in shown.iter().enumerate() {
+        let last = i + 1 == shown.len();
+        let height = if last {
+            Length::Fill
+        } else {
+            match (app.panel_heights.get(&p), p) {
+                (Some(h), _) => Length::Fixed(*h),
+                // Layers lists fill whatever they get; give it a sensible size when it isn't last.
+                (None, Panel::Layers) => Length::Fixed(300.0),
+                (None, _) => Shrink,
+            }
+        };
+        let body = match p {
+            Panel::Color => color_panel(app),
+            Panel::Properties => properties_panel(app),
+            Panel::Layers => layers_panel(app),
+        };
+        let body = container(body).width(Fill).height(height).clip(true);
+        col = col.push(sensor(body).on_show(move |s| Message::PanelMeasured(p, s.height)).on_resize(move |s| Message::PanelMeasured(p, s.height)));
+        if !last {
+            let resizing = matches!(app.ui_drag, Some(crate::app::UiDrag::PanelSplit { panel, .. }) if panel == p);
+            col = col.push(
+                mouse_area(container(hline(if resizing { ACCENT_PRIMARY } else { BORDER_DEFAULT })).height(PANEL_SPLIT - 2.0).center_y(PANEL_SPLIT - 2.0))
+                    .on_press(Message::PanelResizeStart(p))
+                    .interaction(iced::mouse::Interaction::ResizingVertically),
+            );
+        }
+        col = col.push(drop_line(i + 1));
     }
     // Tracks the pointer so the layer right-click menu opens where you clicked.
     mouse_area(container(col).width(app.dock_width).height(Fill).style(style::fill(BG_PANEL)))
@@ -33,22 +59,58 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
         .into()
 }
 
+/// A dock panel: its tab strip (drag the empty part to move the panel; ≡ for its menu) and
+/// padded content.
+fn framed<'a>(
+    p: Panel,
+    tabs: &[&'a str],
+    active: usize,
+    on_tab: impl Fn(usize) -> Message,
+    content: impl Into<Element<'a, Message>>,
+    height: Length,
+) -> Element<'a, Message> {
+    column![
+        panel_header_grip(tabs, active, on_tab, Message::PanelGrab(p), Message::OpenPanelMenu(p)),
+        container(content).width(Fill).height(Fill).padding(10),
+    ]
+    .height(height)
+    .into()
+}
+
 fn color_panel(app: &Photo) -> Element<'_, Message> {
     let content: Element<'_, Message> = match app.color_tab {
         0 => {
             let [r, g, b] = app.fg.to_rgba().to_srgb8();
             let hex = app.fg.to_rgba().to_hex();
-            let channel = |name, v: String| {
-                field_box(row![text(name).size(10).color(TEXT_MUTED), value(v)].spacing(4))
-                    .width(Fill)
+            let rgb = [r, g, b];
+            let set = |c: [u8; 3]| Message::SetFg(Hsv::from_rgba(jd_core::Rgba::from_srgb8(c[0], c[1], c[2])));
+            let channel = move |name: &'static str, key: &'static str, i: usize| {
+                row![
+                    text(name).size(10).color(TEXT_MUTED),
+                    super::field::number(app, key, rgb[i].to_string(), Fill, 1.0, 0.0..=255.0, move |v| {
+                        let mut c = rgb;
+                        c[i] = v.round() as u8;
+                        set(c)
+                    }),
+                ]
+                .spacing(4)
+                .align_y(Vertical::Center)
             };
+            let hex_field = row![
+                text("#").size(10).color(TEXT_MUTED),
+                super::field::custom(app, "hex", hex.trim_start_matches('#').to_owned(), Fill, |t| {
+                    jd_core::Rgba::from_hex(t.trim().trim_start_matches('#')).map(|c| Message::SetFg(Hsv::from_rgba(c)))
+                }),
+            ]
+            .spacing(4)
+            .align_y(Vertical::Center);
             column![
                 row![color::sv_square(app.fg), color::hue_strip(app.fg)].spacing(8),
                 row![
-                    container(channel("#", hex)).width(Length::FillPortion(2)),
-                    container(channel("R", r.to_string())).width(Length::FillPortion(1)),
-                    container(channel("G", g.to_string())).width(Length::FillPortion(1)),
-                    container(channel("B", b.to_string())).width(Length::FillPortion(1)),
+                    container(hex_field).width(Length::FillPortion(2)),
+                    container(channel("R", "red", 0)).width(Length::FillPortion(1)),
+                    container(channel("G", "green", 1)).width(Length::FillPortion(1)),
+                    container(channel("B", "blue", 2)).width(Length::FillPortion(1)),
                 ]
                 .spacing(6),
             ]
@@ -57,7 +119,7 @@ fn color_panel(app: &Photo) -> Element<'_, Message> {
         }
         _ => swatches(),
     };
-    panel(&["Color", "Swatches"], app.color_tab, Message::ColorTab, content, Shrink)
+    framed(Panel::Color, &["Color", "Swatches"], app.color_tab, Message::ColorTab, content, Shrink)
 }
 
 fn swatches<'a>() -> Element<'a, Message> {
@@ -101,8 +163,9 @@ fn properties_panel(app: &Photo) -> Element<'_, Message> {
                 .align_y(Vertical::Center),
             row![
                 label("Opacity").width(Fill),
-                value(format!("{:.0}%", layer.opacity * 100.0))
-            ],
+                super::field::number(app, "props-opacity", format!("{:.0}%", layer.opacity * 100.0), 52, 100.0, 0.0..=1.0, Message::LayerOpacity),
+            ]
+            .align_y(Vertical::Center),
             slider(0.0..=1.0, layer.opacity, Message::LayerOpacity)
                 .step(0.01_f32)
                 .on_release(Message::EndGesture)
@@ -118,7 +181,7 @@ fn properties_panel(app: &Photo) -> Element<'_, Message> {
         (0, None) => label("No layer selected").into(),
         _ => adjustments(app),
     };
-    panel(&["Properties", "Adjustments"], app.props_tab, Message::PropsTab, content, Shrink)
+    framed(Panel::Properties, &["Properties", "Adjustments"], app.props_tab, Message::PropsTab, content, Shrink)
 }
 
 /// The Adjustments tab: every adjustment and filter one click away (they apply to the active
@@ -212,24 +275,18 @@ const ROW_HALF: f32 = 21.5;
 
 fn layers_panel(app: &Photo) -> Element<'_, Message> {
     if app.layers_tab != 0 {
-        return panel(&["Layers", "Channels"], app.layers_tab, Message::LayersTab, channels_panel(app), Fill);
+        return framed(Panel::Layers, &["Layers", "Channels"], app.layers_tab, Message::LayersTab, channels_panel(app), Fill);
     }
 
     let Some(doc) = app.document() else {
-        return panel(
-            &["Layers", "Channels"],
-            app.layers_tab,
-            Message::LayersTab,
-            label("No document open."),
-            Fill,
-        );
+        return framed(Panel::Layers, &["Layers", "Channels"], app.layers_tab, Message::LayersTab, label("No document open."), Fill);
     };
     let active = doc.active();
     let controls = row![
         blend_picker(active.map_or(BlendMode::Normal, |l| l.blend)),
         space::horizontal(),
         label("Opacity:"),
-        field_box(value(format!("{:.0}%", active.map_or(100.0, |l| l.opacity * 100.0)))).width(52),
+        super::field::number(app, "layer-opacity", format!("{:.0}%", active.map_or(100.0, |l| l.opacity * 100.0)), 52, 100.0, 0.0..=1.0, Message::LayerOpacity),
     ]
     .spacing(8)
     .align_y(Vertical::Center);
@@ -243,10 +300,19 @@ fn layers_panel(app: &Photo) -> Element<'_, Message> {
             .style(style::input),
         tooltip::Position::Top,
     );
+    let (lock_px, lock_pos) = active.map_or((false, false), |l| (l.lock_pixels, l.lock_position));
     let locks = row![
         label("Lock:"),
-        icon_button(Icon::Brush, 13.0, false, None).padding(3),
-        icon_button(Icon::Move, 13.0, false, None).padding(3),
+        hover_tip(
+            icon_button(Icon::Brush, 13.0, lock_px, Some(Message::ToggleLockPixels)).padding(3),
+            if lock_px { "Unlock image pixels" } else { "Lock image pixels (no painting or filters)" },
+            tooltip::Position::Top,
+        ),
+        hover_tip(
+            icon_button(Icon::Move, 13.0, lock_pos, Some(Message::ToggleLockPosition)).padding(3),
+            if lock_pos { "Unlock position" } else { "Lock position (no moving or transforming)" },
+            tooltip::Position::Top,
+        ),
         lock_all,
     ]
     .spacing(4)
@@ -340,17 +406,17 @@ fn layers_panel(app: &Photo) -> Element<'_, Message> {
     }
 
     let mut actions = row![space::horizontal()].spacing(6).align_y(Vertical::Center);
-    // Disabled icons are for features that don't exist yet.
-    for (ic, msg) in [
-        (Icon::Link, None),
-        (Icon::Fx, Some(Message::ShowDialog(crate::app::DialogKind::BlendingOptions))),
-        (Icon::Mask, Some(Message::AddMask)),
-        (Icon::Adjust, None),
-        (Icon::Folder, None),
-        (Icon::Plus, Some(Message::AddLayer)),
-        (Icon::Trash, Some(Message::DeleteLayer)),
+    // Dimmed icons are for features that don't exist yet (their tooltips say so).
+    for (ic, msg, tip) in [
+        (Icon::Link, None, "Link layers (not available yet)"),
+        (Icon::Fx, Some(Message::ShowDialog(crate::app::DialogKind::BlendingOptions)), "Layer style"),
+        (Icon::Mask, Some(Message::AddMask), "Add layer mask (Alt: hide all)"),
+        (Icon::Adjust, None, "New adjustment layer (not available yet)"),
+        (Icon::Folder, None, "New group (not available yet)"),
+        (Icon::Plus, Some(Message::AddLayer), "New layer"),
+        (Icon::Trash, Some(Message::DeleteLayer), "Delete layer"),
     ] {
-        actions = actions.push(icon_button(ic, 14.0, false, msg));
+        actions = actions.push(hover_tip(icon_button(ic, 14.0, false, msg), tip, tooltip::Position::Top));
     }
 
     let content = column![
@@ -363,7 +429,7 @@ fn layers_panel(app: &Photo) -> Element<'_, Message> {
 
     // Own layout instead of `panel` so layer rows run edge to edge.
     column![
-        panel_header(&["Layers", "Channels"], 0, Message::LayersTab),
+        panel_header_grip(&["Layers", "Channels"], 0, Message::LayersTab, Message::PanelGrab(Panel::Layers), Message::OpenPanelMenu(Panel::Layers)),
         container(content).padding(Padding::ZERO.top(8)).height(Fill),
     ]
     .height(Fill)

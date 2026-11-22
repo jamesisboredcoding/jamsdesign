@@ -8,7 +8,7 @@ use iced::widget::{Canvas, button, column, container, mouse_area, pin, row, slid
 use iced::{Color, Element, Fill, Padding, Point, Rectangle, Renderer, Size, Theme};
 use jd_raster::adjust::{Adjustment, curve_table};
 use jd_raster::filter::Filter;
-use jd_ui::widget::{bold, field_box, label, value};
+use jd_ui::widget::{bold, label};
 use jd_ui::{style, tokens::*};
 
 use crate::adjust::Op;
@@ -21,8 +21,8 @@ pub fn view(app: &Photo) -> Option<Element<'_, Message>> {
     let set = |op: Op| Message::AdjustSet(op);
     let controls: Element<'_, Message> = match s.op.clone() {
         Op::Adjust(Adjustment::BrightnessContrast { brightness, contrast }) => column![
-            slider_row("Brightness", format!("{brightness:.0}"), -150.0..=150.0, brightness, move |v| set(Op::Adjust(Adjustment::BrightnessContrast { brightness: v.round(), contrast }))),
-            slider_row("Contrast", format!("{contrast:.0}"), -50.0..=100.0, contrast, move |v| set(Op::Adjust(Adjustment::BrightnessContrast { brightness, contrast: v.round() }))),
+            slider_row(app, "Brightness", format!("{brightness:.0}"), -150.0..=150.0, brightness, move |v| set(Op::Adjust(Adjustment::BrightnessContrast { brightness: v.round(), contrast }))),
+            slider_row(app, "Contrast", format!("{contrast:.0}"), -50.0..=100.0, contrast, move |v| set(Op::Adjust(Adjustment::BrightnessContrast { brightness, contrast: v.round() }))),
         ]
         .spacing(10)
         .into(),
@@ -30,13 +30,13 @@ pub fn view(app: &Photo) -> Option<Element<'_, Message>> {
             let lv = move |ib: u8, iw: u8, g: f32, ob: u8, ow: u8| set(Op::Adjust(Adjustment::Levels { in_black: ib, in_white: iw, gamma: g, out_black: ob, out_white: ow }));
             column![
                 histogram(&s.histogram, Some((in_black, in_white))),
-                slider_row("Shadows", in_black.to_string(), 0.0..=253.0, in_black as f32, move |v| lv((v as u8).min(in_white.saturating_sub(2)), in_white, gamma, out_black, out_white)),
+                slider_row(app, "Shadows", in_black.to_string(), 0.0..=253.0, in_black as f32, move |v| lv((v as u8).min(in_white.saturating_sub(2)), in_white, gamma, out_black, out_white)),
                 // Midtones on a log scale: 1.0 sits in the middle, like Photoshop's slider.
-                slider_row("Midtones", format!("{gamma:.2}"), -1.0..=1.0, gamma.log10(), move |v| lv(in_black, in_white, 10f32.powf(v).clamp(0.1, 9.99), out_black, out_white)),
-                slider_row("Highlights", in_white.to_string(), 2.0..=255.0, in_white as f32, move |v| lv(in_black, (v as u8).max(in_black.saturating_add(2)), gamma, out_black, out_white)),
+                slider_row_mapped(app, "Midtones", format!("{gamma:.2}"), -1.0..=1.0, gamma.log10(), |g| g.clamp(0.1, 9.99).log10(), move |v| lv(in_black, in_white, 10f32.powf(v).clamp(0.1, 9.99), out_black, out_white)),
+                slider_row(app, "Highlights", in_white.to_string(), 2.0..=255.0, in_white as f32, move |v| lv(in_black, (v as u8).max(in_black.saturating_add(2)), gamma, out_black, out_white)),
                 label("Output Levels"),
-                slider_row("Black", out_black.to_string(), 0.0..=255.0, out_black as f32, move |v| lv(in_black, in_white, gamma, v as u8, out_white)),
-                slider_row("White", out_white.to_string(), 0.0..=255.0, out_white as f32, move |v| lv(in_black, in_white, gamma, out_black, v as u8)),
+                slider_row(app, "Black", out_black.to_string(), 0.0..=255.0, out_black as f32, move |v| lv(in_black, in_white, gamma, v as u8, out_white)),
+                slider_row(app, "White", out_white.to_string(), 0.0..=255.0, out_white as f32, move |v| lv(in_black, in_white, gamma, out_black, v as u8)),
             ]
             .spacing(8)
             .into()
@@ -48,31 +48,31 @@ pub fn view(app: &Photo) -> Option<Element<'_, Message>> {
         .spacing(8)
         .into(),
         Op::Adjust(Adjustment::HueSaturation { hue, saturation, lightness }) => column![
-            slider_row("Hue", format!("{hue:+.0}"), -180.0..=180.0, hue, move |v| set(Op::Adjust(Adjustment::HueSaturation { hue: v.round(), saturation, lightness }))),
-            slider_row("Saturation", format!("{saturation:+.0}"), -100.0..=100.0, saturation, move |v| set(Op::Adjust(Adjustment::HueSaturation { hue, saturation: v.round(), lightness }))),
-            slider_row("Lightness", format!("{lightness:+.0}"), -100.0..=100.0, lightness, move |v| set(Op::Adjust(Adjustment::HueSaturation { hue, saturation, lightness: v.round() }))),
+            slider_row(app, "Hue", format!("{hue:+.0}"), -180.0..=180.0, hue, move |v| set(Op::Adjust(Adjustment::HueSaturation { hue: v.round(), saturation, lightness }))),
+            slider_row(app, "Saturation", format!("{saturation:+.0}"), -100.0..=100.0, saturation, move |v| set(Op::Adjust(Adjustment::HueSaturation { hue, saturation: v.round(), lightness }))),
+            slider_row(app, "Lightness", format!("{lightness:+.0}"), -100.0..=100.0, lightness, move |v| set(Op::Adjust(Adjustment::HueSaturation { hue, saturation, lightness: v.round() }))),
         ]
         .spacing(10)
         .into(),
         Op::Adjust(Adjustment::Threshold { level }) => column![
             histogram(&s.histogram, Some((level, level))),
-            slider_row("Threshold Level", level.to_string(), 1.0..=255.0, level as f32, move |v| set(Op::Adjust(Adjustment::Threshold { level: v as u8 }))),
+            slider_row(app, "Threshold Level", level.to_string(), 1.0..=255.0, level as f32, move |v| set(Op::Adjust(Adjustment::Threshold { level: v as u8 }))),
         ]
         .spacing(8)
         .into(),
-        Op::Adjust(Adjustment::Posterize { levels }) => slider_row("Levels", levels.to_string(), 2.0..=255.0, levels as f32, move |v| set(Op::Adjust(Adjustment::Posterize { levels: v as u8 }))),
+        Op::Adjust(Adjustment::Posterize { levels }) => slider_row(app, "Levels", levels.to_string(), 2.0..=255.0, levels as f32, move |v| set(Op::Adjust(Adjustment::Posterize { levels: v as u8 }))),
         Op::Adjust(Adjustment::Invert | Adjustment::Desaturate) => space().into(),
         // Radii use a squared scale so small values (the common ones) get most of the slider.
-        Op::Filter(Filter::GaussianBlur { radius }) => slider_row("Radius", format!("{radius:.1} px"), 0.0..=1.0, radius_to_t(radius), move |t| set(Op::Filter(Filter::GaussianBlur { radius: t_to_radius(t) }))),
+        Op::Filter(Filter::GaussianBlur { radius }) => slider_row_mapped(app, "Radius", format!("{radius:.1} px"), 0.0..=1.0, radius_to_t(radius), radius_to_t, move |t| set(Op::Filter(Filter::GaussianBlur { radius: t_to_radius(t) }))),
         Op::Filter(Filter::UnsharpMask { amount, radius, threshold }) => column![
-            slider_row("Amount", format!("{amount:.0}%"), 1.0..=500.0, amount, move |v| set(Op::Filter(Filter::UnsharpMask { amount: v.round(), radius, threshold }))),
-            slider_row("Radius", format!("{radius:.1} px"), 0.0..=1.0, radius_to_t(radius), move |t| set(Op::Filter(Filter::UnsharpMask { amount, radius: t_to_radius(t), threshold }))),
-            slider_row("Threshold", format!("{threshold} levels"), 0.0..=255.0, threshold as f32, move |v| set(Op::Filter(Filter::UnsharpMask { amount, radius, threshold: v as u8 }))),
+            slider_row(app, "Amount", format!("{amount:.0}%"), 1.0..=500.0, amount, move |v| set(Op::Filter(Filter::UnsharpMask { amount: v.round(), radius, threshold }))),
+            slider_row_mapped(app, "Radius", format!("{radius:.1} px"), 0.0..=1.0, radius_to_t(radius), radius_to_t, move |t| set(Op::Filter(Filter::UnsharpMask { amount, radius: t_to_radius(t), threshold }))),
+            slider_row(app, "Threshold", format!("{threshold} levels"), 0.0..=255.0, threshold as f32, move |v| set(Op::Filter(Filter::UnsharpMask { amount, radius, threshold: v as u8 }))),
         ]
         .spacing(10)
         .into(),
         Op::Filter(Filter::AddNoise { amount, monochrome, seed }) => column![
-            slider_row("Amount", format!("{amount:.1}%"), 0.0..=100.0, amount, move |v| set(Op::Filter(Filter::AddNoise { amount: (v * 10.0).round() / 10.0, monochrome, seed }))),
+            slider_row(app, "Amount", format!("{amount:.1}%"), 0.0..=100.0, amount, move |v| set(Op::Filter(Filter::AddNoise { amount: (v * 10.0).round() / 10.0, monochrome, seed }))),
             row![
                 toggle("Monochromatic", monochrome, set(Op::Filter(Filter::AddNoise { amount, monochrome: !monochrome, seed }))),
                 toggle("New seed", false, set(Op::Filter(Filter::AddNoise { amount, monochrome, seed: seed.wrapping_add(1) }))),
@@ -81,10 +81,10 @@ pub fn view(app: &Photo) -> Option<Element<'_, Message>> {
         ]
         .spacing(10)
         .into(),
-        Op::Filter(Filter::BoxBlur { radius }) => slider_row("Radius", format!("{radius:.0} px"), 1.0..=100.0, radius, move |v| set(Op::Filter(Filter::BoxBlur { radius: v.round() }))),
-        Op::Filter(Filter::HighPass { radius }) => slider_row("Radius", format!("{radius:.1} px"), 0.0..=1.0, radius_to_t(radius), move |t| set(Op::Filter(Filter::HighPass { radius: t_to_radius(t) }))),
+        Op::Filter(Filter::BoxBlur { radius }) => slider_row(app, "Radius", format!("{radius:.0} px"), 1.0..=100.0, radius, move |v| set(Op::Filter(Filter::BoxBlur { radius: v.round() }))),
+        Op::Filter(Filter::HighPass { radius }) => slider_row_mapped(app, "Radius", format!("{radius:.1} px"), 0.0..=1.0, radius_to_t(radius), radius_to_t, move |t| set(Op::Filter(Filter::HighPass { radius: t_to_radius(t) }))),
         Op::Filter(Filter::Sharpen) | Op::Adjust(Adjustment::ChannelLut(_)) => space().into(),
-        Op::Filter(Filter::Mosaic { cell }) => slider_row("Cell Size", format!("{cell} px"), 2.0..=200.0, cell as f32, move |v| set(Op::Filter(Filter::Mosaic { cell: v as u32 }))),
+        Op::Filter(Filter::Mosaic { cell }) => slider_row(app, "Cell Size", format!("{cell} px"), 2.0..=200.0, cell as f32, move |v| set(Op::Filter(Filter::Mosaic { cell: v as u32 }))),
     };
 
     let status = if s.rendering && s.preview_enabled { "Rendering preview…" } else { "" };
@@ -133,14 +133,35 @@ fn t_to_radius(t: f32) -> f32 {
 }
 
 fn slider_row<'a>(
-    name: &'a str,
+    app: &'a Photo,
+    name: &'static str,
     shown: String,
     range: std::ops::RangeInclusive<f32>,
     v: f32,
-    on_change: impl Fn(f32) -> Message + 'a,
+    on_change: impl Fn(f32) -> Message + Clone + 'a,
 ) -> Element<'a, Message> {
+    slider_row_mapped(app, name, shown, range, v, |x| x, on_change)
+}
+
+/// A slider whose value box shows a different unit than the slider moves in: `map` turns a
+/// typed value into slider units (e.g. a radius in px into the slider's squared scale).
+fn slider_row_mapped<'a>(
+    app: &'a Photo,
+    name: &'static str,
+    shown: String,
+    range: std::ops::RangeInclusive<f32>,
+    v: f32,
+    map: fn(f32) -> f32,
+    on_change: impl Fn(f32) -> Message + Clone + 'a,
+) -> Element<'a, Message> {
+    let (lo, hi) = (*range.start(), *range.end());
+    let typed = on_change.clone();
+    let field = super::field::custom(app, name, shown, 80, move |t| {
+        let n: f32 = super::field::number_text(t).parse().ok()?;
+        n.is_finite().then(|| typed(map(n).clamp(lo, hi)))
+    });
     column![
-        row![label(name).width(Fill), field_box(value(shown))].align_y(Vertical::Center),
+        row![label(name).width(Fill), field].align_y(Vertical::Center),
         slider(range, v, on_change).step(0.001_f32).style(style::slider),
     ]
     .spacing(4)

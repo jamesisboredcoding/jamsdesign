@@ -162,6 +162,38 @@ pub fn panel_header<'a, M: Clone + 'a>(
         .into()
 }
 
+/// A panel's tab strip whose empty part is a grip (press it to start dragging the panel)
+/// and whose menu icon is a button.
+pub fn panel_header_grip<'a, M: Clone + 'a>(
+    tabs: &[&'a str],
+    active: usize,
+    on_tab: impl Fn(usize) -> M,
+    on_grab: M,
+    on_menu: M,
+) -> Element<'a, M> {
+    let mut header = row![].align_y(Vertical::Center).height(30);
+    for (i, name) in tabs.iter().enumerate() {
+        let is_active = i == active;
+        let tab_text = text(*name).size(TEXT_SIZE_SMALL).font(if is_active { bold() } else { iced::Font::DEFAULT });
+        let tab = button(tab_text).padding(Padding::from([6, 12])).style(style::tab(is_active)).on_press(on_tab(i));
+        let line = if is_active { ACCENT_PRIMARY } else { Color::TRANSPARENT };
+        header = header.push(column![container(space()).width(Fill).height(2).style(style::fill(line)), tab].width(Length::Shrink));
+    }
+    header = header
+        .push(
+            mouse_area(container(space()).width(Fill).height(Fill))
+                .on_press(on_grab)
+                .interaction(iced::mouse::Interaction::Grab),
+        )
+        .push(
+            button(icon(Icon::Menu, 14.0, TEXT_SECONDARY))
+                .padding(Padding::from([4, 8]))
+                .style(style::ghost(false))
+                .on_press(on_menu),
+        );
+    container(header).width(Fill).style(style::fill(BG_PANEL_HEADER)).into()
+}
+
 /// One row of a layers panel. `thumb` and `name` are supplied by the app (an image and a
 /// label or text field), so this stays independent of how pixels are stored. `mask` is the
 /// layer mask's thumbnail, if it has one; `mask_targeted` outlines it instead of `thumb` to

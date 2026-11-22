@@ -5,6 +5,7 @@ mod color;
 mod dialog;
 mod layer_style;
 mod dock;
+pub mod field;
 mod menus;
 
 use iced::mouse::Interaction;
@@ -85,6 +86,8 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
         let cursor = match drag {
             crate::app::UiDrag::Dock => iced::mouse::Interaction::ResizingHorizontally,
             crate::app::UiDrag::Dialog(_) => iced::mouse::Interaction::Grabbing,
+            crate::app::UiDrag::PanelSplit { .. } => iced::mouse::Interaction::ResizingVertically,
+            crate::app::UiDrag::PanelMove(_) => iced::mouse::Interaction::Grabbing,
         };
         layers = layers.push(
             iced::widget::mouse_area(iced::widget::space().width(Fill).height(Fill))

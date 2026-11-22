@@ -24,6 +24,8 @@ pub fn popup(app: &Photo) -> Option<Element<'_, Message>> {
         PopupKind::ToolSlot(slot) => (tool_slot(slot), 220.0),
         PopupKind::Layer(_) => (layer_menu(app), WIDTH),
         PopupKind::Workspace => (workspaces(app), 200.0),
+        PopupKind::ToolPresets => (tool_presets(app), 300.0),
+        PopupKind::Panel(panel) => (panel_menu(app, panel), 200.0),
         PopupKind::Font => return None,
     };
     let height = menu_height(&entries);
@@ -452,6 +454,47 @@ fn layer_menu(app: &Photo) -> Vec<MenuEntry<'_, Message>> {
         item("Merge Visible", "Shift+Ctrl+E", s.doc, Message::MergeVisible),
         item("Flatten Image", "", s.doc, Message::Flatten),
     ]);
+    entries
+}
+
+/// A dock panel's ≡ menu.
+fn panel_menu(app: &Photo, panel: Panel) -> Vec<MenuEntry<'_, Message>> {
+    let shown = app.shown_panels();
+    let i = shown.iter().position(|p| *p == panel).unwrap_or(0);
+    vec![
+        item("Move Up", "", i > 0, Message::PanelMoveBy(panel, -1)),
+        item("Move Down", "", i + 1 < shown.len(), Message::PanelMoveBy(panel, 1)),
+        MenuEntry::Separator,
+        item("Reset Panel Layout", "", true, Message::ResetPanels),
+        item("Close", "", true, Message::TogglePanel(panel)),
+    ]
+}
+
+/// The options bar's tool preset picker.
+fn tool_presets(app: &Photo) -> Vec<MenuEntry<'_, Message>> {
+    use crate::app::{BUILTIN_BRUSHES, ToolPreset};
+    let mut entries = Vec::new();
+    if app.tool.uses_brush() {
+        let b = &app.brush;
+        for (name, size, hardness) in BUILTIN_BRUSHES {
+            let p = ToolPreset { name: name.to_owned(), size, hardness, opacity: 1.0, flow: 1.0 };
+            let on = (b.size, b.hardness, b.opacity, b.flow) == (size, hardness, 1.0, 1.0);
+            entries.push(item(name, check(on), true, Message::ApplyBrushPreset(p)));
+        }
+        if !app.presets.is_empty() {
+            entries.push(MenuEntry::Separator);
+            for p in &app.presets {
+                let on = (b.size, b.hardness, b.opacity, b.flow) == (p.size, p.hardness, p.opacity, p.flow);
+                entries.push(item(p.name.as_str(), check(on), true, Message::ApplyBrushPreset(p.clone())));
+            }
+        }
+        entries.push(MenuEntry::Separator);
+        entries.push(item("New Tool Preset (current settings)", "", true, Message::SaveBrushPreset));
+        entries.push(item("Delete Saved Presets", "", !app.presets.is_empty(), Message::DeleteBrushPresets));
+        entries.push(MenuEntry::Separator);
+    }
+    entries.push(item("Reset Tool", "", true, Message::ResetTool));
+    entries.push(item("Reset All Tools", "", true, Message::ResetAllTools));
     entries
 }
 

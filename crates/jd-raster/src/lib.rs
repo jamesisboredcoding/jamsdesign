@@ -32,6 +32,10 @@ pub struct Layer {
     pub name: String,
     pub visible: bool,
     pub locked: bool,
+    /// Lock image pixels: painting, fills, filters and adjustments are refused.
+    pub lock_pixels: bool,
+    /// Lock position: Move and Free Transform are refused.
+    pub lock_position: bool,
     /// 0.0..=1.0
     pub opacity: f32,
     pub blend: BlendMode,
@@ -134,6 +138,8 @@ impl Document {
             name: name.into(),
             visible: true,
             locked: false,
+            lock_pixels: false,
+            lock_position: false,
             opacity: 1.0,
             blend: BlendMode::Normal,
             pixels: TileGrid::empty(self.width, self.height),

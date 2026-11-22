@@ -44,6 +44,50 @@ pub struct BrushSettings {
     pub exposure: f32,
 }
 
+impl Default for BrushSettings {
+    fn default() -> Self {
+        Self {
+            size: 45.0,
+            hardness: 0.8,
+            opacity: 1.0,
+            flow: 1.0,
+            smoothing: 0.1,
+            mode: BlendMode::Normal,
+            pressure_size: true,
+            pressure_opacity: false,
+            exposure: 0.5,
+        }
+    }
+}
+
+/// A saved brush setup (the options bar's tool preset picker). Kept in
+/// `$XDG_CONFIG_HOME/jamsdesign/gallerion-tool-presets.json`.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ToolPreset {
+    pub name: String,
+    pub size: f32,
+    pub hardness: f32,
+    pub opacity: f32,
+    pub flow: f32,
+}
+
+/// Photoshop-like starting brushes: (name, size, hardness).
+pub const BUILTIN_BRUSHES: [(&str, f32, f32); 6] = [
+    ("Hard Round 5 px", 5.0, 1.0),
+    ("Hard Round 13 px", 13.0, 1.0),
+    ("Hard Round 30 px", 30.0, 1.0),
+    ("Soft Round 45 px", 45.0, 0.0),
+    ("Soft Round 100 px", 100.0, 0.0),
+    ("Soft Round 300 px", 300.0, 0.0),
+];
+
+fn presets_path() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(base.join("jamsdesign").join("gallerion-tool-presets.json"))
+}
+
 /// A brush/eraser stroke in progress.
 pub struct ActiveStroke {
     doc: u64,
@@ -204,12 +248,22 @@ pub struct Panels {
     pub layers: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Panel {
     Color,
     Properties,
     Layers,
 }
+
+impl Panel {
+    /// The dock's top-to-bottom order in a fresh workspace.
+    pub const DEFAULT_ORDER: [Panel; 3] = [Panel::Color, Panel::Properties, Panel::Layers];
+}
+
+/// The smallest a panel can be resized to (its tab strip plus a little).
+pub const PANEL_MIN: f32 = 60.0;
+/// Height of the strip between two panels (drag it to resize the one above).
+pub const PANEL_SPLIT: f32 = 5.0;
 
 /// Edit > Transform shortcuts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -235,6 +289,16 @@ pub enum PopupKind {
     Workspace,
     /// The Type tool's font list.
     Font,
+    /// The options bar's tool preset picker.
+    ToolPresets,
+    /// A panel's menu (its ≡ icon).
+    Panel(Panel),
+}
+
+impl Default for TypeOptions {
+    fn default() -> Self {
+        Self { family: String::new(), size: 48.0, bold: false, italic: false, align: jd_raster::text::Align::Left }
+    }
 }
 
 /// Type tool settings (the options bar); applied to new text and to the text being edited.
@@ -266,11 +330,33 @@ pub enum UiDrag {
     Dock,
     /// A dialog by its title; the pointer's offset from the dialog's top-left corner.
     Dialog(Vector),
+    /// The strip below a panel (resizes it): where the drag started (dock y) and the
+    /// panel's height then.
+    PanelSplit { panel: Panel, start_y: f32, start_h: f32 },
+    /// A panel by its tab strip, to move it up or down the dock.
+    PanelMove(Panel),
 }
 
 /// Panel dock width limits.
 pub const DOCK_MIN: f32 = 220.0;
 pub const DOCK_MAX: f32 = 640.0;
+
+/// A value box being typed into (see `view::field`).
+#[derive(Debug, Clone)]
+pub struct FieldEdit {
+    pub key: &'static str,
+    pub text: String,
+    /// What applying the current text does (`None` while it isn't a valid value).
+    pending: Option<Box<Message>>,
+}
+
+/// Free Transform values that can be typed in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransformField {
+    Width,
+    Height,
+    Angle,
+}
 
 /// Layer > Layer Mask commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -440,6 +526,19 @@ pub struct Photo {
     pub panels: Panels,
     pub workspace: Workspace,
     pub snap: Snap,
+    /// The value box being typed into, if any.
+    pub field_edit: Option<FieldEdit>,
+    /// Dock panels top to bottom (hidden ones keep their place).
+    pub panel_order: Vec<Panel>,
+    /// Heights set by dragging the strip below a panel (others size to their content).
+    pub panel_heights: HashMap<Panel, f32>,
+    /// Heights as laid out (reported by the panels themselves).
+    pub panel_sizes: HashMap<Panel, f32>,
+    /// While moving a panel: the slot it would land in (0 = top).
+    pub panel_drop: Option<usize>,
+    /// Saved brush presets, and where they're kept (`None`: not saved, e.g. in tests).
+    pub presets: Vec<ToolPreset>,
+    presets_path: Option<PathBuf>,
     /// Remove Background is downloading its model or working.
     pub removing_background: bool,
     pub dock_width: f32,
@@ -597,6 +696,35 @@ pub enum Message {
     OpenLayerMenu(LayerId),
     DockPointer(Point),
     SelectPixels,
+    ToggleLockPixels,
+    ToggleLockPosition,
+
+    // Dock panels
+    PanelMeasured(Panel, f32),
+    PanelResizeStart(Panel),
+    PanelGrab(Panel),
+    OpenPanelMenu(Panel),
+    /// Moves a panel up (-1) or down (+1) among the shown panels.
+    PanelMoveBy(Panel, i32),
+    ResetPanels,
+
+    // Tool presets (options bar)
+    ApplyBrushPreset(ToolPreset),
+    SaveBrushPreset,
+    DeleteBrushPresets,
+    ResetTool,
+    ResetAllTools,
+
+    // Typing into value boxes
+    FieldEdit(&'static str, String),
+    FieldInput(String, Option<Box<Message>>),
+    FieldCommit,
+    /// Escape anywhere, even inside a text field (which swallows it).
+    EscapePressed,
+    /// Typed zoom (stored units: 1 = 100%), keeping the view's centre.
+    ZoomPercent(f32),
+    /// A typed Free Transform value (scale as a fraction, angle in degrees).
+    TransformValue(TransformField, f32),
     /// Layer > Layer Mask and the Add Mask button.
     LayerMask(MaskOp),
     /// The Add Mask button: Reveal Selection with a selection, else Reveal All (Alt hides).
@@ -804,7 +932,7 @@ fn file_name(path: &Path) -> String {
 
 impl Photo {
     pub fn new() -> (Self, Task<Message>) {
-        let app = Self {
+        let mut app = Self {
             docs: Vec::new(),
             active: 0,
             next_doc_id: 1,
@@ -818,17 +946,7 @@ impl Photo {
             window_size: Size::new(1600.0, 960.0),
             fg: Hsv::from_rgba(Rgba::from_hex("F2733F").expect("valid hex")),
             bg: Hsv { h: 0.0, s: 0.0, v: 1.0 },
-            brush: BrushSettings {
-                size: 45.0,
-                hardness: 0.8,
-                opacity: 1.0,
-                flow: 1.0,
-                smoothing: 0.1,
-                mode: BlendMode::Normal,
-                pressure_size: true,
-                pressure_opacity: false,
-                exposure: 0.5,
-            },
+            brush: BrushSettings::default(),
             viewport: Size::new(1200.0, 800.0),
             canvas_bounds: Rectangle::new(Point::ORIGIN, Size::new(1200.0, 800.0)),
             stroke: None,
@@ -847,11 +965,18 @@ impl Photo {
             panels: Panels { color: true, properties: true, layers: true },
             workspace: Workspace::Essentials,
             snap: Snap { on: true, bounds: true, layers: true },
+            field_edit: None,
+            panel_order: Panel::DEFAULT_ORDER.to_vec(),
+            panel_heights: HashMap::new(),
+            panel_sizes: HashMap::new(),
+            panel_drop: None,
+            presets: Vec::new(),
+            presets_path: None,
             removing_background: false,
             dock_width: 300.0,
             ui_drag: None,
             title_grab: Point::ORIGIN,
-            type_opts: TypeOptions { family: String::new(), size: 48.0, bold: false, italic: false, align: jd_raster::text::Align::Left },
+            type_opts: TypeOptions::default(),
             typing: None,
             fonts: Vec::new(),
             font_filter: String::new(),
@@ -879,6 +1004,10 @@ impl Photo {
             notice: None,
         };
         // `gallerion photo.jpg other.png` opens those files.
+        // Tests never touch the real config folder.
+        if !cfg!(test) {
+            app.load_presets();
+        }
         let args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
         let open = if args.is_empty() { Task::none() } else { Task::done(Message::Open(args)) };
         (app, Task::batch([window::oldest().map(Message::WindowOpened), open]))
@@ -986,6 +1115,16 @@ impl Photo {
         // (Photoshop asks; applying is the common answer). Undo cancels it instead.
         // Text being typed is committed by anything that would end a transform too; Undo
         // cancels it.
+        // A value box being typed into is applied by anything else you do (like Photoshop).
+        if self.field_edit.is_some() {
+            match message {
+                Message::FieldEdit(..) | Message::FieldInput(..) | Message::FieldCommit | Message::EscapePressed => {}
+                ref m if !Self::keeps_transform(m) => {
+                    let _ = self.commit_field();
+                }
+                _ => {}
+            }
+        }
         if self.typing.is_some() {
             match message {
                 Message::Undo | Message::Redo | Message::JumpHistory(_) => {
@@ -1902,9 +2041,62 @@ impl Photo {
                         d.pos = Point::new(x, y);
                     }
                 }
+                Some(UiDrag::PanelSplit { panel, start_y, start_h }) => {
+                let y = p.y - crate::view::TOOLBAR_TOP;
+                // Leave the panels below at least their minimum.
+                let shown = self.shown_panels();
+                let below = shown.iter().skip_while(|q| **q != panel).skip(1).count() as f32;
+                let above: f32 = shown.iter().take_while(|q| **q != panel).map(|q| self.panel_sizes.get(q).copied().unwrap_or(PANEL_MIN) + PANEL_SPLIT).sum();
+                let room = self.window_size.height - crate::view::TOOLBAR_TOP - 30.0 - above - below * (PANEL_MIN + PANEL_SPLIT);
+                let h = (start_h + y - start_y).clamp(PANEL_MIN, room.max(PANEL_MIN));
+                self.panel_heights.insert(panel, h);
+            }
+            Some(UiDrag::PanelMove(_)) => {
+                let y = p.y - crate::view::TOOLBAR_TOP;
+                let mut top = 0.0;
+                let mut slot = 0;
+                for q in self.shown_panels() {
+                    let h = self.panel_sizes.get(&q).copied().unwrap_or(PANEL_MIN);
+                    if y > top + h / 2.0 {
+                        slot += 1;
+                    }
+                    top += h + PANEL_SPLIT;
+                }
+                self.panel_drop = Some(slot);
+            }
                 None => {}
             },
-            Message::UiDragEnd => self.ui_drag = None,
+            Message::UiDragEnd => {
+                if let (Some(UiDrag::PanelMove(panel)), Some(slot)) = (self.ui_drag, self.panel_drop) {
+                    self.move_panel_to(panel, slot);
+                }
+                self.ui_drag = None;
+                self.panel_drop = None;
+            }
+            Message::PanelMeasured(p, h) => {
+                self.panel_sizes.insert(p, h);
+            }
+            Message::PanelResizeStart(panel) => {
+                let start_h = self.panel_sizes.get(&panel).copied().unwrap_or(200.0);
+                self.ui_drag = Some(UiDrag::PanelSplit { panel, start_y: self.dock_pointer.y, start_h });
+            }
+            Message::PanelGrab(panel) => self.ui_drag = Some(UiDrag::PanelMove(panel)),
+            Message::OpenPanelMenu(panel) => {
+                let at = Point::new(self.window_size.width - self.dock_width + self.dock_pointer.x - 200.0, crate::view::TOOLBAR_TOP + self.dock_pointer.y + 8.0);
+                self.popup = Some(Popup { kind: PopupKind::Panel(panel), at, sub: None });
+            }
+            Message::PanelMoveBy(panel, delta) => {
+                let shown = self.shown_panels();
+                if let Some(i) = shown.iter().position(|q| *q == panel) {
+                    let to = (i as i32 + delta).clamp(0, shown.len() as i32 - 1) as usize;
+                    // Slots count positions before removal: moving down skips its own slot.
+                    self.move_panel_to(panel, if to > i { to + 1 } else { to });
+                }
+            }
+            Message::ResetPanels => {
+                self.panel_order = Panel::DEFAULT_ORDER.to_vec();
+                self.panel_heights.clear();
+            }
             Message::LoadChannel(c) => self.edit("Load Selection", None, |doc| {
                 let flat = jd_raster::composite::flatten(doc);
                 // Coverage = the channel's brightness (RGB: luminosity), scaled by opacity.
@@ -2073,6 +2265,88 @@ impl Photo {
                     d.doc.mask_target = on_mask;
                 }
             }
+            Message::FieldEdit(key, text) => {
+                if self.field_edit.as_ref().is_some_and(|f| f.key == key) {
+                    return Task::none();
+                }
+                let _ = self.commit_field();
+                self.field_edit = Some(FieldEdit { key, text, pending: None });
+                return Task::batch([
+                    operation::focus(crate::view::field::FIELD_INPUT),
+                    operation::select_all(crate::view::field::FIELD_INPUT),
+                ]);
+            }
+            Message::ApplyBrushPreset(p) => {
+                let b = &mut self.brush;
+                (b.size, b.hardness, b.opacity, b.flow) = (p.size, p.hardness, p.opacity, p.flow);
+            }
+            Message::SaveBrushPreset => {
+                let b = &self.brush;
+                let name = format!(
+                    "{} {:.0} px, {:.0}% hard, {:.0}% opacity",
+                    self.tool.name(),
+                    b.size,
+                    b.hardness * 100.0,
+                    b.opacity * 100.0
+                );
+                let preset = ToolPreset { name, size: b.size, hardness: b.hardness, opacity: b.opacity, flow: b.flow };
+                if !self.presets.contains(&preset) {
+                    self.presets.push(preset);
+                    self.save_presets();
+                }
+                self.info("Saved the brush settings as a tool preset");
+            }
+            Message::DeleteBrushPresets => {
+                self.presets.clear();
+                self.save_presets();
+            }
+            Message::ResetTool => {
+                let t = self.tool;
+                if t.uses_brush() {
+                    self.brush = BrushSettings::default();
+                } else if t == Tool::Type {
+                    self.type_opts = TypeOptions::default();
+                } else if t == Tool::Gradient {
+                    self.gradient_shape = jd_raster::gradient::Shape::Linear;
+                } else if t.is_selection() {
+                    self.select = SelectOptions::default();
+                }
+            }
+            Message::ResetAllTools => {
+                self.brush = BrushSettings::default();
+                self.type_opts = TypeOptions::default();
+                self.gradient_shape = jd_raster::gradient::Shape::Linear;
+                self.select = SelectOptions::default();
+            }
+            Message::FieldInput(text, pending) => {
+                if let Some(f) = self.field_edit.as_mut() {
+                    f.text = text;
+                    f.pending = pending;
+                }
+            }
+            Message::FieldCommit => return self.commit_field(),
+            Message::EscapePressed => {
+                if self.field_edit.take().is_some() {
+                    return Task::none();
+                }
+            }
+            Message::ZoomPercent(z) => {
+                let (lo, hi) = (ZOOM_STEPS[0], ZOOM_STEPS[ZOOM_STEPS.len() - 1]);
+                let z = z.clamp(lo, hi);
+                // The canvas's own coordinates: keep its centre fixed.
+                let anchor = Point::new(self.viewport.width / 2.0, self.viewport.height / 2.0);
+                self.zoom_to(z, anchor);
+            }
+            Message::TransformValue(field, v) => {
+                if let Some(t) = self.transform.as_mut() {
+                    match field {
+                        TransformField::Width if v.abs() >= 0.001 => t.params.sx = v,
+                        TransformField::Height if v.abs() >= 0.001 => t.params.sy = v,
+                        TransformField::Angle => t.params.angle = v.to_radians(),
+                        _ => {}
+                    }
+                }
+            }
             Message::SelectPixels => self.edit("Select Pixels", None, |doc| {
                 let Some(layer) = doc.active() else { return false };
                 let sel = Selection::from_alpha(&layer.pixels);
@@ -2111,6 +2385,8 @@ impl Photo {
                 };
                 self.panels = Panels { color, properties, layers };
                 self.open_strip = history.then_some(0);
+                self.panel_order = Panel::DEFAULT_ORDER.to_vec();
+                self.panel_heights.clear();
             }
             Message::SwapColors => std::mem::swap(&mut self.fg, &mut self.bg),
             Message::ResetColors => {
@@ -2174,6 +2450,14 @@ impl Photo {
             Message::ToggleLock => self.edit("Lock", None, |doc| {
                 let Some(id) = doc.active_id() else { return false };
                 doc.layer_mut(id).map(|l| l.locked = !l.locked).is_some()
+            }),
+            Message::ToggleLockPixels => self.edit("Lock Image Pixels", None, |doc| {
+                let Some(id) = doc.active_id() else { return false };
+                doc.layer_mut(id).map(|l| l.lock_pixels = !l.lock_pixels).is_some()
+            }),
+            Message::ToggleLockPosition => self.edit("Lock Position", None, |doc| {
+                let Some(id) = doc.active_id() else { return false };
+                doc.layer_mut(id).map(|l| l.lock_position = !l.lock_position).is_some()
             }),
             Message::ToggleLockOf(id) => self.edit("Lock", None, |doc| {
                 doc.layer_mut(id).map(|l| l.locked = !l.locked).is_some()
@@ -2335,6 +2619,10 @@ impl Photo {
                 iced::Event::Window(window::Event::FileDropped(path)) => Some(Message::Open(vec![path])),
                 // Ends layer drags wherever the button is released.
                 iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => Some(Message::PointerReleased),
+                // Text fields swallow Escape; a value box being typed into still needs it.
+                iced::Event::Keyboard(keyboard::Event::KeyPressed { key: keyboard::Key::Named(keyboard::key::Named::Escape), .. }) => {
+                    Some(Message::EscapePressed)
+                }
                 _ => None,
             }),
         ])
@@ -2616,6 +2904,9 @@ impl Photo {
                 | Message::DialogTitlePointer(_)
                 | Message::UiDragMove(_)
                 | Message::UiDragEnd
+                | Message::PanelMeasured(..)
+                | Message::PanelResizeStart(_)
+                | Message::PanelGrab(_)
                 | Message::LoadChannel(_)
                 | Message::FontFilter(_)
                 | Message::OptionsPointer(_)
@@ -2648,6 +2939,12 @@ impl Photo {
                 | Message::PickSv(..)
                 | Message::PickHue(_)
                 | Message::SetFg(_)
+                | Message::FieldEdit(..)
+                | Message::FieldInput(..)
+                | Message::FieldCommit
+                | Message::EscapePressed
+                | Message::ZoomPercent(_)
+                | Message::TransformValue(..)
                 | Message::Noop
         )
     }
@@ -2658,6 +2955,10 @@ impl Photo {
             None => false,
             Some(l) if l.locked => {
                 self.error("The layer is locked");
+                false
+            }
+            Some(l) if l.lock_pixels => {
+                self.error("The layer's pixels are locked");
                 false
             }
             Some(_) => true,
@@ -2689,6 +2990,65 @@ impl Photo {
                 false
             }
         }
+    }
+
+    /// Loads saved tool presets (a missing or unreadable file just means none).
+    fn load_presets(&mut self) {
+        self.presets_path = presets_path();
+        self.presets = self
+            .presets_path
+            .as_ref()
+            .and_then(|p| std::fs::read(p).ok())
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
+    }
+
+    fn save_presets(&mut self) {
+        let Some(path) = &self.presets_path else { return };
+        let saved = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|_| std::fs::write(path, serde_json::to_vec_pretty(&self.presets).unwrap_or_default()));
+        if let Err(e) = saved {
+            self.error(format!("Couldn't save tool presets: {e}"));
+        }
+    }
+
+    pub fn panel_shown(&self, p: Panel) -> bool {
+        match p {
+            Panel::Color => self.panels.color,
+            Panel::Properties => self.panels.properties,
+            Panel::Layers => self.panels.layers,
+        }
+    }
+
+    /// The shown dock panels, top to bottom.
+    pub fn shown_panels(&self) -> Vec<Panel> {
+        self.panel_order.iter().copied().filter(|p| self.panel_shown(*p)).collect()
+    }
+
+    /// Moves `panel` to `slot` among the shown panels (0 = top, counted before it's lifted).
+    fn move_panel_to(&mut self, panel: Panel, slot: usize) {
+        let shown = self.shown_panels();
+        let Some(from) = shown.iter().position(|q| *q == panel) else { return };
+        if slot == from || slot == from + 1 {
+            return;
+        }
+        // The shown panel it lands above (none: the bottom).
+        let before = shown.get(slot).copied();
+        self.panel_order.retain(|q| *q != panel);
+        let at = before.and_then(|b| self.panel_order.iter().position(|q| *q == b)).unwrap_or(self.panel_order.len());
+        self.panel_order.insert(at, panel);
+    }
+
+    /// Applies the value box being typed into (if what's typed is valid) and closes it.
+    fn commit_field(&mut self) -> Task<Message> {
+        let Some(f) = self.field_edit.take() else { return Task::none() };
+        let Some(m) = f.pending else { return Task::none() };
+        let task = self.update(*m);
+        // A typed value is its own undo step, not part of the next slider drag.
+        let _ = self.update(Message::EndGesture);
+        task
     }
 
     /// Layer > Layer Mask: add, delete, apply or switch off the active layer's mask.
@@ -3001,6 +3361,10 @@ impl Photo {
             self.error("The layer is locked");
             return;
         }
+        if layer.lock_pixels {
+            self.error("The layer's pixels are locked");
+            return;
+        }
         if !layer.visible {
             self.error("The layer is hidden");
             return;
@@ -3217,6 +3581,13 @@ impl Photo {
             ZOOM_STEPS.iter().rev().copied().find(|&z| z < current * 0.999)
         };
         let Some(next) = next else { return };
+        self.zoom_to(next, anchor);
+    }
+
+    /// Zooms to `next`, keeping the document point under `anchor` fixed on screen.
+    fn zoom_to(&mut self, next: f32, anchor: Point) {
+        let Some(d) = self.doc() else { return };
+        let current = self.resolve_zoom(d);
 
         // Keep the document point under `anchor` fixed on screen.
         let origin = self.origin_for(d, current, d.pan);
@@ -3235,6 +3606,10 @@ impl Photo {
     fn on_key(&mut self, event: keyboard::Event) -> Task<Message> {
         if let keyboard::Event::ModifiersChanged(m) = event {
             self.modifiers = m;
+            return Task::none();
+        }
+        // Keys a value box being typed into doesn't use (arrows up/down...) do nothing else.
+        if self.field_edit.is_some() {
             return Task::none();
         }
         if self.typing.is_some() {
@@ -3572,6 +3947,123 @@ mod tests {
     /// What the active document's first layer shows (pixels through its mask).
     fn shown(app: &Photo, x: u32, y: u32) -> [u8; 4] {
         app.document().unwrap().layers()[0].rendered().pixel(x, y)
+    }
+
+    /// Types `text` into the value box `key` (as if clicked, typed and then `finish`ed).
+    fn type_field(app: &mut Photo, key: &'static str, text: &str, on_value: impl Fn(f32) -> Message, scale: f32, range: std::ops::RangeInclusive<f32>) {
+        let _ = app.update(Message::FieldEdit(key, String::new()));
+        let pending = crate::view::field::parse(text, scale, &range).map(|v| Box::new(on_value(v)));
+        let _ = app.update(Message::FieldInput(text.into(), pending));
+    }
+
+    #[test]
+    fn typed_values_apply_on_enter_or_the_next_action_and_escape_cancels() {
+        let (mut app, _) = Photo::new();
+        white(&mut app, 200, 100);
+        type_field(&mut app, "brush-size", "120 px", Message::BrushSize, 1.0, 1.0..=5000.0);
+        assert_ne!(app.brush.size, 120.0, "nothing changes while typing");
+        let _ = app.update(Message::FieldCommit);
+        assert_eq!(app.brush.size, 120.0);
+        assert!(app.field_edit.is_none());
+
+        type_field(&mut app, "brush-size", "7", Message::BrushSize, 1.0, 1.0..=5000.0);
+        let _ = app.update(Message::EscapePressed);
+        assert_eq!(app.brush.size, 120.0, "Esc cancels");
+
+        // Typing then doing something else applies it first (here: the layer opacity, then
+        // an undoable edit that should come after it in the history).
+        type_field(&mut app, "layer-opacity", "40%", Message::LayerOpacity, 100.0, 0.0..=1.0);
+        let _ = app.update(Message::AddLayer);
+        let doc = app.document().unwrap();
+        assert!((doc.layers()[0].opacity - 0.4).abs() < 1e-6);
+        assert_eq!(doc.layers().len(), 2);
+        let _ = app.update(Message::Undo);
+        let _ = app.update(Message::Undo);
+        assert_eq!(app.document().unwrap().layers()[0].opacity, 1.0, "the typed opacity is one undo step");
+    }
+
+    #[test]
+    fn panels_move_by_their_tab_strip_and_resize_by_the_strip_below() {
+        let (mut app, _) = Photo::new();
+        app.window_size = Size::new(1400.0, 900.0);
+        for (p, h) in [(Panel::Color, 200.0), (Panel::Properties, 150.0), (Panel::Layers, 400.0)] {
+            let _ = app.update(Message::PanelMeasured(p, h));
+        }
+        let top = crate::view::TOOLBAR_TOP;
+        // Drag Layers to the very top.
+        let _ = app.update(Message::PanelGrab(Panel::Layers));
+        let _ = app.update(Message::UiDragMove(Point::new(1300.0, top + 20.0)));
+        assert_eq!(app.panel_drop, Some(0));
+        let _ = app.update(Message::UiDragEnd);
+        assert_eq!(app.panel_order, vec![Panel::Layers, Panel::Color, Panel::Properties]);
+        // A press without moving changes nothing.
+        let _ = app.update(Message::PanelGrab(Panel::Color));
+        let _ = app.update(Message::UiDragEnd);
+        assert_eq!(app.panel_order, vec![Panel::Layers, Panel::Color, Panel::Properties]);
+        // The panel menu moves it too.
+        let _ = app.update(Message::PanelMoveBy(Panel::Layers, 1));
+        assert_eq!(app.panel_order, vec![Panel::Color, Panel::Layers, Panel::Properties]);
+
+        // Resize Color from its strip: 200 px tall, dragged 50 px down.
+        app.dock_pointer = Point::new(100.0, 202.0);
+        let _ = app.update(Message::PanelResizeStart(Panel::Color));
+        let _ = app.update(Message::UiDragMove(Point::new(1300.0, top + 252.0)));
+        let _ = app.update(Message::UiDragEnd);
+        assert_eq!(app.panel_heights.get(&Panel::Color), Some(&250.0));
+        // Never smaller than the minimum.
+        let _ = app.update(Message::PanelResizeStart(Panel::Color));
+        let _ = app.update(Message::UiDragMove(Point::new(1300.0, top - 500.0)));
+        assert_eq!(app.panel_heights.get(&Panel::Color), Some(&PANEL_MIN));
+        // Switching workspace starts from the default layout again.
+        let _ = app.update(Message::UiDragEnd);
+        let _ = app.update(Message::SetWorkspace(Workspace::Essentials));
+        assert_eq!(app.panel_order, Panel::DEFAULT_ORDER.to_vec());
+        assert!(app.panel_heights.is_empty());
+    }
+
+    #[test]
+    fn pixel_and_position_locks() {
+        let (mut app, _) = Photo::new();
+        white(&mut app, 50, 50);
+        let _ = app.update(Message::ToggleLockPixels);
+        let _ = app.update(Message::Fill(true));
+        assert_eq!(px(&app, 5, 5), [255, 255, 255, 255], "fill refused");
+        let _ = app.update(Message::StrokeBegin { at: Point::new(20.0, 20.0), pressure: 1.0, erase: false, line: false });
+        let _ = app.update(Message::StrokeEnd);
+        assert_eq!(px(&app, 20, 20), [255, 255, 255, 255], "painting refused");
+        // Moving is still allowed with only the pixels locked.
+        let _ = app.update(Message::Nudge(3.0, 0.0));
+        assert_eq!(px(&app, 1, 5)[3], 0);
+        let _ = app.update(Message::ToggleLockPosition);
+        let _ = app.update(Message::Nudge(3.0, 0.0));
+        assert_eq!(px(&app, 4, 5)[3], 255, "moving refused");
+    }
+
+    #[test]
+    fn tool_presets_apply_and_reset() {
+        let (mut app, _) = Photo::new();
+        let (name, size, hardness) = BUILTIN_BRUSHES[4];
+        let _ = app.update(Message::ApplyBrushPreset(ToolPreset { name: name.into(), size, hardness, opacity: 1.0, flow: 1.0 }));
+        assert_eq!((app.brush.size, app.brush.hardness), (100.0, 0.0));
+        let _ = app.update(Message::SaveBrushPreset);
+        assert_eq!(app.presets.len(), 1, "kept for this session (tests never write the config file)");
+        let _ = app.update(Message::ResetTool);
+        assert_eq!(app.brush.size, BrushSettings::default().size);
+        app.select.tolerance = 99;
+        app.type_opts.size = 10.0;
+        let _ = app.update(Message::ResetAllTools);
+        assert_eq!((app.select.tolerance, app.type_opts.size), (32, 48.0));
+    }
+
+    #[test]
+    fn typed_zoom_keeps_the_view_centre() {
+        let mut app = app_with_doc(4000, 2000);
+        let centre = Point::new(500.0, 400.0);
+        let before = doc_point_under(&app, centre);
+        let _ = app.update(Message::ZoomPercent(0.5));
+        assert!((app.zoom_factor() - 0.5).abs() < 1e-6);
+        let after = doc_point_under(&app, centre);
+        assert!((before.0 - after.0).abs() < 0.5 && (before.1 - after.1).abs() < 0.5, "{before:?} {after:?}");
     }
 
     #[test]
