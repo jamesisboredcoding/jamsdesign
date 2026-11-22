@@ -59,7 +59,7 @@ impl Selection {
     }
 
     /// Builds a selection from a per-pixel function (called only inside `bounds`).
-    fn from_fn(width: u32, height: u32, bounds: [u32; 4], f: impl Fn(u32, u32) -> u8 + Sync) -> Self {
+    pub(crate) fn from_fn(width: u32, height: u32, bounds: [u32; 4], f: impl Fn(u32, u32) -> u8 + Sync) -> Self {
         let mut s = Self::empty(width, height);
         let [x0, y0, x1, y1] = clamp_bounds(bounds, width, height);
         if x0 >= x1 || y0 >= y1 {

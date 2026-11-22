@@ -7,7 +7,7 @@ use jd_ui::widget::{MenuEntry, menu, menu_height};
 
 use super::chrome::MENUS;
 use crate::adjust::OpKind;
-use crate::app::{DialogKind, Message, Orient, Panel, Photo, PopupKind, SnapTo, Zoom};
+use crate::app::{DialogKind, MaskOp, Message, Orient, Panel, Photo, PopupKind, SnapTo, Zoom};
 use crate::tool::{self, Tool};
 
 const WIDTH: f32 = 260.0;
@@ -270,6 +270,7 @@ fn menu_bar(app: &Photo, i: usize) -> Vec<MenuEntry<'_, Message>> {
                     item("Rasterize Layer Style", "", s.editable, Message::RasterizeLayerStyle),
                 ],
             ),
+            Submenu("Layer Mask", mask_menu(app, doc, sel)),
             Separator,
             item("Merge Down", "Ctrl+E", s.can_merge_down, Message::MergeDown),
             item("Merge Visible", "Shift+Ctrl+E", doc, Message::MergeVisible),
@@ -383,6 +384,22 @@ fn font_list(app: &Photo, at: iced::Point) -> Element<'_, Message> {
 }
 
 /// Right-click on a layer row.
+/// Layer > Layer Mask.
+fn mask_menu<'a>(app: &Photo, doc: bool, sel: bool) -> Vec<MenuEntry<'a, Message>> {
+    let mask = app.document().and_then(|d| d.active()).and_then(|l| l.mask.as_ref());
+    let (add, has) = (doc && mask.is_none(), mask.is_some());
+    vec![
+        item("Reveal All", "", add, Message::LayerMask(MaskOp::RevealAll)),
+        item("Hide All", "", add, Message::LayerMask(MaskOp::HideAll)),
+        item("Reveal Selection", "", add && sel, Message::LayerMask(MaskOp::RevealSelection)),
+        item("Hide Selection", "", add && sel, Message::LayerMask(MaskOp::HideSelection)),
+        MenuEntry::Separator,
+        item("Delete", "", has, Message::LayerMask(MaskOp::Delete)),
+        item("Apply", "", has, Message::LayerMask(MaskOp::Apply)),
+        item(if mask.is_some_and(|m| !m.enabled) { "Enable" } else { "Disable" }, "", has, Message::LayerMask(MaskOp::Toggle)),
+    ]
+}
+
 fn layer_menu(app: &Photo) -> Vec<MenuEntry<'_, Message>> {
     use MenuEntry::{Separator, Submenu};
     let s = state(app);
@@ -405,8 +422,20 @@ fn layer_menu(app: &Photo) -> Vec<MenuEntry<'_, Message>> {
         Separator,
         item("Select Pixels", "", s.doc, Message::SelectPixels),
         Separator,
-        item("Duplicate Layer", "Ctrl+J", s.doc, Message::DuplicateLayer),
     ];
+    let mask = layer.and_then(|l| l.mask.as_ref());
+    entries.extend(match mask {
+        None => vec![item("Add Layer Mask", "", s.doc, Message::AddMask)],
+        Some(m) => vec![
+            item(if m.enabled { "Disable Layer Mask" } else { "Enable Layer Mask" }, "", true, Message::LayerMask(MaskOp::Toggle)),
+            item("Delete Layer Mask", "", true, Message::LayerMask(MaskOp::Delete)),
+            item("Apply Layer Mask", "", true, Message::LayerMask(MaskOp::Apply)),
+        ],
+    });
+    entries.extend([
+        Separator,
+        item("Duplicate Layer", "Ctrl+J", s.doc, Message::DuplicateLayer),
+    ]);
     entries.push(if others.is_empty() {
         item("Duplicate Into...", "", false, Message::Noop)
     } else {

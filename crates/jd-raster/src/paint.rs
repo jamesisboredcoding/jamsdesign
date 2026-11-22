@@ -82,6 +82,8 @@ pub type Region = [u32; 4];
 pub struct Stroke {
     params: BrushParams,
     layer: LayerId,
+    /// Painting into the layer's mask (greys) rather than its pixels.
+    on_mask: bool,
     space: BlendSpace,
     width: u32,
     height: u32,
@@ -97,16 +99,19 @@ pub struct Stroke {
 }
 
 impl Stroke {
-    /// Starts a stroke on the active layer. `None` if there is no active layer.
+    /// Starts a stroke on the active layer (its mask, if that is being edited). `None` if
+    /// there is no active layer.
     pub fn begin(doc: &Document, params: BrushParams) -> Option<Self> {
         let layer = doc.active()?;
+        let on_mask = doc.editing_mask();
         Some(Self {
             params,
             layer: layer.id,
+            on_mask,
             space: doc.blend_space,
             width: doc.width,
             height: doc.height,
-            original: layer.pixels.clone(),
+            original: layer.target(on_mask).clone(),
             clip: doc.selection.clone(),
             mask: HashMap::new(),
             last: None,
@@ -231,7 +236,7 @@ impl Stroke {
             for tx in x0 / TILE_SIZE..=(x1 - 1) / TILE_SIZE {
                 let Some(mask) = self.mask.get(&(tx, ty)) else { continue };
                 let original = self.original.tile(tx, ty).cloned();
-                let Some(tile) = layer.pixels.tile_mut(tx, ty) else { continue };
+                let Some(tile) = layer.target_mut(self.on_mask).tile_mut(tx, ty) else { continue };
                 let data = tile.data_mut();
                 let lx0 = x0.max(tx * TILE_SIZE) - tx * TILE_SIZE;
                 let ly0 = y0.max(ty * TILE_SIZE) - ty * TILE_SIZE;
@@ -371,7 +376,7 @@ impl Stroke {
             };
             let v: [u8; 4] = [0, 1, 2, 3].map(|c| (orig[i][c] * (1.0 - k) + out[i][c] * k + 0.5).clamp(0.0, 255.0) as u8);
             let (x, y) = at(i);
-            layer.pixels.set_pixel(x, y, v);
+            layer.target_mut(self.on_mask).set_pixel(x, y, v);
         }
     }
 }

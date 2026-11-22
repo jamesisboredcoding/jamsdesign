@@ -8,6 +8,7 @@
 //! | `document.json`        | size, blend space, layer list (see [`Manifest`])            |
 //! | `layers/<i>/<x>_<y>`   | one tile: 256×256 RGBA8, sRGB, straight alpha, as a raw     |
 //! |                        | deflate stream in a *stored* zip entry (see below)          |
+//! | `masks/<i>/<x>_<y>`    | a layer mask tile, same encoding (greys; see `jd_raster::mask`) |
 //! | `thumbnail.png`        | flattened preview, max 256 px, for file managers            |
 //!
 //! Tiles are deflated by us, in parallel, rather than by the zip writer (which compresses one
@@ -26,6 +27,7 @@ use rayon::prelude::*;
 use std::path::Path;
 use std::sync::Arc;
 
+use jd_raster::mask::Mask;
 use jd_raster::style::{LayerStyle, StrokePosition};
 use jd_raster::text::{Align, TextLayer};
 use jd_raster::{BlendMode, BlendSpace, Document, TILE_SIZE, Tile, TileGrid, composite};
@@ -81,6 +83,17 @@ struct LayerEntry {
     /// Editable text (Type tool); the layer's tiles hold the rendered text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     text: Option<TextEntry>,
+    /// Layer mask; its tiles are under `masks/<i>/`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mask: Option<MaskEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct MaskEntry {
+    /// Value wherever no tile is stored: 255 reveals, 0 hides.
+    default: u8,
+    enabled: bool,
+    tiles: Vec<[i32; 2]>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -186,6 +199,14 @@ fn tile_path(layer: usize, x: i32, y: i32) -> String {
     format!("layers/{layer}/{x}_{y}")
 }
 
+fn mask_tile_path(layer: usize, x: i32, y: i32) -> String {
+    format!("masks/{layer}/{x}_{y}")
+}
+
+fn grid_path(mask: bool, layer: usize, x: i32, y: i32) -> String {
+    if mask { mask_tile_path(layer, x, y) } else { tile_path(layer, x, y) }
+}
+
 /// True if `bytes` start like a .jdp (zip with our mimetype first).
 pub fn sniff(bytes: &[u8]) -> bool {
     bytes.starts_with(b"PK\x03\x04") && bytes.windows(MIME.len()).take(128).any(|w| w == MIME.as_bytes())
@@ -211,22 +232,26 @@ pub fn write<W: Write + Seek>(doc: &Document, out: W) -> Result<W, SaveError> {
         layers: Vec::new(),
     };
     // Compress every tile in parallel, then write them in order.
-    let jobs: Vec<(usize, i32, i32, &[u8])> = doc
+    let jobs: Vec<(String, &[u8])> = doc
         .layers()
         .iter()
         .enumerate()
-        .flat_map(|(i, l)| l.pixels.iter_all().map(move |(x, y, t)| (i, x, y, t.data())))
+        .flat_map(|(i, l)| {
+            let pixels = l.pixels.iter_all().map(move |(x, y, t)| (tile_path(i, x, y), t.data()));
+            let mask = l.mask.iter().flat_map(move |m| m.pixels.iter_all().map(move |(x, y, t)| (mask_tile_path(i, x, y), t.data())));
+            pixels.chain(mask)
+        })
         .collect();
     let compressed: Vec<std::io::Result<Vec<u8>>> = jobs
         .par_iter()
-        .map(|(_, _, _, data)| {
+        .map(|(_, data)| {
             let mut enc = DeflateEncoder::new(Vec::with_capacity(data.len() / 3), Compression::default());
             enc.write_all(data)?;
             enc.finish()
         })
         .collect();
-    for ((i, x, y, _), bytes) in jobs.iter().zip(compressed) {
-        zip.start_file(tile_path(*i, *x, *y), stored)?;
+    for ((path, _), bytes) in jobs.iter().zip(compressed) {
+        zip.start_file(path.as_str(), stored)?;
         zip.write_all(&bytes?)?;
     }
 
@@ -251,6 +276,11 @@ pub fn write<W: Write + Seek>(doc: &Document, out: W) -> Result<W, SaveError> {
                 align: t.align.key().into(),
                 x: t.x,
                 y: t.y,
+            }),
+            mask: layer.mask.as_ref().map(|m| MaskEntry {
+                default: m.default,
+                enabled: m.enabled,
+                tiles: m.pixels.iter_all().map(|(x, y, _)| [x, y]).collect(),
             }),
         });
     }
@@ -294,37 +324,45 @@ pub fn read<R: Read + Seek>(name: impl Into<String>, input: R) -> Result<Documen
     // Read compressed tiles in order (zip access is sequential), inflate them in parallel.
     let mut raw = Vec::new();
     for (i, entry) in manifest.layers.iter().enumerate() {
-        for &[x, y] in &entry.tiles {
+        let mask_tiles = entry.mask.iter().flat_map(|m| m.tiles.iter().map(|t| (true, t)));
+        for (is_mask, &[x, y]) in entry.tiles.iter().map(|t| (false, t)).chain(mask_tiles) {
             let mut bytes = Vec::new();
-            zip.by_name(&tile_path(i, x, y))
-                .map_err(|e| LoadError::Format(format!("tile {i}/{x}_{y}: {e}")))?
-                .read_to_end(&mut bytes)?;
-            raw.push((i, x, y, bytes));
+            let path = grid_path(is_mask, i, x, y);
+            zip.by_name(&path).map_err(|e| LoadError::Format(format!("{path}: {e}")))?.read_to_end(&mut bytes)?;
+            raw.push((i, is_mask, x, y, bytes));
         }
     }
     let expected = (TILE_SIZE * TILE_SIZE * 4) as usize;
-    let tiles: Vec<Result<(usize, i32, i32, Tile), LoadError>> = raw
+    let tiles: Vec<Result<(usize, bool, i32, i32, Tile), LoadError>> = raw
         .into_par_iter()
-        .map(|(i, x, y, bytes)| {
+        .map(|(i, is_mask, x, y, bytes)| {
             let mut data = Vec::with_capacity(expected);
             DeflateDecoder::new(bytes.as_slice()).read_to_end(&mut data)?;
             if data.len() != expected {
                 return Err(LoadError::Format(format!("tile {i}/{x}_{y} has the wrong size")));
             }
-            Ok((i, x, y, Tile::new(data.into_boxed_slice())))
+            Ok((i, is_mask, x, y, Tile::new(data.into_boxed_slice())))
         })
         .collect();
-    let mut grids: Vec<TileGrid> =
-        manifest.layers.iter().map(|_| TileGrid::empty(manifest.width, manifest.height)).collect();
+    let empty = || TileGrid::empty(manifest.width, manifest.height);
+    let mut grids: Vec<TileGrid> = manifest.layers.iter().map(|_| empty()).collect();
+    let mut masks: Vec<Option<Mask>> = manifest
+        .layers
+        .iter()
+        .map(|e| e.mask.as_ref().map(|m| Mask { pixels: empty(), default: m.default, enabled: m.enabled }))
+        .collect();
     for tile in tiles {
-        let (i, x, y, tile) = tile?;
-        grids[i].set_tile_at(x, y, Some(Arc::new(tile)));
+        let (i, is_mask, x, y, tile) = tile?;
+        match (is_mask, masks[i].as_mut()) {
+            (true, Some(m)) => m.pixels.set_tile_at(x, y, Some(Arc::new(tile))),
+            _ => grids[i].set_tile_at(x, y, Some(Arc::new(tile))),
+        }
     }
 
     let mut doc = Document::blank(name, manifest.width, manifest.height);
     doc.blend_space = BlendSpace::from_key(&manifest.blend_space).unwrap_or_default();
     let mut ids = Vec::new();
-    for (entry, grid) in manifest.layers.iter().zip(grids) {
+    for ((entry, grid), mask) in manifest.layers.iter().zip(grids).zip(masks) {
         let id = doc.add_layer(entry.name.clone());
         let layer = doc.layer_mut(id).expect("just added");
         layer.visible = entry.visible;
@@ -332,6 +370,7 @@ pub fn read<R: Read + Seek>(name: impl Into<String>, input: R) -> Result<Documen
         layer.opacity = entry.opacity.clamp(0.0, 1.0);
         layer.blend = BlendMode::from_key(&entry.blend).unwrap_or_default();
         layer.pixels = grid;
+        layer.mask = mask;
         if let Some(style) = &entry.style {
             layer.style = style.to_style();
         }
@@ -423,6 +462,23 @@ mod tests {
         let bytes = write(&doc, std::io::Cursor::new(Vec::new())).unwrap().into_inner();
         let back = read("t", std::io::Cursor::new(bytes)).unwrap();
         assert_eq!(back.layers().last().unwrap().style, style);
+    }
+
+    #[test]
+    fn roundtrip_keeps_layer_masks() {
+        let mut doc = Document::blank("t", 300, 60);
+        let id = doc.add_layer("masked");
+        let l = doc.layer_mut(id).unwrap();
+        let mut mask = Mask::new(300, 60, 255);
+        mask.pixels.set_pixel(280, 10, [40, 40, 40, 255]);
+        mask.pixels.set_pixel_at(-20, 5, [7, 7, 7, 255]);
+        mask.enabled = false;
+        l.mask = Some(mask);
+        let bytes = write(&doc, std::io::Cursor::new(Vec::new())).unwrap().into_inner();
+        let back = read("t", std::io::Cursor::new(bytes)).unwrap();
+        let m = back.layers().last().unwrap().mask.as_ref().expect("mask kept");
+        assert_eq!((m.default, m.enabled), (255, false));
+        assert_eq!((m.value_at(280, 10), m.value_at(0, 0), m.value_at(-20, 5)), (40, 255, 7));
     }
 
     #[test]

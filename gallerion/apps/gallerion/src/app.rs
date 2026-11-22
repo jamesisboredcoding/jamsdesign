@@ -8,6 +8,7 @@ use iced::{Point, Rectangle, Size, Subscription, Task, Vector, event};
 use jd_core::{Hsv, Rgba};
 use jd_raster::paint::{BrushParams, Effect, Stroke};
 use jd_raster::selection::{self, Combine, Selection};
+use jd_raster::mask::Mask;
 use jd_raster::{BlendMode, BlendSpace, Document, History, LayerId, TileGrid, TileId};
 
 use crate::adjust::{self as adj, Op, OpKind};
@@ -74,6 +75,8 @@ pub struct OpenDoc {
     pub pan: Vector,
     /// Layers panel thumbnails, rebuilt when a layer's tiles change.
     pub thumbs: HashMap<LayerId, (Vec<TileId>, image::Handle)>,
+    /// Layer mask thumbnails, keyed like `thumbs` (plus the mask's default).
+    pub mask_thumbs: HashMap<LayerId, (Vec<TileId>, image::Handle)>,
     /// Channels panel thumbnails (RGB, R, G, B) and what they were made from.
     pub channel_thumbs: Vec<image::Handle>,
     pub channel_key: u64,
@@ -268,6 +271,19 @@ pub enum UiDrag {
 /// Panel dock width limits.
 pub const DOCK_MIN: f32 = 220.0;
 pub const DOCK_MAX: f32 = 640.0;
+
+/// Layer > Layer Mask commands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaskOp {
+    RevealAll,
+    HideAll,
+    RevealSelection,
+    HideSelection,
+    Delete,
+    Apply,
+    /// Disable / Enable Layer Mask.
+    Toggle,
+}
 
 /// View > Snap and Snap To.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -581,6 +597,13 @@ pub enum Message {
     OpenLayerMenu(LayerId),
     DockPointer(Point),
     SelectPixels,
+    /// Layer > Layer Mask and the Add Mask button.
+    LayerMask(MaskOp),
+    /// The Add Mask button: Reveal Selection with a selection, else Reveal All (Alt hides).
+    AddMask,
+    /// A press on a layer's thumbnail (`true`: its mask's): selects the layer and what edits
+    /// go to; Ctrl loads it as a selection, Shift switches a mask off and on.
+    ThumbPress(LayerId, bool),
     DuplicateInto(usize),
     About,
 
@@ -740,6 +763,31 @@ pub enum Message {
 }
 
 /// `src` moved into a `w`×`h` document: same position if the sizes match, otherwise centred.
+/// A colour as the grey a layer mask gets from it (its luminance, like Photoshop).
+fn gray([r, g, b]: [u8; 3]) -> [u8; 3] {
+    let v = (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32).round() as u8;
+    [v, v, v]
+}
+
+/// `c` as it should be painted on whatever is being edited (greys on a mask).
+fn target_color(doc: &Document, c: [u8; 3]) -> [u8; 3] {
+    if doc.editing_mask() { gray(c) } else { c }
+}
+
+/// Delete / Cut on the active layer: pixels become transparent; on a mask the area is filled
+/// with the background colour's grey instead (Photoshop does this too).
+fn clear_target(doc: &mut Document, sel: &Selection, bg_gray: [u8; 3]) -> bool {
+    let on_mask = doc.editing_mask();
+    let Some(id) = doc.active_id() else { return false };
+    let Some(l) = doc.layer_mut(id) else { return false };
+    if on_mask {
+        selection::fill(l.target_mut(true), sel, bg_gray);
+    } else {
+        selection::clear(&mut l.pixels, sel);
+    }
+    true
+}
+
 fn centred(src: &TileGrid, w: u32, h: u32) -> TileGrid {
     if src.width() == w && src.height() == h {
         return src.clone();
@@ -1030,10 +1078,10 @@ impl Photo {
             Message::WandAllLayers(on) => self.select.all_layers = on,
             Message::ClearSelected => {
                 if self.check_layer_editable() {
+                    let bg = gray(self.bg.to_rgba().to_srgb8());
                     self.edit("Clear", None, |doc| {
                         let Some(sel) = doc.selection.clone() else { return false };
-                        let Some(id) = doc.active_id() else { return false };
-                        doc.layer_mut(id).map(|l| selection::clear(&mut l.pixels, &sel)).is_some()
+                        clear_target(doc, &sel, bg)
                     });
                 }
             }
@@ -1042,8 +1090,9 @@ impl Photo {
                     let color = if foreground { self.fg } else { self.bg }.to_rgba().to_srgb8();
                     self.edit("Fill", None, |doc| {
                         let sel = doc.selection.clone().unwrap_or_else(|| Selection::all(doc.width, doc.height));
+                        let (on_mask, color) = (doc.editing_mask(), target_color(doc, color));
                         let Some(id) = doc.active_id() else { return false };
-                        doc.layer_mut(id).map(|l| selection::fill(&mut l.pixels, &sel, color)).is_some()
+                        doc.layer_mut(id).map(|l| selection::fill(l.target_mut(on_mask), &sel, color)).is_some()
                     });
                 }
             }
@@ -1051,9 +1100,10 @@ impl Photo {
                 let cut = matches!(message, Message::Cut);
                 let Some(doc) = self.document() else { return Task::none() };
                 let Some(layer) = doc.active() else { return Task::none() };
+                let source = layer.target(doc.editing_mask());
                 let pixels = match &doc.selection {
-                    Some(sel) => selection::extract(&layer.pixels, sel),
-                    None => layer.pixels.clone(),
+                    Some(sel) => selection::extract(source, sel),
+                    None => source.clone(),
                 };
                 if jd_raster::transform::content_bounds(&pixels).is_none() {
                     self.info("Nothing to copy: the selected area is empty");
@@ -1062,15 +1112,10 @@ impl Photo {
                 self.clipboard = Some(Clip { pixels });
                 if cut {
                     if self.check_layer_editable() {
+                        let bg = gray(self.bg.to_rgba().to_srgb8());
                         self.edit("Cut", None, |doc| {
-                            let Some(id) = doc.active_id() else { return false };
-                            let sel = doc.selection.clone();
-                            doc.layer_mut(id)
-                                .map(|l| match &sel {
-                                    Some(sel) => selection::clear(&mut l.pixels, sel),
-                                    None => l.pixels = TileGrid::empty(l.pixels.width(), l.pixels.height()),
-                                })
-                                .is_some()
+                            let sel = doc.selection.clone().unwrap_or_else(|| Selection::all(doc.width, doc.height));
+                            clear_target(doc, &sel, bg)
                         });
                     }
                 } else {
@@ -1172,8 +1217,8 @@ impl Photo {
                 match adj::Session::begin(d.id, &d.doc, kind) {
                     Err(e) => self.error(e),
                     Ok(session) if kind.is_instant() => {
-                        let (layer, label, pixels) = (session.layer, session.op.name(), session.result());
-                        self.edit(label, None, |doc| doc.layer_mut(layer).map(|l| l.pixels = pixels).is_some());
+                        let (layer, label, pixels, on_mask) = (session.layer, session.op.name(), session.result(), session.mask);
+                        self.edit(label, None, |doc| doc.layer_mut(layer).map(|l| *l.target_mut(on_mask) = pixels).is_some());
                     }
                     Ok(mut session) => {
                         let task = session.schedule();
@@ -1214,7 +1259,7 @@ impl Photo {
                 let d = &mut self.docs[i];
                 d.history.record(s.op.name(), &d.doc, None);
                 if let Some(l) = d.doc.layer_mut(s.layer) {
-                    l.pixels = pixels;
+                    *l.target_mut(s.mask) = pixels;
                 }
             }
             Message::AdjustCancel => self.adjusting = None,
@@ -1316,15 +1361,16 @@ impl Photo {
                 let tone = matches!(message, Message::AutoTone);
                 if self.check_layer_editable() {
                     self.edit(if tone { "Auto Tone" } else { "Auto Contrast" }, None, |doc| {
-                        let sel = doc.selection.clone();
+                        let (sel, on_mask) = (doc.selection.clone(), doc.editing_mask());
                         let Some(id) = doc.active_id() else { return false };
                         let Some(l) = doc.layer_mut(id) else { return false };
+                        let target = l.target_mut(on_mask);
                         let adj = if tone {
-                            jd_raster::adjust::auto_tone(&l.pixels, sel.as_ref())
+                            jd_raster::adjust::auto_tone(target, sel.as_ref())
                         } else {
-                            jd_raster::adjust::auto_contrast(&l.pixels, sel.as_ref())
+                            jd_raster::adjust::auto_contrast(target, sel.as_ref())
                         };
-                        l.pixels = jd_raster::adjust::apply(&l.pixels, &adj, sel.as_ref());
+                        *target = jd_raster::adjust::apply(target, &adj, sel.as_ref());
                         true
                     });
                 }
@@ -1360,9 +1406,14 @@ impl Photo {
                     && self.check_layer_editable()
                 {
                     self.edit(op.name(), None, |doc| {
-                        let sel = doc.selection.clone();
+                        let (sel, on_mask) = (doc.selection.clone(), doc.editing_mask());
                         let Some(id) = doc.active_id() else { return false };
-                        doc.layer_mut(id).map(|l| l.pixels = op.run(&l.pixels, sel.as_ref())).is_some()
+                        doc.layer_mut(id)
+                            .map(|l| {
+                                let t = l.target_mut(on_mask);
+                                *t = op.run(t, sel.as_ref());
+                            })
+                            .is_some()
                     });
                 }
             }
@@ -1805,28 +1856,35 @@ impl Photo {
                 };
                 let Some(i) = self.doc_index(doc) else { return Task::none() };
                 let d = &mut self.docs[i];
-                let Some(l) = d.doc.layer(layer) else { return Task::none() };
+                if d.doc.layer(layer).is_none() {
+                    return Task::none();
+                }
                 let (w, h) = (d.doc.width, d.doc.height);
                 if mask.len() != (w * h) as usize {
                     self.error("The image changed size while removing the background");
                     return Task::none();
                 }
-                let mut rgba = l.pixels.to_rgba8();
-                for (p, &m) in rgba.chunks_exact_mut(4).zip(mask.iter()) {
-                    // Tidy the model's soft output: faint values become fully clear and
-                    // near-certain subject fully opaque, keeping soft edges in between.
-                    let m = ((m as f32 - 30.0) / (225.0 - 30.0)).clamp(0.0, 1.0);
-                    p[3] = (p[3] as f32 * m + 0.5) as u8;
-                }
+                let greys: Vec<u8> = mask
+                    .iter()
+                    .flat_map(|&m| {
+                        // Tidy the model's soft output: faint values become fully hidden and
+                        // near-certain subject fully shown, keeping soft edges in between.
+                        let v = (((m as f32 - 30.0) / (225.0 - 30.0)).clamp(0.0, 1.0) * 255.0).round() as u8;
+                        [v, v, v, 255]
+                    })
+                    .collect();
+                // A layer mask, like Photoshop: nothing is deleted, and painting on the mask
+                // fixes any edge the model got wrong.
+                let mut layer_mask = jd_raster::mask::Mask::new(w, h, 0);
+                layer_mask.pixels.write_region(0, 0, w, h, &greys);
                 d.history.record("Remove Background", &d.doc, None);
                 if let Some(l) = d.doc.layer_mut(layer) {
-                    // Transparency needs an unlocked layer (Photoshop turns the Background
-                    // into a normal layer for this too).
+                    // A mask needs a normal layer (Photoshop converts the Background too).
                     l.locked = false;
-                    l.pixels.write_region(0, 0, w, h, &rgba);
-                    l.text = None;
+                    l.mask = Some(layer_mask);
                 }
-                self.info("Background removed (Ctrl+Z to undo)");
+                d.doc.mask_target = true;
+                self.info("Background hidden with a layer mask: paint it white or black to fix edges (Ctrl+Z to undo)");
             }
             Message::DockResizeStart => self.ui_drag = Some(UiDrag::Dock),
             Message::DialogTitlePointer(p) => self.title_grab = p,
@@ -1932,10 +1990,14 @@ impl Photo {
                         mode: self.brush.mode,
                     };
                     self.edit("Gradient", None, |doc| {
-                        let (sel, space) = (doc.selection.clone(), doc.blend_space);
+                        let (sel, space, on_mask) = (doc.selection.clone(), doc.blend_space, doc.editing_mask());
+                        let g = jd_raster::gradient::Gradient { start: target_color(doc, g.start), end: target_color(doc, g.end), ..g };
                         let Some(id) = doc.active_id() else { return false };
                         doc.layer_mut(id)
-                            .map(|l| l.pixels = jd_raster::gradient::apply(&l.pixels, &g, sel.as_ref(), space))
+                            .map(|l| {
+                                let t = l.target_mut(on_mask);
+                                *t = jd_raster::gradient::apply(t, &g, sel.as_ref(), space);
+                            })
                             .is_some()
                     });
                 }
@@ -1974,6 +2036,42 @@ impl Photo {
                 // The dock is the rightmost `dock_width` px, below the toolbar line.
                 let at = Point::new(self.window_size.width - self.dock_width + self.dock_pointer.x, crate::view::TOOLBAR_TOP + self.dock_pointer.y);
                 self.popup = Some(Popup { kind: PopupKind::Layer(id), at, sub: None });
+            }
+            Message::AddMask => {
+                let sel = self.document().is_some_and(|d| d.selection.is_some());
+                let op = match (sel, self.modifiers.alt()) {
+                    (true, false) => MaskOp::RevealSelection,
+                    (true, true) => MaskOp::HideSelection,
+                    (false, false) => MaskOp::RevealAll,
+                    (false, true) => MaskOp::HideAll,
+                };
+                self.mask_op(op);
+            }
+            Message::LayerMask(op) => self.mask_op(op),
+            Message::ThumbPress(id, on_mask) => {
+                let m = self.modifiers;
+                if m.command() {
+                    // Ctrl+click: load the layer's opacity, or its mask, as the selection.
+                    self.edit("Load Selection", None, |doc| {
+                        let Some(l) = doc.layer(id) else { return false };
+                        let sel = match (&l.mask, on_mask) {
+                            (Some(mask), true) => mask.to_selection(),
+                            _ => Selection::from_alpha(&l.pixels),
+                        };
+                        doc.selection = (!sel.is_empty()).then_some(sel);
+                        true
+                    });
+                    return Task::none();
+                }
+                let _ = self.update(Message::LayerPress(id));
+                if on_mask && m.shift() {
+                    self.layer_drag = None;
+                    self.mask_op(MaskOp::Toggle);
+                    return Task::none();
+                }
+                if let Some(d) = self.doc_mut() {
+                    d.doc.mask_target = on_mask;
+                }
             }
             Message::SelectPixels => self.edit("Select Pixels", None, |doc| {
                 let Some(layer) = doc.active() else { return false };
@@ -2253,6 +2351,7 @@ impl Photo {
             zoom: Zoom::Fit,
             pan: Vector::ZERO,
             thumbs: HashMap::new(),
+            mask_thumbs: HashMap::new(),
             channel_thumbs: Vec::new(),
             channel_key: 0,
             saving: false,
@@ -2370,10 +2469,12 @@ impl Photo {
         let Some(layer) = self.docs[src].doc.layer(layer).cloned() else { return };
         self.edit("Duplicate Layer", None, |doc| {
             let pixels = centred(&layer.pixels, doc.width, doc.height);
+            let mask = layer.mask.as_ref().map(|m| Mask { pixels: centred(&m.pixels, doc.width, doc.height), ..m.clone() });
             let id = doc.add_layer(layer.name.clone());
             doc.layer_mut(id)
                 .map(|l| {
                     l.pixels = pixels;
+                    l.mask = mask;
                     l.opacity = layer.opacity;
                     l.blend = layer.blend;
                     l.visible = layer.visible;
@@ -2444,8 +2545,9 @@ impl Photo {
                     self.edit("Stroke", None, |doc| {
                         let Some(sel) = doc.selection.clone() else { return false };
                         let band = sel.border(v);
+                        let (on_mask, color) = (doc.editing_mask(), target_color(doc, color));
                         let Some(id) = doc.active_id() else { return false };
-                        doc.layer_mut(id).map(|l| selection::fill(&mut l.pixels, &band, color)).is_some()
+                        doc.layer_mut(id).map(|l| selection::fill(l.target_mut(on_mask), &band, color)).is_some()
                     });
                 } else {
                     let label = match kind {
@@ -2585,6 +2687,65 @@ impl Photo {
             Err(e) => {
                 self.error(e);
                 false
+            }
+        }
+    }
+
+    /// Layer > Layer Mask: add, delete, apply or switch off the active layer's mask.
+    fn mask_op(&mut self, op: MaskOp) {
+        let Some(layer) = self.document().and_then(|d| d.active()) else { return };
+        let has = layer.mask.is_some();
+        match op {
+            MaskOp::RevealAll | MaskOp::HideAll | MaskOp::RevealSelection | MaskOp::HideSelection => {
+                if has {
+                    self.info("This layer already has a mask");
+                    return;
+                }
+                self.edit("Add Layer Mask", None, |doc| {
+                    let (w, h) = (doc.width, doc.height);
+                    let mask = match (op, doc.selection.take()) {
+                        (MaskOp::HideAll, _) => Mask::new(w, h, 0),
+                        (MaskOp::RevealSelection, Some(sel)) => Mask::from_selection(&sel, false),
+                        (MaskOp::HideSelection, Some(sel)) => Mask::from_selection(&sel, true),
+                        (_, sel) => {
+                            doc.selection = sel;
+                            Mask::new(w, h, 255)
+                        }
+                    };
+                    let Some(id) = doc.active_id() else { return false };
+                    let Some(l) = doc.layer_mut(id) else { return false };
+                    // Masks need a normal layer; Photoshop converts the Background too.
+                    l.locked = false;
+                    l.mask = Some(mask);
+                    doc.mask_target = true;
+                    true
+                });
+            }
+            MaskOp::Delete | MaskOp::Apply => {
+                if !has {
+                    return;
+                }
+                let apply = op == MaskOp::Apply;
+                self.edit(if apply { "Apply Layer Mask" } else { "Delete Layer Mask" }, None, |doc| {
+                    let Some(id) = doc.active_id() else { return false };
+                    let Some(l) = doc.layer_mut(id) else { return false };
+                    let Some(mask) = l.mask.take() else { return false };
+                    if apply {
+                        l.pixels = jd_raster::mask::apply(&l.pixels, &mask);
+                    }
+                    doc.mask_target = false;
+                    true
+                });
+            }
+            MaskOp::Toggle => {
+                if !has {
+                    return;
+                }
+                let on = layer.mask.as_ref().is_some_and(|m| m.enabled);
+                self.edit(if on { "Disable Layer Mask" } else { "Enable Layer Mask" }, None, |doc| {
+                    let Some(id) = doc.active_id() else { return false };
+                    doc.layer_mut(id).and_then(|l| l.mask.as_mut()).map(|m| m.enabled = !m.enabled).is_some()
+                });
             }
         }
     }
@@ -2805,6 +2966,16 @@ impl Photo {
     }
 
     fn brush_params(&self, erase: bool, effect: Effect) -> BrushParams {
+        // On a mask the brush paints greys, and the eraser paints the background colour
+        // (Photoshop does the same).
+        if self.document().is_some_and(|d| d.editing_mask()) {
+            let c = if erase { self.bg } else { self.fg };
+            return BrushParams { color: gray(c.to_rgba().to_srgb8()), ..self.brush_params_raw(false, effect) };
+        }
+        self.brush_params_raw(erase, effect)
+    }
+
+    fn brush_params_raw(&self, erase: bool, effect: Effect) -> BrushParams {
         let b = &self.brush;
         BrushParams {
             size: b.size,
@@ -2991,6 +3162,20 @@ impl Photo {
             live.insert(layer.id, (ids, handle));
         }
         d.thumbs = live;
+        let mut live = HashMap::new();
+        for layer in d.doc.layers() {
+            let Some(mask) = &layer.mask else { continue };
+            let ids: Vec<TileId> = mask.pixels.iter_all().map(|(_, _, t)| t.id()).collect();
+            let handle = match d.mask_thumbs.remove(&layer.id) {
+                Some((old, h)) if old == ids => h,
+                _ => {
+                    let (w, h, px) = mask.thumbnail(40);
+                    image::Handle::from_rgba(w, h, px)
+                }
+            };
+            live.insert(layer.id, (ids, handle));
+        }
+        d.mask_thumbs = live;
 
         // Channel thumbnails, only while the Channels tab is showing.
         if self.layers_tab == 1 {
@@ -2998,6 +3183,9 @@ impl Photo {
             let mut mix = |v: u64| key = (key ^ v).wrapping_mul(0x0100_0000_01b3);
             for l in d.doc.layers() {
                 mix(jd_raster::text::signature(&l.pixels));
+                if let Some(m) = l.mask.as_ref().filter(|m| m.enabled) {
+                    mix(jd_raster::text::signature(&m.pixels) ^ m.default as u64);
+                }
                 mix(l.visible as u64 | (l.opacity.to_bits() as u64) << 1 | (l.blend as u64) << 40);
                 for b in format!("{:?}", l.style).bytes() {
                     mix(b as u64);
@@ -3379,6 +3567,82 @@ mod tests {
 
     fn px(app: &Photo, x: u32, y: u32) -> [u8; 4] {
         app.document().unwrap().layers()[0].pixels.pixel(x, y)
+    }
+
+    /// What the active document's first layer shows (pixels through its mask).
+    fn shown(app: &Photo, x: u32, y: u32) -> [u8; 4] {
+        app.document().unwrap().layers()[0].rendered().pixel(x, y)
+    }
+
+    #[test]
+    fn reveal_selection_masks_without_touching_pixels() {
+        let (mut app, _) = Photo::new();
+        white(&mut app, 200, 100);
+        app.docs[0].doc.selection = Some(Selection::rect(200, 100, 10.0, 10.0, 50.0, 50.0));
+        let _ = app.update(Message::AddMask);
+        let doc = app.document().unwrap();
+        assert!(doc.selection.is_none(), "the selection became the mask");
+        assert!(doc.editing_mask(), "a new mask is what edits go to");
+        assert_eq!(shown(&app, 20, 20)[3], 255);
+        assert_eq!(shown(&app, 100, 80)[3], 0);
+        assert_eq!(px(&app, 100, 80), [255, 255, 255, 255], "pixels are untouched");
+        let _ = app.update(Message::Undo);
+        assert!(app.document().unwrap().layers()[0].mask.is_none());
+    }
+
+    #[test]
+    fn brush_and_eraser_paint_the_mask() {
+        let (mut app, _) = Photo::new();
+        white(&mut app, 200, 100);
+        let _ = app.update(Message::AddMask);
+        app.fg = Hsv { h: 0.0, s: 1.0, v: 1.0 }; // red: its grey (76) partly hides
+        app.brush.size = 10.0;
+        app.brush.hardness = 1.0;
+        app.brush.smoothing = 0.0;
+        let stroke = |app: &mut Photo, erase: bool| {
+            let _ = app.update(Message::StrokeBegin { at: Point::new(100.0, 50.0), pressure: 1.0, erase, line: false });
+            let _ = app.update(Message::StrokeEnd);
+        };
+        stroke(&mut app, false);
+        assert_eq!(px(&app, 100, 50), [255, 255, 255, 255], "pixels are untouched");
+        assert_eq!(shown(&app, 100, 50)[3], 76);
+        // The eraser paints the background colour (white) on a mask: shown again.
+        stroke(&mut app, true);
+        assert_eq!(shown(&app, 100, 50)[3], 255);
+        // Back to the layer's pixels: the brush paints red there.
+        let id = app.document().unwrap().layers()[0].id;
+        let _ = app.update(Message::ThumbPress(id, false));
+        let _ = app.update(Message::PointerReleased);
+        stroke(&mut app, false);
+        assert_eq!(px(&app, 100, 50), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn mask_moves_with_the_layer_and_can_be_applied() {
+        let (mut app, _) = Photo::new();
+        white(&mut app, 200, 100);
+        let _ = app.update(Message::LayerMask(MaskOp::HideAll));
+        let id = app.document().unwrap().layers()[0].id;
+        app.docs[0].doc.layer_mut(id).unwrap().mask.as_mut().unwrap().pixels.set_pixel(10, 10, [255, 255, 255, 255]);
+        let _ = app.update(Message::Nudge(5.0, 0.0));
+        assert_eq!(shown(&app, 15, 10)[3], 255, "the revealed pixel moved along");
+        assert_eq!(shown(&app, 10, 10)[3], 0);
+        // Ctrl+click on the mask thumbnail loads it as a selection.
+        app.modifiers = keyboard::Modifiers::CTRL;
+        let _ = app.update(Message::ThumbPress(id, true));
+        app.modifiers = keyboard::Modifiers::empty();
+        let sel = app.document().unwrap().selection.clone().expect("loaded");
+        assert_eq!((sel.get(15, 10), sel.get(10, 10)), (255, 0));
+        // Shift+click switches it off; Apply bakes it into the pixels.
+        app.modifiers = keyboard::Modifiers::SHIFT;
+        let _ = app.update(Message::ThumbPress(id, true));
+        app.modifiers = keyboard::Modifiers::empty();
+        assert_eq!(shown(&app, 10, 10)[3], 255, "switched off");
+        let _ = app.update(Message::LayerMask(MaskOp::Toggle));
+        let _ = app.update(Message::LayerMask(MaskOp::Apply));
+        let l = &app.document().unwrap().layers()[0];
+        assert!(l.mask.is_none());
+        assert_eq!((l.pixels.pixel(15, 10)[3], l.pixels.pixel(10, 10)[3]), (255, 0));
     }
 
     #[test]
@@ -4115,7 +4379,7 @@ mod tests {
     }
 
     #[test]
-    fn background_mask_makes_the_background_transparent_in_one_step() {
+    fn remove_background_adds_a_layer_mask_in_one_step() {
         let (mut app, _) = Photo::new();
         app.docs.clear();
         app.push_doc(Document::from_rgba8("photo", 4, 1, &[200, 100, 50, 255].repeat(4)), None);
@@ -4125,16 +4389,19 @@ mod tests {
         let mask = std::sync::Arc::new(vec![0u8, 20, 128, 255]);
         let _ = app.update(Message::BackgroundMask { doc, layer, result: Ok(mask) });
         let l = app.document().unwrap().active().unwrap();
-        let alphas: Vec<u8> = (0..4).map(|x| l.pixels.pixel(x, 0)[3]).collect();
+        assert_eq!(l.pixels.pixel(0, 0), [200, 100, 50, 255], "nothing is deleted");
+        let shown = l.rendered();
+        let alphas: Vec<u8> = (0..4).map(|x| shown.pixel(x, 0)[3]).collect();
         assert_eq!(alphas[0], 0);
         assert_eq!(alphas[1], 0, "faint model output is cleared");
         assert!(alphas[2] > 100 && alphas[2] < 200, "soft edge kept: {}", alphas[2]);
         assert_eq!(alphas[3], 255);
-        assert!(!l.locked, "the Background is unlocked to hold transparency");
+        assert!(!l.locked, "the Background becomes a normal layer to hold a mask");
+        assert!(app.document().unwrap().editing_mask(), "ready to touch up the mask");
         assert!(!app.removing_background);
         assert_eq!(app.doc().unwrap().history.depth(), depth + 1);
         let _ = app.update(Message::Undo);
-        assert_eq!(app.document().unwrap().active().unwrap().pixels.pixel(0, 0)[3], 255);
+        assert!(app.document().unwrap().active().unwrap().mask.is_none());
     }
 
     #[test]

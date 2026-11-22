@@ -99,6 +99,8 @@ const MAX_FILTER_PIXELS: u64 = 120_000_000;
 pub struct Session {
     pub doc: u64,
     pub layer: LayerId,
+    /// Working on the layer's mask rather than its pixels.
+    pub mask: bool,
     pub kind: OpKind,
     pub op: Op,
     original: TileGrid,
@@ -129,14 +131,16 @@ impl Session {
         if matches!(Op::default_for(kind), Op::Filter(_)) && doc.width as u64 * doc.height as u64 > MAX_FILTER_PIXELS {
             return Err("This image is too large for filters (over 120 megapixels)");
         }
-        let histogram = adjust::histogram(&layer.pixels, doc.selection.as_ref());
+        let mask = doc.editing_mask();
+        let histogram = adjust::histogram(layer.target(mask), doc.selection.as_ref());
         let generation = next_generation();
         Ok(Self {
             doc: doc_id,
             layer: layer.id,
+            mask,
             kind,
             op: Op::default_for(kind),
-            original: layer.pixels.clone(),
+            original: layer.target(mask).clone(),
             selection: doc.selection.clone(),
             histogram,
             preview: None,

@@ -75,6 +75,8 @@ pub struct Session {
     pub base: Option<TileGrid>,
     /// The pixels being transformed.
     pub content: TileGrid,
+    /// The layer's mask, transformed along with a whole layer (Photoshop's linked mask).
+    pub mask: Option<TileGrid>,
     /// The selection at the start; it's transformed along with the pixels.
     pub selection: Option<Selection>,
     /// Content box before transforming: x0, y0, x1, y1 in document pixels.
@@ -97,6 +99,9 @@ impl Session {
         if layer.locked {
             return Err("The layer is locked");
         }
+        if doc.selection.is_some() && doc.editing_mask() {
+            return Err("Moving part of a layer mask isn't supported yet (deselect to move the whole layer)");
+        }
         let (base, content) = match &doc.selection {
             Some(sel) => {
                 let content = selection::extract(&layer.pixels, sel);
@@ -113,6 +118,7 @@ impl Session {
             doc: doc_id,
             layer: layer.id,
             kind,
+            mask: if doc.selection.is_none() { layer.mask.as_ref().map(|m| m.pixels.clone()) } else { None },
             base,
             content,
             selection: doc.selection.clone(),
@@ -304,6 +310,9 @@ impl Session {
             }
             None => moved,
         };
+        if let (Some(mask), Some(m_grid)) = (layer.mask.as_mut(), &self.mask) {
+            mask.pixels = jd_raster::transform::transform_grid(m_grid, &m);
+        }
         doc.selection = self
             .selection
             .as_ref()

@@ -14,9 +14,13 @@ pub type Anchor = (f32, f32);
 
 impl Document {
     fn map_layers(&mut self, w: u32, h: u32, f: impl Fn(&TileGrid) -> TileGrid + Sync) {
-        let grids: Vec<TileGrid> = self.layers().par_iter().map(|l| f(&l.pixels)).collect();
-        for (layer, grid) in self.layers_mut().iter_mut().zip(grids) {
+        let grids: Vec<(TileGrid, Option<TileGrid>)> =
+            self.layers().par_iter().map(|l| (f(&l.pixels), l.mask.as_ref().map(|m| f(&m.pixels)))).collect();
+        for (layer, (grid, mask)) in self.layers_mut().iter_mut().zip(grids) {
             layer.pixels = grid;
+            if let (Some(m), Some(g)) = (layer.mask.as_mut(), mask) {
+                m.pixels = g;
+            }
         }
         self.width = w;
         self.height = h;
@@ -55,6 +59,10 @@ impl Document {
             .collect();
         for (layer, grid) in self.layers_mut().iter_mut().zip(grids) {
             layer.pixels = grid;
+            // New canvas area reads as the mask's default.
+            if let Some(m) = layer.mask.as_mut() {
+                m.pixels = transform::place(&m.pixels, w, h, dx, dy);
+            }
         }
         self.width = w;
         self.height = h;
@@ -90,7 +98,7 @@ impl Document {
             .layers()
             .iter()
             .filter(|l| l.visible)
-            .filter_map(|l| content_bounds(&l.pixels))
+            .filter_map(|l| content_bounds(&l.rendered()))
             .reduce(|a, b| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]);
         match bounds {
             Some(b) if b != [0, 0, self.width, self.height] => {
@@ -116,6 +124,7 @@ impl Document {
         if let Some(l) = self.layer_mut(lower_id) {
             l.pixels = merged;
             l.style = Default::default();
+            l.mask = None;
         }
         self.remove_layer(upper_id);
         self.set_active(lower_id);
@@ -137,6 +146,7 @@ impl Document {
         if let Some(l) = self.layer_mut(keep) {
             l.pixels = merged;
             l.style = Default::default();
+            l.mask = None;
             l.opacity = 1.0;
             l.blend = BlendMode::Normal;
         }

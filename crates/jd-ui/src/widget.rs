@@ -163,11 +163,15 @@ pub fn panel_header<'a, M: Clone + 'a>(
 }
 
 /// One row of a layers panel. `thumb` and `name` are supplied by the app (an image and a
-/// label or text field), so this stays independent of how pixels are stored.
+/// label or text field), so this stays independent of how pixels are stored. `mask` is the
+/// layer mask's thumbnail, if it has one; `mask_targeted` outlines it instead of `thumb` to
+/// show that edits go to the mask (Photoshop's targeted thumbnail).
 #[allow(clippy::too_many_arguments)]
 pub fn layer_row<'a, M: Clone + 'a>(
     name: impl Into<Element<'a, M>>,
     thumb: impl Into<Element<'a, M>>,
+    mask: Option<Element<'a, M>>,
+    mask_targeted: bool,
     visible: bool,
     locked: bool,
     selected: bool,
@@ -189,22 +193,27 @@ pub fn layer_row<'a, M: Clone + 'a>(
     .style(style::ghost(false))
     .on_press(on_toggle_visible);
 
-    // Light backdrop so transparent thumbnails read as "empty".
-    let thumbnail = container(thumb)
-        .width(40)
-        .height(28)
-        .center_x(40)
-        .center_y(28)
-        .style(|_| container::Style {
+    // Light backdrop so transparent thumbnails read as "empty". With a mask, the thumbnail
+    // that edits go to is outlined.
+    let has_mask = mask.is_some();
+    let frame = move |content: Element<'a, M>, targeted: bool| {
+        let outlined = selected && has_mask && targeted;
+        container(content).width(40).height(28).center_x(40).center_y(28).style(move |_| container::Style {
             background: Some(Color::from_rgb8(0xD8, 0xD8, 0xD8).into()),
-            border: iced::Border { color: BORDER_SUBTLE, width: 1.0, radius: 2.0.into() },
+            border: if outlined {
+                iced::Border { color: TEXT_PRIMARY, width: 2.0, radius: 2.0.into() }
+            } else {
+                iced::Border { color: BORDER_SUBTLE, width: 1.0, radius: 2.0.into() }
+            },
             ..Default::default()
-        });
+        })
+    };
 
-    let mut body = row![thumbnail, container(name).width(Fill)]
-        .spacing(8)
-        .height(Fill)
-        .align_y(Vertical::Center);
+    let mut body = row![frame(thumb.into(), !mask_targeted)].spacing(8).height(Fill).align_y(Vertical::Center);
+    if let Some(mask) = mask {
+        body = body.push(frame(mask, mask_targeted));
+    }
+    let mut body = body.push(container(name).width(Fill));
     if locked {
         body = body.push(hover_tip(
             button(icon(Icon::Lock, 13.0, TEXT_SECONDARY))

@@ -99,6 +99,12 @@ left-click in, right-click out.
 - [x] 6b: Image > Remove Background (on-device AI, IS-Net via ONNX Runtime; the 179 MB model
       downloads once after asking); font list drawn in each font; Adjustments panel; Channels
       panel (load a channel as a selection); resizable dock; draggable dialogs
+- [x] 6c: layer masks (Layer > Layer Mask, the mask button, right-click a layer): Reveal/Hide
+      All or Selection, Delete, Apply, Disable (Shift+click the mask thumbnail). Click a
+      thumbnail to pick what edits go to (outlined); every brush, fill, gradient, filter and
+      adjustment works on the mask in greys, and the eraser paints the background colour.
+      Ctrl+click a thumbnail loads it as a selection. Masks move with their layer and are
+      saved in .jdp. Remove Background now adds a mask instead of deleting pixels
 - [ ] 6: PSD import, Flatpak, Pen tool
 
 ## App icon
@@ -144,7 +150,10 @@ Try it: `cargo run -p jd-io --example demo_doc -- demo.jdp base.jpg top.jpg`
   layer is slower; effects hide while the layer is being moved or transformed and come back
   on commit. Shadow and glow use normal blending (Photoshop defaults to Multiply/Screen).
   Not yet: Bevel, Inner Shadow/Glow, Satin, Gradient/Pattern Overlay.
-- Remove Background works on the active layer and writes transparency (no layer masks yet).
+- Remove Background works on the active layer and hides the background with a layer mask
+  (it replaces a mask the layer already had).
+- Layer masks: no Alt+click to view the mask alone, no Ctrl+\\ / Ctrl+2 shortcuts to switch
+  target, and masks are always linked (moving a selection inside a mask isn't supported).
   It takes about 1.5 s per image on a 12-core CPU; complex hair/fur edges are softer than
   remove.bg. The download has no progress bar yet.
 - Type: point text only (no text boxes or wrapping), the caret is always at the end (no

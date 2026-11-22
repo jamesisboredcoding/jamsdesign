@@ -67,9 +67,14 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
     {
         let m = t.affine().as_array();
         let tiles = |g: &jd_raster::TileGrid| g.iter_all().map(|(x, y, t)| ([x, y], t.clone())).collect::<Vec<_>>();
+        let mask = doc.layers()[i].mask.as_ref().filter(|m| m.enabled);
         match &t.base {
             Some(base) => {
-                scene.layers[i].tiles = tiles(base);
+                // The mask stays put while selected pixels move.
+                scene.layers[i].tiles = match mask {
+                    Some(m) => tiles(&jd_raster::mask::apply(base, m)),
+                    None => tiles(base),
+                };
                 let floating = SceneLayer { transform: m, tiles: tiles(&t.content), ..scene.layers[i].clone() };
                 scene.layers.insert(i + 1, floating);
             }
@@ -82,7 +87,20 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
         && let Some(preview) = a.shown()
         && let Some(i) = doc.layers().iter().position(|l| l.id == a.layer)
     {
-        scene.layers[i].tiles = preview.iter_all().map(|(x, y, t)| ([x, y], t.clone())).collect();
+        let layer = &doc.layers()[i];
+        // Previewing an edit of the mask, or of pixels that a mask then cuts.
+        let shown = match &layer.mask {
+            Some(m) if a.mask && m.enabled => {
+                let m = jd_raster::mask::Mask { pixels: preview.clone(), ..m.clone() };
+                Some(jd_raster::mask::apply(&layer.pixels, &m))
+            }
+            // A switched-off mask doesn't change what's shown.
+            Some(_) if a.mask => Some(layer.pixels.clone()),
+            Some(m) if m.enabled => Some(jd_raster::mask::apply(preview, m)),
+            _ => None,
+        };
+        let shown = shown.as_ref().unwrap_or(preview);
+        scene.layers[i].tiles = shown.iter_all().map(|(x, y, t)| ([x, y], t.clone())).collect();
     }
 
     let pixels = Shader::new(Pixels { scene: Arc::new(scene), origin, zoom }).width(Fill).height(Fill);

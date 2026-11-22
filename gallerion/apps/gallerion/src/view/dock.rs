@@ -284,13 +284,28 @@ fn layers_panel(app: &Photo) -> Element<'_, Message> {
                 .on_double_click(Message::StartRename(layer.id))
                 .into(),
         };
-        let thumb: Element<'_, Message> = match open.thumbs.get(&layer.id) {
-            Some((_, handle)) => image(handle.clone()).width(40).height(28).content_fit(iced::ContentFit::Contain).into(),
-            None => space().into(),
+        let thumb_image = |h: Option<&iced::widget::image::Handle>| -> Element<'_, Message> {
+            match h {
+                Some(handle) => image(handle.clone()).width(40).height(28).content_fit(iced::ContentFit::Contain).into(),
+                None => space().into(),
+            }
         };
+        // Pressing a thumbnail picks what edits go to (and still selects / drags the layer).
+        let thumb: Element<'_, Message> = mouse_area(thumb_image(open.thumbs.get(&layer.id).map(|t| &t.1))).on_press(Message::ThumbPress(layer.id, false)).into();
+        let mask = layer.mask.as_ref().map(|m| {
+            let mut s = iced::widget::stack![thumb_image(open.mask_thumbs.get(&layer.id).map(|t| &t.1))];
+            if !m.enabled {
+                // Switched off: a red cross over it, like Photoshop.
+                s = s.push(container(text("✕").size(22).color(iced::Color::from_rgb8(0xE5, 0x3E, 0x3E))).center(Fill));
+            }
+            mouse_area(container(s).width(40).height(28)).on_press(Message::ThumbPress(layer.id, true)).into()
+        });
+        let mask_targeted = Some(layer.id) == active_id && doc.editing_mask();
         let row = layer_row(
             name,
             thumb,
+            mask,
+            mask_targeted,
             layer.visible,
             layer.locked,
             Some(layer.id) == active_id,
@@ -329,7 +344,7 @@ fn layers_panel(app: &Photo) -> Element<'_, Message> {
     for (ic, msg) in [
         (Icon::Link, None),
         (Icon::Fx, Some(Message::ShowDialog(crate::app::DialogKind::BlendingOptions))),
-        (Icon::Mask, None),
+        (Icon::Mask, Some(Message::AddMask)),
         (Icon::Adjust, None),
         (Icon::Folder, None),
         (Icon::Plus, Some(Message::AddLayer)),

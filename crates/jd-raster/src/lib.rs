@@ -11,6 +11,7 @@ pub mod heal;
 pub mod style;
 pub mod text;
 pub mod image_ops;
+pub mod mask;
 mod history;
 pub mod paint;
 pub mod selection;
@@ -39,16 +40,35 @@ pub struct Layer {
     pub style: style::LayerStyle,
     /// Set on text layers (the Type tool); `pixels` hold the rendered text.
     pub text: Option<text::TextLayer>,
+    /// Layer mask: hides parts of the layer without changing its pixels.
+    pub mask: Option<mask::Mask>,
 }
 
 impl Layer {
     /// What the layer looks like: its pixels plus its effects (cached; the pixels themselves
     /// when it has none). Everything that draws or flattens layers uses this.
     pub fn rendered(&self) -> std::borrow::Cow<'_, TileGrid> {
-        if self.style.is_empty() {
-            std::borrow::Cow::Borrowed(&self.pixels)
-        } else {
-            std::borrow::Cow::Owned(style::render_cached(&self.pixels, &self.style))
+        use std::borrow::Cow;
+        // The mask cuts the layer first, so effects follow the visible shape (as in Photoshop).
+        let masked = match &self.mask {
+            Some(m) if m.enabled => Cow::Owned(mask::apply(&self.pixels, m)),
+            _ => Cow::Borrowed(&self.pixels),
+        };
+        if self.style.is_empty() { masked } else { Cow::Owned(style::render_cached(&masked, &self.style)) }
+    }
+
+    /// The grid that edits go to: the mask when `mask` is set and the layer has one.
+    pub fn target(&self, mask: bool) -> &TileGrid {
+        match &self.mask {
+            Some(m) if mask => &m.pixels,
+            _ => &self.pixels,
+        }
+    }
+
+    pub fn target_mut(&mut self, mask: bool) -> &mut TileGrid {
+        match &mut self.mask {
+            Some(m) if mask => &mut m.pixels,
+            _ => &mut self.pixels,
         }
     }
 }
@@ -62,6 +82,10 @@ pub struct Document {
     /// Selected pixels. `None` means nothing is selected (edits apply everywhere). Part of the
     /// document so selection changes are undoable, like in Photoshop. Not saved to files.
     pub selection: Option<selection::Selection>,
+    /// Edits go to the active layer's mask instead of its pixels (Photoshop: the mask
+    /// thumbnail is targeted). Only meaningful while the active layer has a mask; see
+    /// [`Document::editing_mask`].
+    pub mask_target: bool,
     /// Bottom-to-top, like the compositing order. UIs usually display this reversed.
     layers: Vec<Layer>,
     active: Option<LayerId>,
@@ -94,6 +118,7 @@ impl Document {
             height,
             blend_space: BlendSpace::default(),
             selection: None,
+            mask_target: false,
             layers: Vec::new(),
             active: None,
             next_id: 0,
@@ -114,6 +139,7 @@ impl Document {
             pixels: TileGrid::empty(self.width, self.height),
             style: style::LayerStyle::default(),
             text: None,
+            mask: None,
         };
         let index = self
             .active
@@ -121,6 +147,7 @@ impl Document {
             .map_or(self.layers.len(), |i| i + 1);
         self.layers.insert(index, layer);
         self.active = Some(id);
+        self.mask_target = false;
         id
     }
 
@@ -190,8 +217,16 @@ impl Document {
 
     pub fn set_active(&mut self, id: LayerId) {
         if self.index_of(id).is_some() {
+            if self.active != Some(id) {
+                self.mask_target = false;
+            }
             self.active = Some(id);
         }
+    }
+
+    /// Whether edits currently go to the active layer's mask.
+    pub fn editing_mask(&self) -> bool {
+        self.mask_target && self.active().is_some_and(|l| l.mask.is_some())
     }
 
     fn index_of(&self, id: LayerId) -> Option<usize> {
