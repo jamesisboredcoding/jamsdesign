@@ -1475,6 +1475,8 @@ dependencies = [
  "raw-window-handle",
  "resvg",
  "rfd",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
