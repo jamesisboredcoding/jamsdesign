@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use iced::keyboard::{self, Key, key::Named};
 use iced::widget::image;
 use iced::{Point, Size, Subscription, Task, Vector, mouse, window};
+use iced_runtime::image::Allocation;
 use jd_core::Rgba;
 use jd_ui::chrome::{self, WindowChrome};
 use jd_vector::{
@@ -117,6 +118,8 @@ pub enum Message {
     Viewport(Size),
     /// A screen refresh while dragging (see `update`).
     Frame,
+    /// A canvas render finished uploading.
+    CanvasReady(u64, Option<Allocation>),
     Tool(Tool),
     CanvasPress { at: Point, button: mouse::Button },
     CanvasMove(Point),
@@ -181,8 +184,13 @@ pub struct Blobr {
     pub camera: Camera,
     pub viewport: Size,
     pub scale_factor: f32,
-    pub canvas: Option<image::Handle>,
+    /// The canvas image on screen. A new render replaces it only once uploaded to the GPU
+    /// (`CanvasReady`), so zooming and panning never show an empty frame.
+    pub canvas: Option<Allocation>,
     rendered: Option<(u64, Camera, Size, f32, NodeId)>,
+    /// Number of the latest render, so a late upload can't replace a newer one.
+    render_seq: u64,
+    shown_seq: u64,
     version: u64,
     pub drag: Option<Drag>,
     pub space_held: bool,
@@ -217,6 +225,8 @@ impl Blobr {
             scale_factor: 1.0,
             canvas: None,
             rendered: None,
+            render_seq: 0,
+            shown_seq: 0,
             version: 0,
             drag: None,
             space_held: false,
@@ -233,8 +243,8 @@ impl Blobr {
         if let Some(path) = open {
             app.open_path(path);
         }
-        app.refresh();
-        (app, task.map(Message::Chrome))
+        let render = app.refresh();
+        (app, Task::batch([task.map(Message::Chrome), render]))
     }
 
     pub fn doc(&self) -> &Document {
@@ -263,10 +273,7 @@ impl Blobr {
             self.drafts.clear();
         }
         // While dragging, mouse moves can outpace the screen: render once per frame instead.
-        if self.drag.is_none() {
-            self.refresh();
-        }
-        task
+        if self.drag.is_none() { Task::batch([task, self.refresh()]) } else { task }
     }
 
     fn handle(&mut self, message: Message) -> Task<Message> {
@@ -286,7 +293,15 @@ impl Blobr {
             }
             Message::CloseMenu => self.chrome.open_menu = None,
             Message::Noop => {}
-            Message::Frame => self.refresh(),
+            Message::Frame => return self.refresh(),
+            Message::CanvasReady(seq, allocation) => {
+                if seq > self.shown_seq
+                    && let Some(a) = allocation
+                {
+                    self.shown_seq = seq;
+                    self.canvas = Some(a);
+                }
+            }
             Message::Quit => return self.chrome.close(),
             Message::Key(e) => return self.on_key(e),
             Message::ScaleFactor(s) => self.scale_factor = s.max(0.5),
@@ -832,14 +847,14 @@ impl Blobr {
     }
 
     /// Re-renders the canvas image if anything it shows changed.
-    fn refresh(&mut self) {
+    fn refresh(&mut self) -> Task<Message> {
         let key = (self.version, self.camera, self.viewport, self.scale_factor, self.page);
         if self.rendered == Some(key) {
-            return;
+            return Task::none();
         }
         let (w, h) = (self.viewport.width as f64, self.viewport.height as f64);
         if w < 1.0 || h < 1.0 {
-            return;
+            return Task::none();
         }
         let view = Rect::new(self.camera.origin.x, self.camera.origin.y, self.camera.origin.x + w / self.camera.zoom, self.camera.origin.y + h / self.camera.zoom);
         let background = match self.doc().node(self.page).map(|n| &n.kind) {
@@ -847,11 +862,19 @@ impl Blobr {
             _ => Rgba::from_srgb8(0x1E, 0x1E, 0x1E),
         };
         let opts = RenderOptions { scale: self.camera.zoom * self.scale_factor as f64, background: Some(background) };
-        if let Some(pm) = render_region(self.doc(), self.page, view, opts) {
-            // Opaque (the page background covers everything), so premultiplied data is fine.
-            self.canvas = Some(image::Handle::from_rgba(pm.width(), pm.height(), pm.take()));
-            self.rendered = Some(key);
-        }
+        let Some(pm) = render_region(self.doc(), self.page, view, opts) else { return Task::none() };
+        // Opaque (the page background covers everything), so premultiplied data is fine.
+        let handle = image::Handle::from_rgba(pm.width(), pm.height(), pm.take());
+        self.rendered = Some(key);
+        self.render_seq += 1;
+        let seq = self.render_seq;
+        iced_runtime::image::allocate(handle).map(move |r| Message::CanvasReady(seq, r.ok()))
+    }
+
+    /// Whether the canvas has been rendered for the current view (for tests).
+    #[cfg(test)]
+    pub fn rendered(&self) -> bool {
+        self.rendered.is_some()
     }
 
     // ----- Canvas input -----------------------------------------------------------------
@@ -1176,22 +1199,22 @@ mod tests {
     #[test]
     fn drawing_a_frame_then_a_rectangle_inside_it() {
         let mut app = app();
-        app.update(Message::Tool(Tool::Frame));
-        app.update(Message::CanvasPress { at: Point::new(10.0, 10.0), button: mouse::Button::Left });
-        app.update(Message::CanvasMove(Point::new(210.0, 160.0)));
-        app.update(Message::CanvasRelease(Point::new(210.0, 160.0)));
+        let _ = app.update(Message::Tool(Tool::Frame));
+        let _ = app.update(Message::CanvasPress { at: Point::new(10.0, 10.0), button: mouse::Button::Left });
+        let _ = app.update(Message::CanvasMove(Point::new(210.0, 160.0)));
+        let _ = app.update(Message::CanvasRelease(Point::new(210.0, 160.0)));
         let frame = app.selection[0];
         let f = app.doc().node(frame).unwrap();
         assert_eq!((f.props.x, f.props.y, f.props.width, f.props.height), (10.0, 10.0, 200.0, 150.0));
         assert_eq!(app.tool, Tool::Move, "back to Move after drawing");
 
-        app.update(Message::Tool(Tool::Rectangle));
-        app.update(Message::CanvasPress { at: Point::new(30.0, 30.0), button: mouse::Button::Left });
-        app.update(Message::CanvasRelease(Point::new(30.0, 30.0)));
+        let _ = app.update(Message::Tool(Tool::Rectangle));
+        let _ = app.update(Message::CanvasPress { at: Point::new(30.0, 30.0), button: mouse::Button::Left });
+        let _ = app.update(Message::CanvasRelease(Point::new(30.0, 30.0)));
         let rect = app.selection[0];
         assert_eq!(app.doc().parent(rect), Some(frame), "drawn into the frame under the pointer");
         assert_eq!(app.doc().node(rect).unwrap().props.x, 20.0, "positioned in the frame's space");
-        assert!(app.canvas.is_some());
+        assert!(app.rendered());
     }
 
     #[test]
@@ -1199,14 +1222,14 @@ mod tests {
         let mut app = app();
         let p = app.page;
         let r = app.run("Add", &[Op::create(p, NodeSpec::rect("R", 50.0, 50.0).at(100.0, 100.0))]).unwrap().created[0];
-        app.update(Message::CanvasPress { at: Point::new(120.0, 120.0), button: mouse::Button::Left });
+        let _ = app.update(Message::CanvasPress { at: Point::new(120.0, 120.0), button: mouse::Button::Left });
         assert_eq!(app.selection, vec![r]);
         for i in 1..=10 {
-            app.update(Message::CanvasMove(Point::new(120.0 + i as f32 * 3.0, 120.0)));
+            let _ = app.update(Message::CanvasMove(Point::new(120.0 + i as f32 * 3.0, 120.0)));
         }
-        app.update(Message::CanvasRelease(Point::new(150.0, 120.0)));
+        let _ = app.update(Message::CanvasRelease(Point::new(150.0, 120.0)));
         assert_eq!(app.doc().node(r).unwrap().props.x, 130.0);
-        app.update(Message::Undo);
+        let _ = app.update(Message::Undo);
         assert_eq!(app.doc().node(r).unwrap().props.x, 100.0, "the whole drag undid at once");
     }
 
@@ -1242,16 +1265,16 @@ mod tests {
         let mut app = app();
         let p = app.page;
         let r = app.run("Add", &[Op::create(p, NodeSpec::rect("R", 50.0, 50.0))]).unwrap().created[0];
-        app.update(Message::Select(r, false));
-        app.update(Message::FieldInput(Field::W, "120".into()));
-        app.update(Message::FieldSubmit(Field::W));
-        app.update(Message::FieldInput(Field::Fill(0), "#4C8DFF".into()));
-        app.update(Message::FieldSubmit(Field::Fill(0)));
+        let _ = app.update(Message::Select(r, false));
+        let _ = app.update(Message::FieldInput(Field::W, "120".into()));
+        let _ = app.update(Message::FieldSubmit(Field::W));
+        let _ = app.update(Message::FieldInput(Field::Fill(0), "#4C8DFF".into()));
+        let _ = app.update(Message::FieldSubmit(Field::Fill(0)));
         let n = app.doc().node(r).unwrap();
         assert_eq!(n.props.width, 120.0);
         assert_eq!(n.props.fills, vec![Paint::hex("#4C8DFF")]);
-        app.update(Message::FieldInput(Field::X, "abc".into()));
-        app.update(Message::FieldSubmit(Field::X));
+        let _ = app.update(Message::FieldInput(Field::X, "abc".into()));
+        let _ = app.update(Message::FieldSubmit(Field::X));
         assert!(app.status.error);
     }
 
@@ -1260,16 +1283,16 @@ mod tests {
         let mut app = app();
         let p = app.page;
         let r = app.run("Add", &[Op::create(p, NodeSpec::rect("R", 50.0, 50.0).at(100.0, 100.0))]).unwrap().created[0];
-        app.update(Message::Select(r, false));
-        app.update(Message::FieldInput(Field::W, "999".into()));
-        app.update(Message::Deselect);
+        let _ = app.update(Message::Select(r, false));
+        let _ = app.update(Message::FieldInput(Field::W, "999".into()));
+        let _ = app.update(Message::Deselect);
         assert!(app.drafts.is_empty(), "a draft for one layer must not show on the next");
 
         // A click with a pixel of jitter selects without moving or adding an undo step.
         let steps = app.ed.history.labels().count();
-        app.update(Message::CanvasPress { at: Point::new(120.0, 120.0), button: mouse::Button::Left });
-        app.update(Message::CanvasMove(Point::new(121.0, 120.0)));
-        app.update(Message::CanvasRelease(Point::new(121.0, 120.0)));
+        let _ = app.update(Message::CanvasPress { at: Point::new(120.0, 120.0), button: mouse::Button::Left });
+        let _ = app.update(Message::CanvasMove(Point::new(121.0, 120.0)));
+        let _ = app.update(Message::CanvasRelease(Point::new(121.0, 120.0)));
         assert_eq!(app.doc().node(r).unwrap().props.x, 100.0);
         assert_eq!(app.ed.history.labels().count(), steps);
         assert_eq!(app.selection, vec![r]);
@@ -1287,10 +1310,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("blobr-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("t.jdb");
-        app.update(Message::SavedAs(Some(path.clone())));
+        let _ = app.update(Message::SavedAs(Some(path.clone())));
         assert!(!app.ed.history.is_dirty());
         let mut other = self::app();
-        other.update(Message::Opened(Some(path)));
+        let _ = other.update(Message::Opened(Some(path)));
         assert_eq!(other.doc().len(), app.doc().len());
         let _ = std::fs::remove_dir_all(dir);
     }

@@ -21,7 +21,7 @@ pub fn view(app: &Blobr) -> Element<'_, Message> {
         let current = p == app.page;
         let label = text(n.name.clone()).size(TEXT_SIZE_SMALL).color(TEXT_PRIMARY).font(if current { jd_ui::widget::bold() } else { iced::Font::DEFAULT });
         pages = pages.push(
-            button(row![icon(Icon::Page, 12.0, ICON), label].spacing(8).align_y(Vertical::Center))
+            button(row![icon(Icon::Page, 12.0, ICON), label].spacing(8).height(Fill).align_y(Vertical::Center))
                 .width(Fill)
                 .height(ROW)
                 .padding(Padding::from([0, 10]))
@@ -39,10 +39,10 @@ pub fn view(app: &Blobr) -> Element<'_, Message> {
     column![
         panel_header(&["Layers", "Assets"], 0, |_| Message::Noop),
         section("Pages", Some(Message::AddPage)),
-        pages,
+        container(pages).padding(Padding::from([0, 6])),
         container(hline(BG_PANEL)).padding(Padding::from([6, 0])),
         section("Layers", None),
-        scrollable(tree).height(Fill),
+        scrollable(container(tree).padding(Padding::from([0, 6]))).height(Fill),
         footer(app),
     ]
     .into()
@@ -86,6 +86,7 @@ fn rows<'a>(app: &'a Blobr, id: NodeId, depth: usize, out: &mut Vec<Element<'a, 
         space::horizontal(),
     ]
     .spacing(6)
+    .height(Fill)
     .align_y(Vertical::Center);
     if n.props.locked || selected {
         r = r.push(

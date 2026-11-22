@@ -12,7 +12,7 @@ use crate::tool::Tool;
 
 pub fn view(app: &Blobr) -> Element<'_, Message> {
     let picture: Element<'_, Message> = match &app.canvas {
-        Some(h) => image(h.clone()).width(app.viewport.width).height(app.viewport.height).filter_method(image::FilterMethod::Linear).into(),
+        Some(a) => image(a.handle().clone()).width(app.viewport.width).height(app.viewport.height).filter_method(image::FilterMethod::Linear).into(),
         None => space().into(),
     };
     container(stack![picture, canvas::Canvas::new(Overlay { app }).width(Fill).height(Fill)])
