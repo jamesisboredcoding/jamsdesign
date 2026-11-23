@@ -56,8 +56,10 @@ batch. See [ROADMAP.md](ROADMAP.md) for how it was built and what each step cove
   window of its own.
 - **Inspect:** measurements, colours with their variables, CSS, HTML, iced and Rust tokens.
 - **Comments:** numbered pins on the canvas with replies, resolve and delete, kept in the file.
-- **Files:** tabs, recent files, unsaved-changes prompts per tab; export PNG, SVG and PDF;
-  import SVG; Copy as PNG; paste images and text from other apps.
+- **Files:** tabs, recent files, unsaved-changes prompts per tab, optional auto-save; export
+  PNG, SVG and PDF; import SVG; Copy as PNG; paste images and text from other apps.
+- **Workspace:** find layers across pages, a zoom box you can type in, panels you can resize,
+  swap and hide, and Preferences (Ctrl+,).
 
 ## Shortcuts (Figma's)
 
@@ -75,6 +77,8 @@ batch. See [ROADMAP.md](ROADMAP.md) for how it was built and what each step cove
 | Enter, Escape | Edit text or points, go up a level |
 | Ctrl+N, Ctrl+O, Ctrl+S, Ctrl+W, Ctrl+Tab | New tab, open, save, close tab, next tab |
 | Ctrl+Alt+Enter, Ctrl+Alt+Shift+Enter | Present, present in a new window |
+| Ctrl+F, Ctrl+\\, Ctrl+, | Find layers, hide panels, preferences |
+| Ctrl+Shift+? | All shortcuts |
 
 ## Agents (MCP)
 
@@ -87,6 +91,11 @@ claude mcp add blobr -- "$PWD/target/release/blobr-mcp"
 
 While Blobr is running the tools work on its active tab, and each change is an undo step there.
 Otherwise they work on files of their own. Details: [apps/blobr-mcp/README.md](apps/blobr-mcp/README.md).
+
+## Flatpak
+
+Blobr is packaged as a Flatpak, `dev.jamsdesign.Blobr`. Building and installing it, sandbox
+permissions, and MCP setup are in [packaging/README.md](packaging/README.md).
 
 ## Status
 

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/vnd.jamsdesign.blobr">
+    <comment>Blobr design</comment>
+    <sub-class-of type="application/zip"/>
+    <generic-icon name="image-x-generic"/>
+    <glob pattern="*.jdb"/>
+    <!-- A zip whose first entry is an uncompressed "mimetype" file, like OpenDocument. -->
+    <magic priority="70">
+      <match type="string" offset="30" value="mimetypeapplication/vnd.jamsdesign.blobr"/>
+    </magic>
+  </mime-type>
+</mime-info>

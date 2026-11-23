@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.jamsdesign.Blobr</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <name>Blobr</name>
+  <summary>Design interfaces and vector graphics</summary>
+  <developer id="dev.jamsdesign">
+    <name>jamsdesign</name>
+  </developer>
+  <description>
+    <p>
+      Blobr is the jamsdesign suite's interface and vector design app. Lay out screens with
+      frames, shapes, text and auto layout on an infinite canvas, build components and
+      variants, and turn them into clickable prototypes.
+    </p>
+    <ul>
+      <li>Auto layout, constraints, live boolean groups and a pen tool</li>
+      <li>Components with variants, properties, libraries and design tokens</li>
+      <li>Prototypes with smart animate, scrolling and flows</li>
+      <li>Comments, developer handoff (CSS, HTML, iced) and PNG, SVG and PDF export</li>
+      <li>AI agents can read and edit designs through Blobr's MCP server, live in the app</li>
+    </ul>
+    <p>Designs are .jdb files on your own disk.</p>
+  </description>
+  <url type="homepage">https://github.com/jamesisboredcoding/jamsdesign</url>
+  <url type="vcs-browser">https://github.com/jamesisboredcoding/jamsdesign</url>
+  <launchable type="desktop-id">dev.jamsdesign.Blobr.desktop</launchable>
+  <provides>
+    <binary>blobr</binary>
+    <binary>blobr-mcp</binary>
+    <mediatype>application/vnd.jamsdesign.blobr</mediatype>
+  </provides>
+  <categories>
+    <category>Graphics</category>
+    <category>VectorGraphics</category>
+  </categories>
+  <requires>
+    <display_length compare="ge">1000</display_length>
+  </requires>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-11-23">
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

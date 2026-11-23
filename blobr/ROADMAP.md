@@ -177,8 +177,8 @@ CLI argument as a file to open. Names are provisional until Step 0.
         overflow scrolling (frames scroll their content while presenting, clamped to it),
         flow starting points saved on a page's frames (listed in the Prototype tab and while
         presenting), and View > Present in New Window (Ctrl+Alt+Shift+Enter): Blobr is now an
-        iced daemon, so the presentation gets a window of its own. Not done: fixed-position
-        layers while scrolling
+        iced daemon, so the presentation gets a window of its own. Layers in a scrolling
+        frame can be fixed (headers, tab bars) and stay put while the rest scrolls
 - [x] Step 7: interop and moving off Figma
   - [x] SVG import (File > Import SVG, or paste SVG markup): shapes, groups, gradients,
         strokes, images and text as outlines, through usvg (`jd_vector_render::import_svg`)
@@ -187,7 +187,8 @@ CLI argument as a file to open. Names are provisional until Step 0.
         auto layout, shapes, vectors from Figma's geometry, text, fills incl. images,
         strokes, effects, components); `cargo run -p jd-figma --bin figma2jdb -- <file URL>
         out.jdb` with `FIGMA_TOKEN` set fetches it (2 API calls + image downloads). Instances
-        come in as frames, component sets as frames of variants, no variables/styles
+        come in as frames, component sets as frames of variants, booleans as live boolean
+        groups, no variables/styles
   - [x] The suite's mockups are in `blobr/mockups/suite.jdb` (with the Figma JSON they came
         from, for offline re-imports); design work no longer depends on Figma
   - [x] `jd_vector_render::place`: a `.jdb` file's frames and one as RGBA, for Photosplash
@@ -209,7 +210,8 @@ CLI argument as a file to open. Names are provisional until Step 0.
         new nodes get the drawing tools' defaults; errors name the op and say nothing was
         applied. The reference's examples are tested against the real op format
   - [x] Scripting spike: JSON ops only for now (batches + keys cover building screens)
-  - [x] Live bridge: a running Blobr listens on `$XDG_RUNTIME_DIR/app/dev.jamsdesign.Blobr/blobr.sock`; `blobr-mcp`
+  - [x] Live bridge: a running Blobr listens on
+        `$XDG_RUNTIME_DIR/app/dev.jamsdesign.Blobr/blobr.sock` (shared with a Flatpak); `blobr-mcp`
         uses it while it runs (never switching away from unsaved headless work) and falls
         back to headless files. Agent edits show at once and are named undo steps; edits
         wait while the user drags or a dialog is open; "Agent connected" in the status bar
@@ -217,6 +219,15 @@ CLI argument as a file to open. Names are provisional until Step 0.
         (headless, 6 batches, about 200 layers, auto layout throughout, checked with `render`),
         with no call limit. It turned up two fixes: no default outline on filled vectors, and
         `render`'s `scale` no longer capped by the default size
+
+## After the roadmap (2026-11-23)
+
+- [x] Title-bar search (Ctrl+F), the Design/Prototype/Inspect switcher, a typed zoom box with
+      a zoom menu, resizable/swappable/hideable panels, Preferences (Ctrl+,) with auto-save,
+      Keyboard Shortcuts and About dialogs
+- [x] A render margin past the canvas edges, so panning and zooming out don't show gaps
+- [x] Flatpak packaging in `packaging/` (manifest, offline crate sources, desktop file,
+      AppStream metainfo, `.jdb` MIME type, icon); `blobr-mcp` ships in it too
 
 ## Later
 

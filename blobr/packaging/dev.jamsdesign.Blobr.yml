@@ -1,0 +1,49 @@
+# Flatpak manifest for Blobr. Build and install it for your user, from the repository root:
+#
+#   flatpak run org.flatpak.Builder --user --install --force-clean \
+#       build-dir blobr/packaging/dev.jamsdesign.Blobr.yml
+#
+# See README.md next to this file.
+id: dev.jamsdesign.Blobr
+runtime: org.freedesktop.Platform
+runtime-version: '26.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: blobr
+finish-args:
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  - --device=dri
+  # Libraries and recent files are remembered by path, and linked libraries are read
+  # whenever they change, so Blobr needs your files, not just the ones picked in a dialog.
+  - --filesystem=home
+  # Fonts installed for your user, for text layers.
+  - --filesystem=xdg-data/fonts:ro
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/blobr/cargo
+    CARGO_NET_OFFLINE: 'true'
+modules:
+  - name: blobr
+    buildsystem: simple
+    build-commands:
+      - cargo --offline build --release --locked -p blobr -p blobr-mcp
+      - install -Dm755 target/release/blobr /app/bin/blobr
+      - install -Dm755 target/release/blobr-mcp /app/bin/blobr-mcp
+      - install -Dm644 blobr/packaging/dev.jamsdesign.Blobr.desktop /app/share/applications/dev.jamsdesign.Blobr.desktop
+      - install -Dm644 blobr/packaging/dev.jamsdesign.Blobr.metainfo.xml /app/share/metainfo/dev.jamsdesign.Blobr.metainfo.xml
+      - install -Dm644 blobr/packaging/dev.jamsdesign.Blobr.mime.xml /app/share/mime/packages/dev.jamsdesign.Blobr.xml
+      - install -Dm644 img/blobr.svg /app/share/icons/hicolor/scalable/apps/dev.jamsdesign.Blobr.svg
+    sources:
+      # The working tree (for a release, a git source pinned to a tag goes here instead).
+      - type: dir
+        path: ../..
+        skip:
+          - target
+          - .git
+          - build-dir
+          - .flatpak-builder
+      - cargo-sources.json

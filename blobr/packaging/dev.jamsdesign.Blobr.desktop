@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Blobr
+GenericName=Interface Designer
+Comment=Design interfaces and vector graphics (jamsdesign)
+Exec=blobr %F
+Icon=dev.jamsdesign.Blobr
+Terminal=false
+Categories=Graphics;2DGraphics;VectorGraphics;
+Keywords=design;figma;ui;ux;vector;prototype;mockup;
+MimeType=application/vnd.jamsdesign.blobr;
+StartupWMClass=dev.jamsdesign.Blobr
