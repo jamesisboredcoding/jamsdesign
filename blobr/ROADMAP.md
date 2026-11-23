@@ -117,7 +117,7 @@ CLI argument as a file to open. Names are provisional until Step 0.
   - [x] Rename in the layer tree (double-click or Ctrl+R), drag layers to restack them or
         drop them into frames and groups
   - [x] Multi-selection editing (shared values, "Mixed" where they differ)
-- [ ] Step 4: editing tools (started: move/resize by drag as one undo step, Frame, Rectangle,
+- [x] Step 4: editing tools (started: move/resize by drag as one undo step, Frame, Rectangle,
       Ellipse and Text by drag, marquee, nudge, duplicate, delete; snapping to siblings and
       the parent with red guides, Shift keeps to one axis, Ctrl turns snapping off; Alt shows
       distances to the hovered layer or the parent; group, frame selection, ungroup and
@@ -128,8 +128,15 @@ CLI argument as a file to open. Names are provisional until Step 0.
       curves, click the first point to close) and editing a vector's points and handles
       (double-click or Enter), the box refitting afterwards; booleans (union, subtract,
       intersect, exclude via `linesweeper`) and flatten, as `jd_vector::boolean`)
-  - [ ] Live boolean groups (editable afterwards, as in Figma), outline stroke, resize
-        handles on rotated layers, adding points to an existing path
+  - [x] Live boolean groups (`boolean` nodes: the layers stay inside and editable, the result
+        follows them; switch the operation in the Design panel; Flatten makes one vector),
+        Outline Stroke (Ctrl+Shift+O, via kurbo's stroke expansion), resize handles on rotated
+        layers (along their own sides), clicking a segment while editing points adds one
+  - [x] Line (L, Shift for 45 degree steps), Zoom (Z: click, Alt-click, drag an area) and
+        Comment (C) tools; Frame tool device sizes in the Design panel
+  - [x] Comments: numbered pins on the canvas, kept in the file; a card to read, reply,
+        resolve or delete; resolved ones hidden unless View > Show Resolved Comments; every
+        change an undo step (`add_comment`, `set_comment`, `delete_comment` ops, for agents too)
   - Move, resize and rotate with handles; Frame (with device presets), Rectangle, Ellipse,
     Line, Pen (bezier editing) and Text tools; Hand and Zoom
   - Snapping, smart guides and spacing measurements (as in the mockup)

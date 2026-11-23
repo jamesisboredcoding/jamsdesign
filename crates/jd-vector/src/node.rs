@@ -49,6 +49,20 @@ impl Node {
     }
 }
 
+/// A comment pinned to a spot on a page. Comments live in the file (no accounts): replies are
+/// plain text, and resolving one hides it until resolved comments are shown.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Comment {
+    pub page: NodeId,
+    pub x: f64,
+    pub y: f64,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replies: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub resolved: bool,
+}
+
 /// What a node is, plus the data only that kind has.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -95,6 +109,14 @@ pub enum NodeKind {
     ComponentSet {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         description: String,
+    },
+    /// Its children combined into one shape (union, subtract, intersect or exclude) that stays
+    /// editable: move or edit a child and the result follows. Sized to fit its children like a
+    /// group; `path` is the result in its own space, worked out after every batch.
+    Boolean {
+        op: crate::boolean::BoolOp,
+        #[serde(default = "VectorPath::empty")]
+        path: VectorPath,
     },
     /// A copy of a component that follows it. Its children are rebuilt from the component
     /// after every batch; edits to them are kept as overrides.
@@ -177,7 +199,14 @@ impl NodeKind {
     pub fn is_container(&self) -> bool {
         matches!(
             self,
-            Self::Page { .. } | Self::Frame | Self::Group | Self::Section | Self::Component { .. } | Self::ComponentSet { .. } | Self::Instance { .. }
+            Self::Page { .. }
+                | Self::Frame
+                | Self::Group
+                | Self::Boolean { .. }
+                | Self::Section
+                | Self::Component { .. }
+                | Self::ComponentSet { .. }
+                | Self::Instance { .. }
         )
     }
 
@@ -191,6 +220,7 @@ impl NodeKind {
             Self::Page { .. } => "page",
             Self::Frame => "frame",
             Self::Group => "group",
+            Self::Boolean { .. } => "boolean",
             Self::Section => "section",
             Self::Rectangle => "rectangle",
             Self::Ellipse { .. } => "ellipse",
@@ -849,6 +879,11 @@ impl VectorPath {
     pub fn from_svg(d: &str, width: f64, height: f64) -> Result<Self, String> {
         let bez = BezPath::from_svg(d).map_err(|e| format!("bad SVG path: {e:?}"))?;
         Ok(Self::from_bez(&bez, width, height))
+    }
+
+    /// No subpaths.
+    pub fn empty() -> Self {
+        Self { subpaths: Vec::new(), fill_rule: FillRule::default(), base: [0.0, 0.0] }
     }
 
     pub fn from_bez(bez: &BezPath, width: f64, height: f64) -> Self {

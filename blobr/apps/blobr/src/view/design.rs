@@ -239,6 +239,7 @@ fn page(app: &Blobr) -> Element<'_, Message> {
                 .on_press(Message::ShowVariables(true))
         ),
         local_styles(app),
+        frame_presets(app),
         section("Get started", None),
         body(
             text("F frame  ·  R rectangle  ·  O ellipse  ·  T text\nDrag to draw, click to select, Space or middle-drag to pan, Ctrl+scroll to zoom.")
@@ -247,6 +248,25 @@ fn page(app: &Blobr) -> Element<'_, Message> {
         ),
     ]
     .into()
+}
+
+/// With the Frame tool on: device sizes, one click each, as in Figma.
+fn frame_presets(app: &Blobr) -> Element<'_, Message> {
+    if app.tool != crate::tool::Tool::Frame {
+        return space().into();
+    }
+    let list = crate::app::FRAME_PRESETS.iter().enumerate().map(|(i, (name, w, h))| {
+        button(
+            row![text(*name).size(TEXT_SIZE_SMALL).color(TEXT_PRIMARY), space::horizontal(), text(format!("{w} × {h}")).size(TEXT_SIZE_SMALL).color(TEXT_SECONDARY)]
+                .align_y(Vertical::Center),
+        )
+        .width(Fill)
+        .padding(Padding::from([4, 6]))
+        .style(style::ghost(false))
+        .on_press(Message::FramePreset(i))
+        .into()
+    });
+    column![section("Frame", None), body(column(list).spacing(1))].into()
 }
 
 pub(super) fn swatch<'a>(hex: &str) -> Element<'a, Message> {
@@ -392,6 +412,21 @@ fn node<'a>(app: &'a Blobr, n: &'a Node) -> Element<'a, Message> {
             ]
             .spacing(8),
         ));
+    }
+
+    if let NodeKind::Boolean { op, .. } = n.kind
+        && all(app, |n| matches!(n.kind, NodeKind::Boolean { .. }))
+    {
+        // Switch the operation; the layers inside stay editable.
+        let choice = |o: jd_vector::boolean::BoolOp| -> Element<'a, Message> {
+            button(text(o.name()).size(TEXT_SIZE_SMALL).color(if o == op { TEXT_PRIMARY } else { TEXT_SECONDARY }))
+                .padding(Padding::from([4, 8]))
+                .style(style::ghost(o == op))
+                .on_press(Message::SetBoolOp(o))
+                .into()
+        };
+        col = col.push(section("Boolean", None));
+        col = col.push(body(row(jd_vector::boolean::BoolOp::ALL.map(choice)).spacing(4)));
     }
 
     if all(app, |n| !matches!(n.kind, NodeKind::Group | NodeKind::ComponentSet { .. })) {

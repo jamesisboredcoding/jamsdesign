@@ -144,7 +144,7 @@ impl Writer<'_> {
                 }
             }
         }
-        if n.kind.is_container() {
+        if n.kind.is_container() && !matches!(n.kind, NodeKind::Boolean { .. }) {
             let clips = n.props.clip && (n.kind.is_frame_like() || matches!(n.kind, NodeKind::Section));
             if clips {
                 let c = self.clip_path(&d);

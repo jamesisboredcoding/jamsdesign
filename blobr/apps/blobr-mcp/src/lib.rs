@@ -189,7 +189,7 @@ pub fn tools() -> Vec<Tool> {
         tool(
             "arrange",
             false,
-            "Group, ungroup, frame, align, distribute, restack or combine layers. action: group | frame (wrap in a frame) | ungroup | align (to: left, center, right, top, middle, bottom) | distribute (horizontal: bool) | order (to: front, forward, backward, back) | union | subtract | intersect | exclude | flatten.",
+            "Group, ungroup, frame, align, distribute, restack or combine layers. action: group | frame (wrap in a frame) | ungroup | align (to: left, center, right, top, middle, bottom) | distribute (horizontal: bool) | order (to: front, forward, backward, back) | union | subtract | intersect | exclude (live boolean groups: the layers stay editable inside) | flatten (one vector) | outline_stroke (one layer's stroke becomes a filled vector).",
             schema(
                 json!({
                     "action": { "type": "string" },
@@ -298,6 +298,17 @@ pub fn call(target: &mut dyn Target, name: &str, args: Value) -> ToolResult {
                 "variables": t.variables.len(),
                 "styles": t.styles.len(),
             });
+            let comments: Vec<Value> = doc
+                .comments()
+                .iter()
+                .map(|(id, c)| json!({ "id": id.0, "page": c.page.0, "x": c.x, "y": c.y, "text": c.text, "replies": c.replies, "resolved": c.resolved }))
+                .collect();
+            if !comments.is_empty() {
+                info["comments"] = json!(comments);
+            }
+            if !doc.libraries().is_empty() {
+                info["libraries"] = json!(doc.libraries());
+            }
             if let Ok(sel) = target.selection() {
                 info["selection"] = json!(sel.iter().map(|i| i.0).collect::<Vec<_>>());
             }
@@ -691,11 +702,16 @@ fn arrange(target: &mut dyn Target, args: &Value) -> ToolResult {
             };
             ("Reorder", jd_vector::arrange::reorder(doc, &ids, o))
         }
-        "union" => ("Union", jd_vector::boolean::boolean(doc, &ids, BoolOp::Union)?),
-        "subtract" => ("Subtract", jd_vector::boolean::boolean(doc, &ids, BoolOp::Subtract)?),
-        "intersect" => ("Intersect", jd_vector::boolean::boolean(doc, &ids, BoolOp::Intersect)?),
-        "exclude" => ("Exclude", jd_vector::boolean::boolean(doc, &ids, BoolOp::Exclude)?),
+        // Live boolean groups, as in the app; flatten makes one vector of them.
+        "union" => ("Union", jd_vector::boolean::boolean_group(doc, &ids, BoolOp::Union)?),
+        "subtract" => ("Subtract", jd_vector::boolean::boolean_group(doc, &ids, BoolOp::Subtract)?),
+        "intersect" => ("Intersect", jd_vector::boolean::boolean_group(doc, &ids, BoolOp::Intersect)?),
+        "exclude" => ("Exclude", jd_vector::boolean::boolean_group(doc, &ids, BoolOp::Exclude)?),
         "flatten" => ("Flatten", jd_vector::boolean::flatten(doc, &ids)?),
+        "outline_stroke" => match ids[..] {
+            [id] => ("Outline stroke", jd_vector::boolean::outline_stroke(doc, id)?),
+            _ => return Err("outline_stroke takes one layer".into()),
+        },
         a => return Err(format!("unknown action {a:?}")),
     };
     if ops.is_empty() {

@@ -135,7 +135,7 @@ pub(crate) fn shape_of(n: &Node) -> (BezPath, sk::FillRule) {
         NodeKind::Text { text } => {
             (crate::text::text_outline(&text.content, &text.style, n.props.width, n.props.height), sk::FillRule::Winding)
         }
-        NodeKind::Vector { path } => (
+        NodeKind::Vector { path } | NodeKind::Boolean { path, .. } => (
             geometry::outline(n),
             if path.fill_rule == FillRule::EvenOdd { sk::FillRule::EvenOdd } else { sk::FillRule::Winding },
         ),
@@ -320,7 +320,8 @@ impl<'a> Ctx<'a> {
             }
         }
 
-        if n.kind.is_container() {
+        // A boolean group draws its result; its children are only what it's made from.
+        if n.kind.is_container() && !matches!(n.kind, NodeKind::Boolean { .. }) {
             let clips = n.props.clip && (n.kind.is_frame_like() || matches!(n.kind, NodeKind::Section));
             // Clipping costs a canvas-sized mask; skip it when everything inside fits anyway.
             let clips = clips && !self.children_fit(n, t);
@@ -788,6 +789,20 @@ mod tests {
         // The blue square spills past the frame but the frame clips it.
         let page = render_node(&doc, doc.pages()[0], RenderOptions::default()).unwrap();
         assert_eq!((page.width(), page.height()), (100, 100));
+    }
+
+    #[test]
+    fn boolean_groups_draw_their_result_in_their_own_paint() {
+        let (mut doc, f) = frame_with(vec![
+            Op::create_as("a", "f", NodeSpec::rect("A", 60.0, 60.0).at(10.0, 10.0).fill(Paint::hex("#FF0000"))),
+            Op::create_as("b", "f", NodeSpec::rect("B", 60.0, 60.0).at(40.0, 40.0).fill(Paint::hex("#00FF00"))),
+        ]);
+        let ids: Vec<NodeId> = doc.children(f).to_vec();
+        doc.apply(&jd_vector::boolean::boolean_group(&doc, &ids, jd_vector::boolean::BoolOp::Subtract).unwrap(), &ApproxMeasure).unwrap();
+        let pm = render_node(&doc, f, RenderOptions::default()).unwrap();
+        assert_eq!(px(&pm, 20, 20), [255, 0, 0, 255], "the bottom layer's look");
+        assert_eq!(px(&pm, 55, 55), [255, 255, 255, 255], "cut out where B was");
+        assert_eq!(px(&pm, 90, 90), [255, 255, 255, 255], "B itself isn't drawn");
     }
 
     #[test]

@@ -59,6 +59,10 @@ struct FileDoc {
     pages: Vec<FileNode>,
     #[serde(default, skip_serializing_if = "crate::tokens::Tokens::is_empty")]
     tokens: crate::tokens::Tokens,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    comments: BTreeMap<NodeId, crate::node::Comment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    libraries: Vec<String>,
 }
 
 /// A node and its subtree, nested, as files (and copied layers) store them.
@@ -93,6 +97,8 @@ pub fn to_json(doc: &Document) -> String {
         next_id: doc.next_id,
         pages: doc.pages.iter().map(|&p| to_file(doc, p)).collect(),
         tokens: doc.tokens.clone(),
+        comments: doc.comments.clone(),
+        libraries: doc.libraries.clone(),
     };
     serde_json::to_string_pretty(&file).expect("documents always serialize")
 }
@@ -137,7 +143,18 @@ pub fn from_json(json: &str) -> Result<Document, FileError> {
         doc.pages.push(id);
     }
     doc.tokens = file.tokens;
-    let max = doc.nodes.keys().chain(doc.tokens.collections.keys()).chain(doc.tokens.variables.keys()).chain(doc.tokens.styles.keys()).map(|id| id.0).max().unwrap_or(0);
+    doc.comments = file.comments.into_iter().filter(|(_, c)| doc.pages.contains(&c.page)).collect();
+    doc.libraries = file.libraries;
+    let max = doc
+        .nodes
+        .keys()
+        .chain(doc.tokens.collections.keys())
+        .chain(doc.tokens.variables.keys())
+        .chain(doc.tokens.styles.keys())
+        .chain(doc.comments.keys())
+        .map(|id| id.0)
+        .max()
+        .unwrap_or(0);
     doc.next_id = file.next_id.max(max + 1);
     Ok(doc)
 }
@@ -285,5 +302,34 @@ mod tests {
             {"id":1,"name":"P","type":"page","x":0,"y":0,"width":0,"height":0,"children":[
               {"id":1,"name":"R","type":"rectangle","x":0,"y":0,"width":1,"height":1}]}]}"#;
         assert!(from_json(dup).unwrap_err().to_string().contains("used twice"));
+    }
+
+    #[test]
+    fn comments_and_libraries_round_trip_and_older_files_still_load() {
+        let mut doc = Document::new();
+        let page = doc.pages()[0];
+        let done = doc
+            .apply(
+                &[
+                    crate::Op::AddComment { page: page.into(), x: 10.0, y: 20.0, text: "Tighter?".into(), key: Some("c".into()) },
+                    crate::Op::SetLibraries { paths: vec!["/tmp/ui.jdb".into()] },
+                ],
+                &crate::ApproxMeasure,
+            )
+            .unwrap();
+        let c = done.id("c").unwrap();
+        doc.apply(&[crate::Op::SetComment { id: c.into(), text: None, x: None, y: None, reply: Some("Done".into()), resolved: Some(true) }], &crate::ApproxMeasure).unwrap();
+        let back = from_json(&to_json(&doc)).unwrap();
+        let bc = &back.comments()[&c];
+        assert_eq!((bc.text.as_str(), bc.replies.len(), bc.resolved, bc.page), ("Tighter?", 1, true, page));
+        assert_eq!(back.libraries(), ["/tmp/ui.jdb"]);
+        let mut back = back;
+        let fresh = back.apply(&[crate::Op::create(page, crate::NodeSpec::rect("R", 1.0, 1.0))], &crate::ApproxMeasure).unwrap();
+        assert!(fresh.created[0].0 > c.0, "new ids never reuse a comment's");
+
+        // A file from before comments and libraries existed.
+        let old = r#"{"format":"blobr","version":1,"next_id":2,"pages":[{"id":1,"name":"Page 1","type":"page"}]}"#;
+        let doc = from_json(old).unwrap();
+        assert!(doc.comments().is_empty() && doc.libraries().is_empty());
     }
 }

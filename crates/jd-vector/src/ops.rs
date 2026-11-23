@@ -63,7 +63,7 @@ impl NodeSpec {
                 props.corner = CornerRadii::all(5.0);
             }
             NodeKind::Section => props.fills = vec![Paint::hex("#2C2C2C")],
-            NodeKind::Rectangle | NodeKind::Ellipse { .. } | NodeKind::Polygon { .. } | NodeKind::Star { .. } => {
+            NodeKind::Rectangle | NodeKind::Ellipse { .. } | NodeKind::Polygon { .. } | NodeKind::Star { .. } | NodeKind::Boolean { .. } => {
                 props.fills = vec![Paint::hex("#D9D9D9")];
             }
             NodeKind::Line | NodeKind::Vector { .. } => {
@@ -244,6 +244,9 @@ pub struct Patch {
     /// Ellipses.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arc: Option<EllipseArc>,
+    /// Boolean groups: the operation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bool_op: Option<crate::boolean::BoolOp>,
     /// Pages.
     #[serde(with = "opt_hex", skip_serializing_if = "Option::is_none")]
     pub background: Option<Rgba>,
@@ -466,6 +469,36 @@ pub enum Op {
     DeleteToken {
         id: Ref,
     },
+    /// Pin a comment at (x, y) on a page. Its id comes back like a created node's.
+    AddComment {
+        page: Ref,
+        x: f64,
+        y: f64,
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key: Option<String>,
+    },
+    /// Edit, move, reply to, resolve or reopen a comment.
+    SetComment {
+        id: Ref,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        x: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        y: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reply: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resolved: Option<bool>,
+    },
+    DeleteComment {
+        id: Ref,
+    },
+    /// Replace the list of library files this document uses.
+    SetLibraries {
+        paths: Vec<String>,
+    },
 }
 
 impl Op {
@@ -491,6 +524,10 @@ impl Op {
             Self::CreateStyle { .. } => "create_style",
             Self::SetStyle { .. } => "set_style",
             Self::DeleteToken { .. } => "delete_token",
+            Self::AddComment { .. } => "add_comment",
+            Self::SetComment { .. } => "set_comment",
+            Self::DeleteComment { .. } => "delete_comment",
+            Self::SetLibraries { .. } => "set_libraries",
         }
     }
 
@@ -553,6 +590,7 @@ impl Document {
         crate::component::sync_all(&mut work);
         crate::tokens::resolve_all(&mut work);
         crate::layout::run(&mut work, measure);
+        crate::boolean::sync_all(&mut work);
 
         let created: std::collections::BTreeSet<NodeId> = batch.created.iter().copied().collect();
         let changed = work
@@ -588,6 +626,14 @@ impl Batch {
         match r {
             Ref::Id(id) if doc.tokens.contains(*id) => Ok(*id),
             Ref::Id(id) => Err(format!("token {id} doesn't exist")),
+            Ref::Key(k) => self.key(k),
+        }
+    }
+
+    fn resolve_comment(&self, doc: &Document, r: &Ref) -> Result<NodeId, String> {
+        match r {
+            Ref::Id(id) if doc.comments.contains_key(id) => Ok(*id),
+            Ref::Id(id) => Err(format!("comment {id} doesn't exist")),
             Ref::Key(k) => self.key(k),
         }
     }
@@ -760,6 +806,8 @@ impl Batch {
                 for n in doc.descendants(id).into_iter().chain([id]) {
                     doc.nodes.remove(&n);
                 }
+                // A deleted page takes its comments with it.
+                doc.comments.retain(|_, c| c.page != id);
             }
             Op::MakeComponent { id } => {
                 let id = self.resolve(doc, id)?;
@@ -895,6 +943,40 @@ impl Batch {
                     s.name = n.clone();
                 }
             }
+            Op::AddComment { page, x, y, text, key } => {
+                let page = self.resolve(doc, page)?;
+                if !doc.pages.contains(&page) {
+                    return Err(format!("node {page} isn't a page"));
+                }
+                let id = doc.alloc_id();
+                doc.comments.insert(id, crate::node::Comment { page, x: *x, y: *y, text: text.clone(), replies: Vec::new(), resolved: false });
+                self.remember(key, id)?;
+                self.created.push(id);
+            }
+            Op::SetComment { id, text, x, y, reply, resolved } => {
+                let id = self.resolve_comment(doc, id)?;
+                let c = doc.comments.get_mut(&id).expect("resolved");
+                if let Some(t) = text {
+                    c.text = t.clone();
+                }
+                if let Some(v) = x {
+                    c.x = *v;
+                }
+                if let Some(v) = y {
+                    c.y = *v;
+                }
+                if let Some(r) = reply {
+                    c.replies.push(r.clone());
+                }
+                if let Some(r) = resolved {
+                    c.resolved = *r;
+                }
+            }
+            Op::DeleteComment { id } => {
+                let id = self.resolve_comment(doc, id)?;
+                doc.comments.remove(&id);
+            }
+            Op::SetLibraries { paths } => doc.libraries = paths.clone(),
             Op::DeleteToken { id } => {
                 let id = self.resolve_token(doc, id)?;
                 let mut gone = vec![id];
@@ -1008,6 +1090,10 @@ pub(crate) fn apply_patch(n: &mut Node, patch: &Patch) -> Result<(), String> {
     if let Some(v) = patch.arc {
         let NodeKind::Ellipse { arc } = &mut n.kind else { return wrong("arc") };
         *arc = v;
+    }
+    if let Some(v) = patch.bool_op {
+        let NodeKind::Boolean { op, .. } = &mut n.kind else { return wrong("bool_op") };
+        *op = v;
     }
     if let Some(v) = patch.background {
         let NodeKind::Page { background } = &mut n.kind else { return wrong("background") };

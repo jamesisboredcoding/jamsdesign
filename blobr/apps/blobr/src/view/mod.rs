@@ -3,6 +3,7 @@
 
 mod assets;
 mod canvas;
+mod comments;
 mod design;
 mod inspect;
 mod layers;
@@ -72,6 +73,10 @@ pub fn view(app: &Blobr) -> Element<'_, Message> {
     }
     if let Some(popup) = menus::popup(app) {
         layers = layers.push(popup);
+    }
+    let canvas_at = iced::Point::new(3.0 * GUTTER + TOOLBAR_WIDTH + LAYERS_WIDTH, TITLE_BAR_HEIGHT + 1.0 + GUTTER + TABS_HEIGHT);
+    if let Some(card) = comments::view(app, canvas_at) {
+        layers = layers.push(card);
     }
     if app.variables_open {
         layers = layers.push(variables::view(app));
@@ -244,9 +249,10 @@ pub fn kind_icon(kind: &jd_vector::NodeKind) -> Icon {
         K::Page { .. } => Icon::Page,
         K::Frame | K::Section => Icon::Frame,
         K::Group => Icon::Layers,
+        K::Boolean { .. } => Icon::Union,
         K::Rectangle | K::Polygon { .. } | K::Star { .. } => Icon::Shape,
         K::Ellipse { .. } => Icon::EllipseShape,
-        K::Line => Icon::Minus,
+        K::Line => Icon::Line,
         K::Vector { .. } => Icon::Pen,
         K::Text { .. } => Icon::Type,
         K::Component { .. } | K::ComponentSet { .. } => Icon::Component,

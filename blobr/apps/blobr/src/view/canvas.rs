@@ -152,14 +152,11 @@ impl canvas::Program<Message> for Overlay<'_> {
         for &id in &app.selection {
             outline(&mut frame, id);
         }
-        let rotated = |id| doc.node(id).is_some_and(|n| n.props.rotation != 0.0);
         if let [one] = app.selection[..]
             && app.vector_edit.is_none()
             && let Some(r) = app.screen_bounds(one)
         {
-            for h in Handle::ALL.into_iter().filter(|_| !rotated(one)) {
-                let (ax, ay) = h.anchor();
-                let c = Point::new(r.x + r.width * ax as f32, r.y + r.height * ay as f32);
+            for (_, c) in app.handle_points(one) {
                 let sq = Path::rectangle(Point::new(c.x - 3.5, c.y - 3.5), Size::new(7.0, 7.0));
                 frame.fill(&sq, Color::WHITE);
                 frame.stroke(&sq, Stroke::default().with_width(1.0).with_color(ACCENT_PRIMARY));
@@ -291,6 +288,10 @@ impl canvas::Program<Message> for Overlay<'_> {
                 frame.fill(&p, Color { a: 0.1, ..ACCENT_PRIMARY });
                 frame.stroke(&p, Stroke::default().with_width(1.0).with_color(ACCENT_PRIMARY));
             }
+            Some(Drag::Create { tool: Tool::Line, start, now }) => {
+                let (a, b) = (app.camera.to_screen(*start), app.camera.to_screen(app.line_end(*start, *now)));
+                frame.stroke(&Path::line(a, b), Stroke::default().with_width(1.0).with_color(ACCENT_PRIMARY));
+            }
             Some(Drag::Create { tool, start, now }) => {
                 let (a, b) = (app.camera.to_screen(*start), app.camera.to_screen(*now));
                 let r = Rectangle::new(Point::new(a.x.min(b.x), a.y.min(b.y)), Size::new((a.x - b.x).abs(), (a.y - b.y).abs()));
@@ -311,6 +312,22 @@ impl canvas::Program<Message> for Overlay<'_> {
             }
             _ => {}
         }
+        // Comment pins, numbered; the open one (or the one being written) in the accent.
+        let pin = |frame: &mut Frame, at: Point, label: String, on: bool, resolved: bool| {
+            let fill = if on { ACCENT_PRIMARY } else if resolved { Color::from_rgb8(0x6B, 0x6B, 0x6B) } else { Color::from_rgb8(0xE0, 0x3E, 0x7A) };
+            let c = Path::circle(at, crate::app::PIN_RADIUS);
+            frame.fill(&c, fill);
+            frame.stroke(&c, Stroke::default().with_width(2.0).with_color(Color::WHITE));
+            let w = label.chars().count() as f32 * 6.5;
+            frame.fill_text(Text { content: label, position: Point::new(at.x - w / 2.0, at.y - 7.0), color: Color::WHITE, size: 11.0.into(), ..Text::default() });
+        };
+        for (id, n, at) in app.visible_comments() {
+            let resolved = doc.comments().get(&id).is_some_and(|c| c.resolved);
+            pin(&mut frame, at, n.to_string(), app.comment_open == Some(id), resolved);
+        }
+        if let Some(p) = app.comment_new {
+            pin(&mut frame, app.camera.to_screen(p), "+".into(), true, false);
+        }
         vec![frame.into_geometry()]
     }
 
@@ -328,7 +345,13 @@ impl canvas::Program<Message> for Overlay<'_> {
         if app.space_held || app.tool == Tool::Hand {
             return mouse::Interaction::Grab;
         }
-        if app.tool.creates() || app.tool == Tool::Pen {
+        if app.comment_at(p).is_some() {
+            return mouse::Interaction::Pointer;
+        }
+        if app.tool == Tool::Zoom {
+            return if app.modifiers.alt() { mouse::Interaction::ZoomOut } else { mouse::Interaction::ZoomIn };
+        }
+        if app.tool.creates() || app.tool == Tool::Pen || app.tool == Tool::Comment {
             return mouse::Interaction::Crosshair;
         }
         if app.handle_at(p).is_none() && app.rotate_at(p).is_some() {

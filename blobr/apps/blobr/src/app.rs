@@ -93,7 +93,24 @@ pub enum Drag {
     /// A vector point or handle (subpath, anchor, which part).
     Anchor { id: NodeId, sub: usize, idx: usize, part: Part },
     Create { tool: Tool, start: kurbo::Point, now: kurbo::Point },
+    /// Resizing a rotated layer along its own axes: page to its own space, its own space to
+    /// its parent's, and its size at the start.
+    ResizeRotated { id: NodeId, handle: Handle, start: kurbo::Point, to_local: Affine, place: Affine, size: (f64, f64), started: bool },
 }
+
+/// Device sizes the Frame tool offers, as in Figma's right panel.
+pub const FRAME_PRESETS: &[(&str, f64, f64)] = &[
+    ("iPhone 16", 393.0, 852.0),
+    ("iPhone 16 Pro Max", 440.0, 956.0),
+    ("Android Compact", 412.0, 917.0),
+    ("iPad Pro 11\"", 834.0, 1194.0),
+    ("Desktop", 1440.0, 1024.0),
+    ("MacBook Air", 1280.0, 832.0),
+    ("Apple Watch", 198.0, 242.0),
+    ("Instagram post", 1080.0, 1350.0),
+    ("A4", 595.0, 842.0),
+    ("Slide 16:9", 1920.0, 1080.0),
+];
 
 /// What a press-and-drag in the Layers panel will do on release.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -222,6 +239,12 @@ pub const TEXT_EDITOR: &str = "canvas-text";
 
 /// Id of the layer-name box in the Layers panel.
 pub const RENAME_INPUT: &str = "layer-rename";
+
+/// Id of the comment card's text box.
+pub const COMMENT_INPUT: &str = "comment-input";
+
+/// Radius of a comment pin on the canvas, in screen pixels.
+pub const PIN_RADIUS: f32 = 11.0;
 
 /// A Design-panel value box being typed into.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -377,6 +400,20 @@ pub enum Message {
     /// property's name (None unlinks).
     LinkProperty(PropLink, Option<String>),
     Flatten,
+    /// Turn the selected layer's stroke into a filled vector.
+    OutlineStroke,
+    /// Change the selected boolean groups' operation.
+    SetBoolOp(BoolOp),
+    /// A device-sized frame from the Frame tool's list (index into [`FRAME_PRESETS`]).
+    FramePreset(usize),
+    /// Show a comment (or, with `None`, close what's open).
+    CommentOpen(Option<NodeId>),
+    CommentDraft(String),
+    /// Post the new comment, or reply to the open one.
+    CommentSubmit,
+    CommentResolve(NodeId, bool),
+    CommentDelete(NodeId),
+    ShowResolved(bool),
     Distribute(bool),
     Group,
     FrameSelection,
@@ -504,6 +541,13 @@ pub struct Blobr {
     /// Recently opened or saved files, newest first, with their menu labels.
     pub recent: Vec<PathBuf>,
     pub recent_labels: Vec<(String, String)>,
+    /// A comment being written at this page point (Comment tool).
+    pub comment_new: Option<kurbo::Point>,
+    /// The comment shown in a card next to its pin.
+    pub comment_open: Option<NodeId>,
+    /// What's typed in the comment card.
+    pub comment_draft: String,
+    pub show_resolved: bool,
 }
 
 const MIN_ZOOM: f64 = 0.02;
@@ -578,6 +622,10 @@ impl Blobr {
             active: 0,
             recent: Vec::new(),
             recent_labels: Vec::new(),
+            comment_new: None,
+            comment_open: None,
+            comment_draft: String::new(),
+            show_resolved: false,
         };
         app.set_recent(crate::recent::load());
         app.viewport = view::canvas_size(app.chrome.size);
@@ -1068,9 +1116,71 @@ impl Blobr {
                 });
             }
             Message::Boolean(op) => {
-                let ops = boolean::boolean(self.doc(), &self.selection, op);
+                // A live boolean group, editable afterwards (Flatten makes it one vector).
+                let ops = boolean::boolean_group(self.doc(), &self.selection, op);
                 self.replace_with("result", op.name(), ops);
             }
+            Message::OutlineStroke => match self.selection[..] {
+                [id] => {
+                    let ops = boolean::outline_stroke(self.doc(), id);
+                    self.replace_with("result", "Outline stroke", ops);
+                }
+                _ => self.error("Select one layer to outline its stroke".into()),
+            },
+            Message::SetBoolOp(op) => {
+                let ops: Vec<Op> = self
+                    .selection
+                    .iter()
+                    .filter(|&&id| matches!(self.doc().node(id).map(|n| &n.kind), Some(NodeKind::Boolean { .. })))
+                    .map(|&id| Op::set(id, Patch { bool_op: Some(op), name: Some(op.name().into()), ..Patch::default() }))
+                    .collect();
+                self.run(op.name(), &ops);
+            }
+            Message::FramePreset(i) => {
+                let Some(&(name, w, h)) = FRAME_PRESETS.get(i) else { return Task::none() };
+                let c = self.camera.to_page(Point::new(self.viewport.width / 2.0, self.viewport.height / 2.0));
+                let spec = NodeSpec::frame(name, w, h).at((c.x - w / 2.0).round(), (c.y - h / 2.0).round());
+                if let Some(done) = self.run(&format!("Add {name}"), &[Op::create(self.page, spec)]) {
+                    self.select(done.created[0], false);
+                    self.tool = Tool::Move;
+                    self.zoom_fit(true);
+                }
+            }
+            Message::CommentOpen(id) => {
+                self.comment_open = id;
+                self.comment_new = None;
+                self.comment_draft.clear();
+            }
+            Message::CommentDraft(t) => self.comment_draft = t,
+            Message::CommentSubmit => {
+                let text = self.comment_draft.trim().to_owned();
+                if text.is_empty() {
+                    return Task::none();
+                }
+                if let Some(at) = self.comment_new.take() {
+                    let op = Op::AddComment { page: self.page.into(), x: at.x.round(), y: at.y.round(), text, key: None };
+                    if let Some(done) = self.run("Add comment", &[op]) {
+                        self.comment_open = done.created.first().copied();
+                        self.tool = Tool::Move;
+                    }
+                } else if let Some(id) = self.comment_open {
+                    let op = Op::SetComment { id: id.into(), text: None, x: None, y: None, reply: Some(text), resolved: None };
+                    self.run("Reply", &[op]);
+                }
+                self.comment_draft.clear();
+            }
+            Message::CommentResolve(id, resolved) => {
+                let op = Op::SetComment { id: id.into(), text: None, x: None, y: None, reply: None, resolved: Some(resolved) };
+                self.run(if resolved { "Resolve comment" } else { "Reopen comment" }, &[op]);
+                if resolved && !self.show_resolved {
+                    self.comment_open = None;
+                }
+            }
+            Message::CommentDelete(id) => {
+                self.run("Delete comment", &[Op::DeleteComment { id: id.into() }]);
+                self.comment_open = None;
+            }
+            Message::ShowResolved(on) => self.show_resolved = on,
             Message::Flatten => {
                 let ops = boolean::flatten(self.doc(), &self.selection);
                 self.replace_with("result", "Flatten", ops);
@@ -1370,6 +1480,11 @@ impl Blobr {
                 _ => Task::none(),
             };
         }
+        if matches!(key.as_ref(), Key::Named(Named::Escape)) && (self.comment_new.is_some() || self.comment_open.is_some()) {
+            self.comment_new = None;
+            self.comment_open = None;
+            return Task::none();
+        }
         if matches!(key.as_ref(), Key::Named(Named::Escape | Named::Enter)) {
             if self.pen.is_some() {
                 self.finish_pen(false);
@@ -1498,6 +1613,7 @@ impl Blobr {
                     ("w", true, false, false) => Some(Message::TabClose(self.active)),
                     ("n", true, false, false) => Some(Message::New),
                     ("e", true, true, false) => Some(Message::Export(ExportFormat::Png)),
+                    ("o", true, true, false) => Some(Message::OutlineStroke),
                     ("k", true, false, true) => Some(Message::CreateComponent),
                     ("i", false, false, true) => Some(Message::LeftTab(1)),
                     ("l", false, false, true) => Some(Message::LeftTab(0)),
@@ -2511,6 +2627,8 @@ impl Blobr {
         self.pen = None;
         self.vector_edit = None;
         self.present = None;
+        self.comment_new = None;
+        self.comment_open = None;
         self.drafts.clear();
         self.thumbnails.clear();
         self.thumbs_version = u64::MAX;
@@ -2725,17 +2843,36 @@ impl Blobr {
 
     pub fn handle_at(&self, at: Point) -> Option<(NodeId, Handle)> {
         let [id] = self.selection[..] else { return None };
-        let n = self.doc().node(id)?;
-        // Rotated layers get rotated handles later; for now they resize from the panel.
-        if n.props.rotation != 0.0 {
-            return None;
-        }
-        let r = self.screen_bounds(id)?;
-        Handle::ALL.into_iter().find_map(|h| {
-            let (ax, ay) = h.anchor();
-            let p = Point::new(r.x + r.width * ax as f32, r.y + r.height * ay as f32);
-            ((p.x - at.x).abs() <= 6.0 && (p.y - at.y).abs() <= 6.0).then_some((id, h))
-        })
+        self.handle_points(id).into_iter().find_map(|(h, p)| ((p.x - at.x).abs() <= 6.0 && (p.y - at.y).abs() <= 6.0).then_some((id, h)))
+    }
+
+    /// Where each resize handle of `id` sits on screen (turned with the layer).
+    pub fn handle_points(&self, id: NodeId) -> Vec<(Handle, Point)> {
+        let Some(n) = self.doc().node(id) else { return Vec::new() };
+        let t = self.doc().world_transform(id);
+        let (w, h) = (n.props.width, n.props.height);
+        Handle::ALL.into_iter().map(|hd| {
+            let (ax, ay) = hd.anchor();
+            (hd, self.camera.to_screen(t * kurbo::Point::new(w * ax as f64, h * ay as f64)))
+        }).collect()
+    }
+
+    /// The comment pin under a screen point, on this page.
+    pub fn comment_at(&self, at: Point) -> Option<NodeId> {
+        self.visible_comments().into_iter().rev().find_map(|(id, _, p)| (p.distance(at) <= PIN_RADIUS + 2.0).then_some(id))
+    }
+
+    /// This page's comments that show (resolved ones only when asked), numbered from 1,
+    /// with their pins' screen positions.
+    pub fn visible_comments(&self) -> Vec<(NodeId, usize, Point)> {
+        self.doc()
+            .comments()
+            .iter()
+            .filter(|(_, c)| c.page == self.page)
+            .enumerate()
+            .filter(|(_, (_, c))| self.show_resolved || !c.resolved)
+            .map(|(i, (&id, c))| (id, i + 1, self.camera.to_screen(kurbo::Point::new(c.x, c.y))))
+            .collect()
     }
 
     /// What a click at `at` selects (see [`pick`]).
@@ -2775,6 +2912,22 @@ impl Blobr {
         }
         // Clicking anywhere else on the canvas finishes typing.
         self.commit_text();
+        // Comment pins answer any tool; elsewhere a click closes the card.
+        if let Some(c) = self.comment_at(at) {
+            return self.handle(Message::CommentOpen(Some(c)));
+        }
+        if self.comment_new.is_some() || self.comment_open.is_some() {
+            self.comment_new = None;
+            self.comment_open = None;
+            if self.tool != Tool::Comment {
+                return Task::none();
+            }
+        }
+        if self.tool == Tool::Comment {
+            self.comment_new = Some(page);
+            self.comment_draft.clear();
+            return operation::focus(COMMENT_INPUT);
+        }
         if self.tool == Tool::Pen {
             self.pen_press(page, at);
             return Task::none();
@@ -2785,6 +2938,16 @@ impl Blobr {
                 self.drag = Some(Drag::Anchor { id: ve.id, sub, idx, part });
                 return Task::none();
             }
+            // Clicking a segment adds a point there (and starts dragging it).
+            if let Some(NodeKind::Vector { path }) = self.doc().node(ve.id).map(|n| &n.kind)
+                && let Some(map) = self.anchors_to_screen(ve.id)
+                && let Some((path, (sub, idx))) = pen::insert_at(path, map, kurbo::Point::new(at.x as f64, at.y as f64), 5.0)
+            {
+                self.run("Add point", &[Op::set(ve.id, Patch { path: Some(path), ..Patch::default() })]);
+                self.vector_edit = Some(VectorEdit { selected: Some((sub, idx)), ..ve });
+                self.drag = Some(Drag::Anchor { id: ve.id, sub, idx, part: Part::Point });
+                return Task::none();
+            }
             // Clicking away from the points leaves point editing.
             self.vector_edit = None;
         }
@@ -2793,6 +2956,14 @@ impl Blobr {
         self.last_click = Some((now, at));
         if self.tool.creates() {
             self.drag = Some(Drag::Create { tool: self.tool, start: page, now: page });
+            return Task::none();
+        }
+        if let Some((id, handle)) = self.handle_at(at)
+            && let Some(n) = self.doc().node(id).filter(|n| n.props.rotation != 0.0)
+        {
+            let to_local = self.doc().world_transform(id).inverse();
+            let place = jd_vector::Document::local_transform(n);
+            self.drag = Some(Drag::ResizeRotated { id, handle, start: page, to_local, place, size: (n.props.width, n.props.height), started: false });
             return Task::none();
         }
         if let Some((id, handle)) = self.handle_at(at) {
@@ -2977,7 +3148,7 @@ impl Blobr {
 
     fn drag_to(&mut self, at: Point) {
         let page = self.camera.to_page(at);
-        if let Some(Drag::Move { start, started, .. } | Drag::Resize { start, started, .. }) = &mut self.drag
+        if let Some(Drag::Move { start, started, .. } | Drag::Resize { start, started, .. } | Drag::ResizeRotated { start, started, .. }) = &mut self.drag
             && !*started
         {
             if (page - *start).hypot() * self.camera.zoom < DRAG_THRESHOLD {
@@ -3069,6 +3240,18 @@ impl Blobr {
                 ];
                 self.run_gesture("Resize", &ops);
             }
+            Drag::ResizeRotated { id, handle, start, to_local, place, size, .. } => {
+                // In the layer's own (unturned) space, then back to where its corner goes.
+                let c = to_local.as_coeffs();
+                let d = local_vec(c, page - start);
+                let r = resize_rect(Rect::new(0.0, 0.0, size.0, size.1), handle, d, self.modifiers.shift());
+                let o = place * kurbo::Point::new(r.x0, r.y0);
+                let ops = [
+                    Op::Resize { id: id.into(), width: r.width().round(), height: r.height().round() },
+                    Op::set(id, Patch { x: Some(round2(o.x)), y: Some(round2(o.y)), ..Patch::default() }),
+                ];
+                self.run_gesture("Resize", &ops);
+            }
             Drag::Marquee { start, .. } => self.drag = Some(Drag::Marquee { start, now: page }),
             Drag::Rotate { id, center_page, center_parent, a0, rot0, half } => {
                 let a = (page - center_page).atan2();
@@ -3100,7 +3283,7 @@ impl Blobr {
         }
         let Some(drag) = self.drag.take() else { return Task::none() };
         match drag {
-            Drag::Move { .. } | Drag::Resize { .. } | Drag::Rotate { .. } => {
+            Drag::Move { .. } | Drag::Resize { .. } | Drag::ResizeRotated { .. } | Drag::Rotate { .. } => {
                 self.ed.end_gesture();
                 self.guides.clear();
             }
@@ -3137,9 +3320,44 @@ impl Blobr {
         Task::none()
     }
 
+    /// Where a line being drawn ends: Shift keeps it to 45 degree steps.
+    pub fn line_end(&self, start: kurbo::Point, now: kurbo::Point) -> kurbo::Point {
+        let d = now - start;
+        if !self.modifiers.shift() || d.hypot() == 0.0 {
+            return now;
+        }
+        let step = std::f64::consts::FRAC_PI_4;
+        let a = (d.atan2() / step).round() * step;
+        start + Vec2::from_angle(a) * d.hypot()
+    }
+
     fn create(&mut self, tool: Tool, start: kurbo::Point, end: kurbo::Point) -> Task<Message> {
         let mut r = Rect::from_points(start, end);
         let clicked = r.width() * self.camera.zoom < 3.0 && r.height() * self.camera.zoom < 3.0;
+        if tool == Tool::Zoom {
+            if clicked {
+                let f = if self.modifiers.alt() { 0.5 } else { 2.0 };
+                self.zoom_at(f, Some(self.camera.to_screen(start)));
+            } else {
+                self.zoom_to(r, true);
+            }
+            return Task::none();
+        }
+        if tool == Tool::Line {
+            let end = if clicked { start + Vec2::new(100.0, 0.0) } else { self.line_end(start, end) };
+            let parent = self.frame_at(start);
+            let to_local = self.doc().world_transform(parent).inverse();
+            let (a, b) = (to_local * start, to_local * end);
+            let d = b - a;
+            let n = self.doc().children(parent).len() + 1;
+            let mut spec = NodeSpec::new(&format!("Line {n}"), NodeKind::Line).size(round2(d.hypot()), 0.0).at(round2(a.x), round2(a.y));
+            spec.props.rotation = round2(-d.atan2().to_degrees());
+            if let Some(done) = self.run("Add line", &[Op::create(parent, spec)]) {
+                self.select(done.created[0], false);
+                self.tool = Tool::Move;
+            }
+            return Task::none();
+        }
         if clicked {
             r = Rect::from_origin_size(start, (100.0, 100.0));
         }
@@ -3155,7 +3373,7 @@ impl Blobr {
             Tool::Rectangle => NodeSpec::rect(&format!("Rectangle {n}"), w, h),
             Tool::Ellipse => NodeSpec::ellipse(&format!("Ellipse {n}"), w, h),
             Tool::Text => NodeSpec::text("Text", "Text", TextStyle { size: 16.0, ..TextStyle::default() }),
-            Tool::Move | Tool::Hand | Tool::Pen => return Task::none(),
+            Tool::Move | Tool::Hand | Tool::Pen | Tool::Line | Tool::Comment | Tool::Zoom => return Task::none(),
         }
         .at(at.x.round(), at.y.round());
         if let Some(done) = self.run(&format!("Add {}", tool.tip().split(' ').next().unwrap_or("layer")), &[Op::create(parent, spec)]) {
@@ -3801,6 +4019,79 @@ mod tests {
     }
 
     #[test]
+    fn line_and_zoom_tools() {
+        let mut app = app();
+        let _ = app.update(Message::Tool(Tool::Line));
+        drag(&mut app, Point::new(100.0, 100.0), Point::new(200.0, 0.0));
+        let id = app.selection[0];
+        let n = app.doc().node(id).unwrap();
+        assert!(matches!(n.kind, NodeKind::Line));
+        assert_eq!((n.props.x, n.props.y, n.props.width, n.props.rotation), (100.0, 100.0, round2(100.0 * 2f64.sqrt()), 45.0));
+        let end = app.doc().world_transform(id) * kurbo::Point::new(n.props.width, 0.0);
+        assert!((end.x - 200.0).abs() < 0.1 && end.y.abs() < 0.1, "ends where the drag did: {end:?}");
+
+        let _ = app.update(Message::Tool(Tool::Zoom));
+        let z = app.camera.zoom;
+        drag(&mut app, Point::new(300.0, 300.0), Point::new(300.0, 300.0));
+        assert_eq!(app.camera.zoom, z * 2.0, "a click zooms in");
+        assert_eq!(app.tool, Tool::Zoom, "and the tool stays on");
+    }
+
+    #[test]
+    fn rotated_layers_resize_along_their_own_sides() {
+        let mut app = app();
+        let id = app.run("Add", &[Op::create(app.page, NodeSpec::rect("R", 100.0, 50.0).at(100.0, 100.0).with(|p| p.rotation = 90.0))]).unwrap().created[0];
+        app.selection = vec![id];
+        // Turned a quarter, the right handle (its own x axis) points up the screen.
+        let (_, right) = app.handle_points(id).into_iter().find(|(h, _)| *h == Handle::Right).unwrap();
+        drag(&mut app, right, Point::new(right.x, right.y - 40.0));
+        let n = app.doc().node(id).unwrap();
+        assert_eq!((n.props.width, n.props.height), (140.0, 50.0));
+        assert_eq!((n.props.x, n.props.y), (100.0, 100.0), "the opposite side stays put");
+    }
+
+    #[test]
+    fn comments_pin_reply_resolve_and_undo() {
+        let mut app = app();
+        let _ = app.update(Message::Tool(Tool::Comment));
+        drag(&mut app, Point::new(50.0, 60.0), Point::new(50.0, 60.0));
+        assert_eq!(app.comment_new, Some(kurbo::Point::new(50.0, 60.0)));
+        let _ = app.update(Message::CommentDraft("Bigger title?".into()));
+        let _ = app.update(Message::CommentSubmit);
+        let id = app.comment_open.expect("the new comment shows");
+        assert_eq!(app.doc().comments()[&id].text, "Bigger title?");
+        assert_eq!(app.comment_at(Point::new(52.0, 58.0)), Some(id));
+        let _ = app.update(Message::CommentDraft("Done".into()));
+        let _ = app.update(Message::CommentSubmit);
+        assert_eq!(app.doc().comments()[&id].replies, vec!["Done".to_string()]);
+        let _ = app.update(Message::CommentResolve(id, true));
+        assert!(app.visible_comments().is_empty(), "resolved ones hide");
+        let _ = app.update(Message::ShowResolved(true));
+        assert_eq!(app.visible_comments().len(), 1);
+        let _ = app.update(Message::Undo);
+        assert!(!app.doc().comments()[&id].resolved, "comment edits are undo steps");
+    }
+
+    #[test]
+    fn outline_stroke_and_frame_presets() {
+        let mut app = app();
+        let mut spec = NodeSpec::rect("R", 100.0, 100.0).at(0.0, 0.0);
+        spec.props.strokes = vec![jd_vector::Paint::hex("#000000")];
+        spec.props.stroke.weight = 4.0;
+        let id = app.run("Add", &[Op::create(app.page, spec)]).unwrap().created[0];
+        app.selection = vec![id];
+        let _ = app.update(Message::OutlineStroke);
+        let v = app.selection[0];
+        assert!(matches!(app.doc().node(v).unwrap().kind, NodeKind::Vector { .. }));
+        assert!(app.doc().node(id).unwrap().props.strokes.is_empty(), "the filled layer keeps its fill, loses the stroke");
+
+        let _ = app.update(Message::Tool(Tool::Frame));
+        let _ = app.update(Message::FramePreset(0));
+        let f = app.doc().node(app.selection[0]).unwrap();
+        assert_eq!((f.name.as_str(), f.props.width, f.props.height), (FRAME_PRESETS[0].0, FRAME_PRESETS[0].1, FRAME_PRESETS[0].2));
+    }
+
+    #[test]
     fn booleans_and_flatten_from_the_app() {
         let mut app = app();
         let ids = three_rects(&mut app);
@@ -3812,14 +4103,20 @@ mod tests {
         app.selection = vec![big, ids[0]];
         let _ = app.update(Message::Boolean(BoolOp::Subtract));
         let r = app.selection[0];
-        assert!(matches!(app.doc().node(r).unwrap().kind, NodeKind::Vector { .. }));
-        assert!(!app.doc().contains(big) && !app.doc().contains(ids[0]));
-        // A boolean of separate layers that don't overlap is refused with a message.
+        // A live group: the layers are still there, inside it, and stay editable.
+        assert!(matches!(app.doc().node(r).unwrap().kind, NodeKind::Boolean { op: BoolOp::Subtract, .. }));
+        assert_eq!(app.doc().children(r), &[big, ids[0]]);
+        let _ = app.update(Message::SetBoolOp(BoolOp::Intersect));
+        assert!(matches!(app.doc().node(r).unwrap().kind, NodeKind::Boolean { op: BoolOp::Intersect, .. }));
+        // One layer alone can't be combined.
         app.selection = vec![ids[1]];
         let _ = app.update(Message::Boolean(BoolOp::Union));
         assert!(app.status.error);
+        // Flatten turns the live group into one vector.
+        app.selection = vec![r];
         let _ = app.update(Message::Flatten);
         assert!(matches!(app.doc().node(app.selection[0]).unwrap().kind, NodeKind::Vector { .. }));
+        assert!(!app.doc().contains(big));
     }
 
     #[test]

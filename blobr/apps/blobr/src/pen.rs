@@ -131,6 +131,56 @@ pub fn moved(path: &VectorPath, s: usize, i: usize, part: Part, to: [f64; 2]) ->
     path
 }
 
+/// Where a click lands on one of the path's segments, if within `radius` of one on screen
+/// (`map`: anchor space to screen): the path with a point added there, and that point's
+/// (subpath, index). Curves are split so they keep their shape; straight segments stay
+/// straight.
+pub fn insert_at(path: &VectorPath, map: Affine, at: Point, radius: f64) -> Option<(VectorPath, (usize, usize))> {
+    use kurbo::{CubicBez, ParamCurve, ParamCurveNearest};
+    let mut best: Option<(f64, usize, usize, f64)> = None;
+    for (s, sp) in path.subpaths.iter().enumerate() {
+        let n = sp.anchors.len();
+        let segs = if sp.closed { n } else { n.saturating_sub(1) };
+        for i in 0..segs {
+            let (a, b) = (&sp.anchors[i], &sp.anchors[(i + 1) % n]);
+            let c = CubicBez::new(pt(a.p), pt(a.handle_out.unwrap_or(a.p)), pt(b.handle_in.unwrap_or(b.p)), pt(b.p));
+            // Straight segments measure along the line, so the new point lands under the click.
+            let near = if a.handle_out.is_none() && b.handle_in.is_none() {
+                kurbo::Line::new(map * c.p0, map * c.p3).nearest(at, 0.01)
+            } else {
+                CubicBez::new(map * c.p0, map * c.p1, map * c.p2, map * c.p3).nearest(at, 0.01)
+            };
+            let d = near.distance_sq.sqrt();
+            if d <= radius && best.is_none_or(|b| d < b.0) {
+                best = Some((d, s, i, near.t));
+            }
+        }
+    }
+    let (_, s, i, t) = best?;
+    // Not on top of an existing point.
+    if !(0.02..=0.98).contains(&t) {
+        return None;
+    }
+    let mut out = path.clone();
+    let sp = &mut out.subpaths[s];
+    let n = sp.anchors.len();
+    let j = (i + 1) % n;
+    let (a, b) = (sp.anchors[i].clone(), sp.anchors[j].clone());
+    let new = if a.handle_out.is_none() && b.handle_in.is_none() {
+        let p = pt(a.p).lerp(pt(b.p), t);
+        Anchor::corner(p.x, p.y)
+    } else {
+        let c = CubicBez::new(pt(a.p), pt(a.handle_out.unwrap_or(a.p)), pt(b.handle_in.unwrap_or(b.p)), pt(b.p));
+        let (l, r) = (c.subsegment(0.0..t), c.subsegment(t..1.0));
+        sp.anchors[i].handle_out = Some([l.p1.x, l.p1.y]);
+        sp.anchors[j].handle_in = Some([r.p2.x, r.p2.y]);
+        let p = c.eval(t);
+        Anchor { p: [p.x, p.y], handle_in: Some([l.p2.x, l.p2.y]), handle_out: Some([r.p1.x, r.p1.y]) }
+    };
+    sp.anchors.insert(i + 1, new);
+    Some((out, (s, i + 1)))
+}
+
 /// The path without point (s, i); None when nothing would be left.
 pub fn without(path: &VectorPath, s: usize, i: usize) -> Option<VectorPath> {
     let mut path = path.clone();
@@ -171,5 +221,28 @@ mod tests {
         assert_eq!(hit(&path, Affine::IDENTITY, Point::new(19.0, 11.0), Some((0, 1)), 3.0), Some((0, 1, Part::Out)));
         assert_eq!(hit(&path, Affine::IDENTITY, Point::new(19.0, 11.0), None, 3.0), None, "handles only for the selected point");
         assert!(without(&path, 0, 0).is_none(), "one point left is no path");
+    }
+
+    #[test]
+    fn clicking_a_segment_adds_a_point_that_keeps_the_shape() {
+        let line = VectorPath { subpaths: vec![Subpath { anchors: vec![Anchor::corner(0.0, 0.0), Anchor::corner(100.0, 0.0)], closed: false }], fill_rule: Default::default(), base: [100.0, 1.0] };
+        let (p, at) = insert_at(&line, Affine::IDENTITY, Point::new(25.0, 3.0), 6.0).unwrap();
+        assert_eq!(at, (0, 1));
+        assert_eq!(p.subpaths[0].anchors[1], Anchor::corner(25.0, 0.0), "straight stays straight");
+        assert!(insert_at(&line, Affine::IDENTITY, Point::new(25.0, 20.0), 6.0).is_none(), "too far");
+
+        let curve = VectorPath {
+            subpaths: vec![Subpath {
+                anchors: vec![Anchor { p: [0.0, 0.0], handle_in: None, handle_out: Some([0.0, 50.0]) }, Anchor { p: [100.0, 0.0], handle_in: Some([100.0, 50.0]), handle_out: None }],
+                closed: false,
+            }],
+            fill_rule: Default::default(),
+            base: [100.0, 40.0],
+        };
+        let before = curve.to_bez(100.0, 40.0);
+        let (p, _) = insert_at(&curve, Affine::IDENTITY, Point::new(50.0, 37.5), 6.0).unwrap();
+        let after = p.to_bez(100.0, 40.0);
+        assert_eq!(p.subpaths[0].anchors.len(), 3);
+        assert!((before.bounding_box().y1 - after.bounding_box().y1).abs() < 0.01, "same curve");
     }
 }

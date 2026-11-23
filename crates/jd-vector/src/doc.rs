@@ -16,6 +16,11 @@ pub struct Document {
     pub(crate) next_id: u64,
     pub(crate) images: BTreeMap<String, Arc<Vec<u8>>>,
     pub(crate) tokens: crate::tokens::Tokens,
+    /// Comments pinned on pages, by id (ids come from the same counter as nodes).
+    pub(crate) comments: BTreeMap<NodeId, crate::node::Comment>,
+    /// Other `.jdb` files whose components this document uses, as the paths they were added
+    /// with.
+    pub(crate) libraries: Vec<String>,
 }
 
 impl Default for Document {
@@ -43,7 +48,25 @@ impl Document {
 
     /// No pages at all (only valid as a starting point for loading).
     pub(crate) fn empty() -> Self {
-        Self { nodes: BTreeMap::new(), pages: Vec::new(), next_id: 1, images: BTreeMap::new(), tokens: Default::default() }
+        Self {
+            nodes: BTreeMap::new(),
+            pages: Vec::new(),
+            next_id: 1,
+            images: BTreeMap::new(),
+            tokens: Default::default(),
+            comments: BTreeMap::new(),
+            libraries: Vec::new(),
+        }
+    }
+
+    /// Every comment, by id.
+    pub fn comments(&self) -> &BTreeMap<NodeId, crate::node::Comment> {
+        &self.comments
+    }
+
+    /// Library files this document uses (see [`Op::SetLibraries`](crate::Op::SetLibraries)).
+    pub fn libraries(&self) -> &[String] {
+        &self.libraries
     }
 
     pub fn pages(&self) -> &[NodeId] {

@@ -76,7 +76,7 @@ pub fn outline(node: &Node) -> BezPath {
                 .collect();
             fit_polygon(&pts, rect)
         }
-        NodeKind::Vector { path } => path.to_bez(w, h),
+        NodeKind::Vector { path } | NodeKind::Boolean { path, .. } => path.to_bez(w, h),
     }
 }
 

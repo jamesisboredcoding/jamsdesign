@@ -59,7 +59,7 @@ fn layout(doc: &mut Document, id: NodeId, given: Given, m: &dyn TextMeasure) {
             }
         }
         k if k.is_frame_like() && props.layout.is_some() => auto(doc, id, given, m),
-        NodeKind::Group => {
+        NodeKind::Group | NodeKind::Boolean { .. } => {
             for c in doc.children(id).to_vec() {
                 layout(doc, c, Given::NONE, m);
             }

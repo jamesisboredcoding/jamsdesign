@@ -27,7 +27,9 @@ Nodes start with what the matching drawing tool gives them (100 x 100; frames wh
 clipping, text black, vectors a 1 px black outline unless you give them `fills`); anything
 you set wins, and `"fills": []` / `"strokes": []` remove them.
 
-`frame`, `group` (fits its children; no fill), `section`,
+`frame`, `group` (fits its children; no fill), `boolean` (`op`: `union`, `subtract`,
+`intersect` or `exclude`; its children combined into one shape it fills and strokes, kept
+editable: make one with `arrange`), `section`,
 `rectangle`, `ellipse` (`arc: {start, sweep, inner}` in degrees / ratio), `line` (from (0,0)
 to (width,0); rotate for other angles), `polygon` (`sides`), `star` (`points`, `inner`),
 `vector` (see Paths), `text` (`text: {content, style}`), `component`, `component_set`,
@@ -73,7 +75,7 @@ illustrations) are easier with the `import_svg` tool.
   from the bottom; default on top)
 - `set`: `{"op": "set", "id": ref, "patch": {...}}`: any property above, plus `name`, `text`
   (a string: the characters), `text_style`, `svg_path` (vectors), `sides`, `points`,
-  `inner`, `arc`, `background` (pages). `null` removes optional ones (`"layout": null`).
+  `inner`, `arc`, `bool_op` (boolean groups), `background` (pages). `null` removes optional ones (`"layout": null`).
   Setting `width`/`height` makes that axis fixed.
 - `resize`: `{"op": "resize", "id", "width", "height"}`: like dragging a handle (children
   follow their constraints)
@@ -102,6 +104,11 @@ illustrations) are easier with the `import_svg` tool.
   - `{"op": "create_style", "name", "style": {"type": "paint", "paints": [...]}|{"type": "text", "text": {...}}|{"type": "effect", "effects": [...]}, "key"?}`,
     apply with `set` + `styles: {"fill"|"stroke"|"text"|"effect": style}`
   - `set_collection`, `set_variable` (`name`, `mode`, `value`), `set_style`, `delete_token`
+- Comments (pins on a page, kept in the file): `{"op": "add_comment", "page", "x", "y", "text", "key"?}`,
+  `{"op": "set_comment", "id", "text"?, "x"?, "y"?, "reply"?, "resolved"?}`, `{"op": "delete_comment", "id"}`.
+  `document_info` lists them
+- Libraries: `{"op": "set_libraries", "paths": ["/path/to/ui.jdb"]}` replaces the list of `.jdb`
+  files whose components this document uses
 - Prototype: `set` + `reactions: [{"trigger": {"type": "click"}, "action": {"type": "navigate", "to": frame}, "transition": "dissolve", "duration": 0.3}]`
 
 ## Tips

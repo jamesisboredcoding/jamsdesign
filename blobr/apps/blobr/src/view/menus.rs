@@ -83,6 +83,12 @@ fn entries(app: &Blobr, menu: usize) -> Vec<MenuEntry<'_, Message>> {
             todo("Rulers", "Shift+R"),
             todo("Pixel Grid", "Shift+'"),
             Separator,
+            item(
+                if app.show_resolved { "Hide Resolved Comments" } else { "Show Resolved Comments" },
+                "",
+                Some(Message::ShowResolved(!app.show_resolved)),
+            ),
+            Separator,
             item("Present", "Ctrl+Alt+Enter", Some(Message::Present(None))),
             item("Full Screen", "F11", Some(Message::Chrome(chrome::Event::ToggleFullscreen))),
         ],
@@ -108,7 +114,7 @@ fn entries(app: &Blobr, menu: usize) -> Vec<MenuEntry<'_, Message>> {
                 ],
             ),
             item("Flatten Selection", "Ctrl+E", on(sel, Message::Flatten)),
-            todo("Outline Stroke", "Ctrl+Shift+O"),
+            item("Outline Stroke", "Ctrl+Shift+O", on(app.selection.len() == 1, Message::OutlineStroke)),
         ],
         "Text" => vec![todo("Bold", "Ctrl+B"), todo("Italic", "Ctrl+I"), todo("Underline", "Ctrl+U"), Separator, todo("Text Styles...", "")],
         "Arrange" => vec![

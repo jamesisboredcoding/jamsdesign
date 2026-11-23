@@ -8,11 +8,12 @@
 use kurbo::{Affine, BezPath, PathEl, Shape};
 
 use crate::geometry::outline;
-use crate::{Document, FillRule, NodeId, NodeKind, NodeSpec, Op, VectorPath};
+use crate::{Document, FillRule, NodeId, NodeKind, NodeSpec, Op, Ref, VectorPath};
 
 type Kurbo13 = kurbo13::BezPath;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BoolOp {
     Union,
     /// The bottom layer minus the others.
@@ -22,6 +23,8 @@ pub enum BoolOp {
 }
 
 impl BoolOp {
+    pub const ALL: [BoolOp; 4] = [BoolOp::Union, BoolOp::Subtract, BoolOp::Intersect, BoolOp::Exclude];
+
     pub fn name(self) -> &'static str {
         match self {
             BoolOp::Union => "Union",
@@ -93,24 +96,149 @@ fn combine(a: &BezPath, b: &BezPath, op: BoolOp) -> Result<BezPath, String> {
     Ok(out)
 }
 
-/// A layer's shape on its page (groups: their children's, combined).
+/// A layer's shape on its page (groups: their children's, combined; boolean groups: their
+/// children combined with their operation).
 fn shape(doc: &Document, id: NodeId) -> Result<BezPath, String> {
     let n = doc.node(id).ok_or("a selected layer no longer exists")?;
-    if matches!(n.kind, NodeKind::Group) {
-        let mut acc: Option<BezPath> = None;
-        for &c in doc.children(id) {
-            if !doc.node(c).is_some_and(|c| c.props.visible) {
-                continue;
-            }
-            let s = shape(doc, c)?;
-            acc = Some(match acc {
-                Some(a) => combine(&a, &s, BoolOp::Union)?,
-                None => s,
-            });
+    let op = match n.kind {
+        NodeKind::Group => BoolOp::Union,
+        NodeKind::Boolean { op, .. } => op,
+        _ => return Ok(doc.world_transform(id) * outline(n)),
+    };
+    let mut acc: Option<BezPath> = None;
+    for &c in doc.children(id) {
+        if !doc.node(c).is_some_and(|c| c.props.visible) {
+            continue;
         }
-        return Ok(acc.unwrap_or_default());
+        let s = shape(doc, c)?;
+        acc = Some(match acc {
+            Some(a) => combine(&a, &s, op)?,
+            None => s,
+        });
     }
-    Ok(doc.world_transform(id) * outline(n))
+    Ok(acc.unwrap_or_default())
+}
+
+/// Ops that turn a layer's stroke into a filled vector of the same shape (key `"result"`),
+/// placed above it. The layer loses its stroke, or goes if it had no fill.
+pub fn outline_stroke(doc: &Document, id: NodeId) -> Result<Vec<Op>, String> {
+    use crate::{StrokeAlign, StrokeCap, StrokeJoin};
+    let n = doc.node(id).ok_or("that layer no longer exists")?;
+    let parent = doc.parent(id).ok_or("pages have no stroke")?;
+    if doc.is_inside_instance(id) {
+        return Err("layers inside an instance can't be changed like that; detach it first".into());
+    }
+    if matches!(n.kind, NodeKind::Text { .. }) {
+        return Err("text strokes can't be outlined yet".into());
+    }
+    let style = &n.props.stroke;
+    let paints: Vec<_> = n.props.strokes.iter().filter(|p| p.visible).cloned().collect();
+    if paints.is_empty() || style.weight <= 0.0 {
+        return Err("this layer has no stroke to outline".into());
+    }
+    let shape = outline(n);
+    let closed = shape.elements().iter().any(|e| matches!(e, PathEl::ClosePath));
+    // Inside and outside strokes are a centred one twice as wide, cut to the shape.
+    let align = if closed { style.align } else { StrokeAlign::Center };
+    let w = style.weight as f64 * if align == StrokeAlign::Center { 1.0 } else { 2.0 };
+    let mut ks = kurbo::Stroke::new(w)
+        .with_join(match style.join {
+            StrokeJoin::Miter => kurbo::Join::Miter,
+            StrokeJoin::Round => kurbo::Join::Round,
+            StrokeJoin::Bevel => kurbo::Join::Bevel,
+        })
+        .with_caps(match style.cap {
+            StrokeCap::None => kurbo::Cap::Butt,
+            StrokeCap::Round => kurbo::Cap::Round,
+            StrokeCap::Square => kurbo::Cap::Square,
+        });
+    if !style.dash.is_empty() {
+        ks = ks.with_dashes(0.0, style.dash.iter().map(|&d| d as f64));
+    }
+    let stroked = kurbo::stroke(shape.elements().iter().copied(), &ks, &kurbo::StrokeOpts::default(), 0.05);
+    let stroked = match align {
+        StrokeAlign::Center => combine(&stroked, &BezPath::new(), BoolOp::Union)?,
+        StrokeAlign::Inside => combine(&stroked, &shape, BoolOp::Intersect)?,
+        StrokeAlign::Outside => combine(&stroked, &shape, BoolOp::Subtract)?,
+    };
+    let in_parent = crate::Document::local_transform(n) * stroked;
+    let b = in_parent.bounding_box();
+    if !(b.width() > 0.0 || b.height() > 0.0) {
+        return Err("the outline is empty".into());
+    }
+    let moved = Affine::translate(-b.origin().to_vec2()) * in_parent;
+    let mut vp = VectorPath::from_bez(&moved, b.width(), b.height());
+    vp.fill_rule = FillRule::EvenOdd;
+    let mut spec = NodeSpec::vector(&format!("{} outline", n.name), vp).at(b.x0, b.y0);
+    spec.props.fills = paints;
+    spec.props.strokes = Vec::new();
+    spec.props.opacity = n.props.opacity;
+    let index = doc.children(parent).iter().position(|&c| c == id).map(|i| i + 1);
+    let mut ops = vec![Op::Create { parent: parent.into(), node: spec, key: Some("result".into()), index }];
+    if n.props.fills.iter().any(|f| f.visible) {
+        ops.push(Op::set(id, crate::Patch { strokes: Some(Vec::new()), ..Default::default() }));
+    } else {
+        ops.push(Op::Delete { id: id.into() });
+    }
+    Ok(ops)
+}
+
+/// Works out every boolean group's shape from its children (after each batch, once layout has
+/// fitted it to them). Innermost first, so nested ones are ready for their parents.
+pub(crate) fn sync_all(doc: &mut Document) {
+    let mut ids: Vec<(usize, NodeId)> = doc
+        .nodes
+        .values()
+        .filter(|n| matches!(n.kind, NodeKind::Boolean { .. }))
+        .map(|n| (std::iter::successors(doc.parent(n.id), |&p| doc.parent(p)).count(), n.id))
+        .collect();
+    ids.sort_by(|a, b| b.0.cmp(&a.0));
+    for (_, id) in ids {
+        let page = shape(doc, id).unwrap_or_default();
+        let local = doc.world_transform(id).inverse() * page;
+        let n = doc.node(id).expect("listed");
+        let mut path = VectorPath::from_bez(&local, n.props.width.max(1e-6), n.props.height.max(1e-6));
+        path.fill_rule = FillRule::EvenOdd;
+        if let NodeKind::Boolean { path: old, .. } = &n.kind
+            && *old != path
+            && let Some(NodeKind::Boolean { path: p, .. }) = doc.node_mut(id).map(|n| &mut n.kind)
+        {
+            *p = path;
+        }
+    }
+}
+
+/// Ops that put `ids` into a new live boolean group (key `"result"`) where the top one was,
+/// in the bottom one's parent. The group takes the bottom layer's look.
+pub fn boolean_group(doc: &Document, ids: &[NodeId], op: BoolOp) -> Result<Vec<Op>, String> {
+    let sorted = stacked(doc, ids);
+    let (Some(&bottom), Some(&top)) = (sorted.first(), sorted.last()) else { return Err("select two or more layers".into()) };
+    if sorted.len() < 2 {
+        return Err("select two or more layers".into());
+    }
+    let parent = doc.parent(bottom).ok_or("pages can't be combined")?;
+    if sorted.iter().any(|&id| doc.is_inside_instance(id)) {
+        return Err("layers inside an instance can't be combined; detach it first".into());
+    }
+    let look = &doc.node(bottom).expect("exists").props;
+    let mut spec = NodeSpec::new(op.name(), NodeKind::Boolean { op, path: VectorPath::empty() });
+    spec.props.fills = look.fills.clone();
+    spec.props.strokes = look.strokes.clone();
+    spec.props.stroke = look.stroke.clone();
+    spec.props.effects = look.effects.clone();
+    let anchor = if doc.parent(top) == Some(parent) { top } else { bottom };
+    let index = doc.children(parent).iter().position(|&c| c == anchor).map(|i| i + 1);
+    let mut ops = vec![Op::Create { parent: parent.into(), node: spec, key: Some("result".into()), index }];
+    for &id in &sorted {
+        // Keep each layer where it is on the page: the group starts at the parent's origin and
+        // fits itself to them afterwards.
+        let world = doc.world_transform(id);
+        let local = doc.world_transform(parent).inverse() * world;
+        let [.., x, y] = local.as_coeffs();
+        ops.push(Op::Move { id: id.into(), parent: Ref::Key("result".into()), index: None });
+        ops.push(Op::set(id, crate::Patch { x: Some(x), y: Some(y), ..Default::default() }));
+    }
+    Ok(ops)
 }
 
 /// The selection sorted bottom to top (by their place in the page's tree).
@@ -285,5 +413,65 @@ mod tests {
         assert_eq!(n.name, "E");
         assert!((n.props.x - 10.0).abs() < 1e-6 && (n.props.width - 40.0).abs() < 1e-6);
         assert!(boolean(&doc, &[v], BoolOp::Union).is_err(), "one layer isn't a boolean");
+    }
+
+    #[test]
+    fn live_boolean_groups_follow_their_children() {
+        let (mut doc, page, ids) = two_squares();
+        let done = doc.apply(&boolean_group(&doc, &ids, BoolOp::Union).unwrap(), &ApproxMeasure).unwrap();
+        let g = done.id("result").unwrap();
+        let n = doc.node(g).unwrap();
+        assert_eq!(doc.children(g), ids.as_slice(), "the layers move inside, bottom first");
+        assert_eq!(doc.parent(g), Some(page));
+        assert_eq!((n.props.x, n.props.y, n.props.width, n.props.height), (0.0, 0.0, 150.0, 150.0));
+        assert_eq!(n.props.fills, doc.node(ids[0]).unwrap().props.fills, "the bottom layer's look");
+        let area = |doc: &Document| crate::geometry::outline(doc.node(g).unwrap()).area().abs();
+        assert!((area(&doc) - 17_500.0).abs() < 1.0, "union of two overlapping squares: {}", area(&doc));
+        // Pull the top square away: the result follows.
+        doc.apply(&[Op::set(ids[1], crate::Patch { x: Some(300.0), ..Default::default() })], &ApproxMeasure).unwrap();
+        assert!((area(&doc) - 20_000.0).abs() < 1.0);
+        assert_eq!(doc.node(g).unwrap().props.width, 400.0, "refitted");
+        // Another operation on the same layers.
+        doc.apply(&[Op::set(ids[1], crate::Patch { x: Some(50.0), ..Default::default() })], &ApproxMeasure).unwrap();
+        let mut patch = crate::Patch::default();
+        patch.bool_op = Some(BoolOp::Intersect);
+        doc.apply(&[Op::set(g, patch)], &ApproxMeasure).unwrap();
+        assert!((area(&doc) - 2_500.0).abs() < 1.0);
+        // Saved and loaded, it is still live.
+        let back = crate::file::from_json(&crate::file::to_json(&doc)).unwrap();
+        assert!(matches!(back.node(g).unwrap().kind, NodeKind::Boolean { op: BoolOp::Intersect, .. }));
+    }
+
+    #[test]
+    fn outline_stroke_makes_a_filled_ring() {
+        let mut doc = Document::new();
+        let page = doc.pages()[0];
+        let mut spec = NodeSpec::rect("Box", 100.0, 100.0).at(10.0, 10.0);
+        spec.props.fills = Vec::new();
+        spec.props.strokes = vec![Paint::hex("#0000FF")];
+        spec.props.stroke.weight = 10.0;
+        spec.props.stroke.align = crate::StrokeAlign::Inside;
+        let id = doc.apply(&[Op::create(page, spec)], &ApproxMeasure).unwrap().created[0];
+        let done = doc.apply(&outline_stroke(&doc, id).unwrap(), &ApproxMeasure).unwrap();
+        let v = done.id("result").unwrap();
+        assert!(doc.node(id).is_none(), "no fill: the layer is replaced");
+        let n = doc.node(v).unwrap();
+        assert_eq!((n.props.x, n.props.y, n.props.width, n.props.height), (10.0, 10.0, 100.0, 100.0), "inside: within the box");
+        assert_eq!(n.props.fills, vec![Paint::hex("#0000FF")]);
+        assert!(n.props.strokes.is_empty());
+        // A 10 px ring inside a 100 px square: 100^2 - 80^2.
+        let a = crate::geometry::outline(n);
+        let mut ring = 0.0;
+        let mut cur = BezPath::new();
+        for el in a.elements().iter().chain([PathEl::MoveTo(kurbo::Point::ZERO)].iter()) {
+            if matches!(el, PathEl::MoveTo(_)) && !cur.elements().is_empty() {
+                ring += cur.area().abs();
+                cur = BezPath::new();
+            }
+            cur.push(*el);
+        }
+        let outer_minus_inner = 100.0_f64 * 100.0 - 80.0 * 80.0;
+        let outer_plus_inner = 100.0_f64 * 100.0 + 80.0 * 80.0;
+        assert!((ring - outer_plus_inner).abs() < 2.0 || (ring - outer_minus_inner).abs() < 2.0, "{ring}");
     }
 }
