@@ -159,7 +159,7 @@ CLI argument as a file to open. Names are provisional until Step 0.
         `jd-ui`'s `theme.rs` uses (`jd_vector::inspect`, for the MCP server too); hovering
         shows distances while the tab is open
   - [ ] Smart animate, scroll behaviour, prototype flows saved per page, a separate window
-- [ ] Step 7: interop and moving off Figma
+- [x] Step 7: interop and moving off Figma
   - [x] SVG import (File > Import SVG, or paste SVG markup): shapes, groups, gradients,
         strokes, images and text as outlines, through usvg (`jd_vector_render::import_svg`)
   - [x] SVG export; PDF export with a page per frame (vector, via svg2pdf)
@@ -171,7 +171,8 @@ CLI argument as a file to open. Names are provisional until Step 0.
   - [x] The suite's mockups are in `blobr/mockups/suite.jdb` (with the Figma JSON they came
         from, for offline re-imports); design work no longer depends on Figma
   - [x] `jd_vector_render::place`: a `.jdb` file's frames and one as RGBA, for Photosplash
-  - [ ] Photosplash File > Place uses it (Photosplash's side)
+  - [x] Photosplash File > Place uses it (Photosplash's side); keep `place::open`, `frames`
+        and `render_rgba` stable, or tell the Photosplash session first
 
 - [ ] Step 8: MCP (`jd-mcp` + `blobr-mcp`), the final touch
   - Transport: stdio, so it can be added to Claude Code with a single command
