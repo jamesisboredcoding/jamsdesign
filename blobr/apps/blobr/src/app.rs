@@ -3196,6 +3196,14 @@ impl Blobr {
         }
     }
 
+    /// The page's background colour, which every render is drawn on.
+    pub fn page_background(&self) -> Rgba {
+        match self.doc().node(self.page).map(|n| &n.kind) {
+            Some(NodeKind::Page { background }) => *background,
+            _ => Rgba::from_srgb8(0x1E, 0x1E, 0x1E),
+        }
+    }
+
     /// Re-renders the canvas image if anything it shows changed.
     fn refresh(&mut self) -> Task<Message> {
         let key = (self.version, self.camera, self.viewport, self.scale_factor, self.page);
@@ -3207,11 +3215,7 @@ impl Blobr {
             return Task::none();
         }
         let view = Rect::new(self.camera.origin.x, self.camera.origin.y, self.camera.origin.x + w / self.camera.zoom, self.camera.origin.y + h / self.camera.zoom);
-        let background = match self.doc().node(self.page).map(|n| &n.kind) {
-            Some(NodeKind::Page { background }) => *background,
-            _ => Rgba::from_srgb8(0x1E, 0x1E, 0x1E),
-        };
-        let opts = RenderOptions { scale: self.camera.zoom * self.scale_factor as f64, background: Some(background) };
+        let opts = RenderOptions { scale: self.camera.zoom * self.scale_factor as f64, background: Some(self.page_background()) };
         self.rendered = Some(key);
         self.render_seq += 1;
         self.rendering = true;

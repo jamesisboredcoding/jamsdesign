@@ -3,7 +3,7 @@
 
 use iced::mouse::{self, Cursor, ScrollDelta};
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Text};
-use iced::widget::{container, image, space, stack};
+use iced::widget::{container, image, stack};
 use iced::{Color, Element, Fill, Point, Rectangle, Renderer, Size, Theme};
 use jd_ui::tokens::*;
 
@@ -15,10 +15,7 @@ pub fn view(app: &Blobr) -> Element<'_, Message> {
     // way if they differ), so panning and zooming follow the pointer at once. Drawn on a
     // canvas, not placed with `pin`: `pin` shrinks its child to the room left after the
     // offset, which squashed the picture while panning right or zooming in.
-    let picture: Element<'_, Message> = match &app.canvas {
-        Some(_) => canvas::Canvas::new(Picture { app }).width(Fill).height(Fill).into(),
-        None => space().into(),
-    };
+    let picture = canvas::Canvas::new(Picture { app }).width(Fill).height(Fill);
     let mut layers = stack![picture, canvas::Canvas::new(Overlay { app }).width(Fill).height(Fill)];
     if let Some(editor) = text_editor_overlay(app) {
         layers = layers.push(editor);
@@ -72,6 +69,10 @@ impl canvas::Program<Message> for Picture<'_> {
     fn draw(&self, _: &(), renderer: &Renderer, _: &Theme, bounds: Rectangle, _: Cursor) -> Vec<Geometry> {
         let app = self.app;
         let mut frame = Frame::new(renderer, bounds.size());
+        // The page's colour under it, so the edges a zoom-out or pan uncovers before the
+        // next render lands match the page instead of flashing the darker canvas behind.
+        let [r, g, b] = app.page_background().to_srgb();
+        frame.fill_rectangle(Point::ORIGIN, bounds.size(), Color::from_rgb(r, g, b));
         if let Some(a) = &app.canvas {
             frame.draw_image(picture_bounds(app), canvas::Image::new(a.handle().clone()).filter_method(image::FilterMethod::Linear));
         }
