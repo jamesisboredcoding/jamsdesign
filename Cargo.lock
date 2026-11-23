@@ -493,6 +493,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "blobr-mcp"
+version = "0.1.0"
+dependencies = [
+ "jd-mcp",
+ "jd-vector",
+ "jd-vector-render",
+ "kurbo 0.11.3",
+ "serde_json",
+]
+
+[[package]]
 name = "block"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2087,6 +2098,15 @@ dependencies = [
  "serde",
  "serde_json",
  "zip",
+]
+
+[[package]]
+name = "jd-mcp"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
