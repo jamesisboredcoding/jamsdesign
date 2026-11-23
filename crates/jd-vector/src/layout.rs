@@ -160,7 +160,6 @@ fn auto(doc: &mut Document, id: NodeId, given: Given, m: &dyn TextMeasure) {
     };
     let gaps = l.gap * flow.len().saturating_sub(1) as f64;
 
-    let need = needs(doc, &flow, ax);
     let (own_main, own_cross) = ax.split(props.width, props.height);
     let (s_main, s_cross) = ax.sizing(&props);
     let (given_main, given_cross) = if ax.horizontal { (given.w, given.h) } else { (given.h, given.w) };
@@ -171,38 +170,50 @@ fn auto(doc: &mut Document, id: NodeId, given: Given, m: &dyn TextMeasure) {
         let cross = if hug_cross { pad_cross0 + need.cross + pad_cross1 } else { own_cross };
         ax.clamp(&props, main, cross)
     };
-    let (main, cross) = own_size(&need);
-    let (w, h) = ax.join(main, cross);
-    set_size(doc, id, w, h);
+    // Resizes the frame to what its children need; gives back the space inside it.
+    let fit = |doc: &mut Document| {
+        let need = needs(doc, &flow, ax);
+        let (main, cross) = own_size(&need);
+        let (w, h) = ax.join(main, cross);
+        set_size(doc, id, w, h);
+        let inner = ((main - pad_main0 - pad_main1).max(0.0), (cross - pad_cross0 - pad_cross1).max(0.0));
+        (need, main, cross, inner)
+    };
+    let fill_child = |doc: &mut Document, c: NodeId, main: Option<f64>, cross: Option<f64>| {
+        let cp = doc.node(c).expect("child").props.clone();
+        let (cur_main, cur_cross) = ax.split(cp.width, cp.height);
+        let (new_main, new_cross) = ax.clamp(&cp, main.unwrap_or(cur_main), cross.unwrap_or(cur_cross));
+        let (w, h) = ax.join(new_main, new_cross);
+        set_size(doc, c, w, h);
+        let given = if ax.horizontal {
+            Given { w: main.is_some(), h: cross.is_some() }
+        } else {
+            Given { w: cross.is_some(), h: main.is_some() }
+        };
+        layout(doc, c, given, m);
+    };
 
-    // Filling children.
-    let inner_main = (main - pad_main0 - pad_main1).max(0.0);
-    let inner_cross = (cross - pad_cross0 - pad_cross1).max(0.0);
+    // Children that only fill across first: text that wraps once it has a width changes
+    // size along the direction, and the ones filling along it share what is left after.
+    let (_, _, _, (_, inner_cross)) = fit(doc);
+    for &c in &flow {
+        let (cm, cc) = ax.sizing(&doc.node(c).expect("child").props);
+        if cc == Sizing::Fill && cm != Sizing::Fill {
+            fill_child(doc, c, None, Some(inner_cross));
+        }
+    }
+    let (need, _, _, (inner_main, inner_cross)) = fit(doc);
     let share = if need.fill_count > 0 { ((inner_main - need.fixed_main - gaps) / need.fill_count as f64).max(0.0) } else { 0.0 };
     for &c in &flow {
-        let cp = doc.node(c).expect("child").props.clone();
-        let (s_main, s_cross) = ax.sizing(&cp);
-        if s_main != Sizing::Fill && s_cross != Sizing::Fill {
-            continue;
+        let (cm, cc) = ax.sizing(&doc.node(c).expect("child").props);
+        if cm == Sizing::Fill {
+            fill_child(doc, c, Some(share), (cc == Sizing::Fill).then_some(inner_cross));
         }
-        let (cur_main, cur_cross) = ax.split(cp.width, cp.height);
-        let main = if s_main == Sizing::Fill { share } else { cur_main };
-        let cross = if s_cross == Sizing::Fill { inner_cross } else { cur_cross };
-        let (main, cross) = ax.clamp(&cp, main, cross);
-        let (w, h) = ax.join(main, cross);
-        set_size(doc, c, w, h);
-        let (fill_main, fill_cross) = (s_main == Sizing::Fill, s_cross == Sizing::Fill);
-        let given = if ax.horizontal { Given { w: fill_main, h: fill_cross } } else { Given { w: fill_cross, h: fill_main } };
-        layout(doc, c, given, m);
     }
 
-    // A filling child can change size along the other axis too (text that wraps once it has
-    // a width), so a hugging frame measures again.
-    let (main, cross) = own_size(&needs(doc, &flow, ax));
-    let (w, h) = ax.join(main, cross);
-    set_size(doc, id, w, h);
-    let inner_main = (main - pad_main0 - pad_main1).max(0.0);
-    let inner_cross = (cross - pad_cross0 - pad_cross1).max(0.0);
+    // A filling child can change size across the direction too, so a hugging frame
+    // measures again.
+    let (_, _, _, (inner_main, inner_cross)) = fit(doc);
 
     // Placing.
     let sizes: Vec<(f64, f64)> = flow
@@ -451,6 +462,22 @@ mod tests {
         // 40 px wide: "hello world" wraps onto two 12 px lines.
         assert_eq!(rect_of(&doc, &done, "body"), (5.0, 17.0, 40.0, 24.0));
         assert_eq!(rect_of(&doc, &done, "card").3, 5.0 + 12.0 + 24.0 + 5.0);
+    }
+
+    #[test]
+    fn fill_shares_what_wrapped_text_leaves() {
+        // A fixed-height column: text that fills across wraps to two lines, and the spacer
+        // filling down takes the rest (it used to be measured before the text wrapped).
+        let style = TextStyle { size: 10.0, ..TextStyle::default() };
+        let l = AutoLayout { direction: Direction::Vertical, ..AutoLayout::default() };
+        let (doc, done) = build(vec![
+            Op::create_as("col", page(), row("Col", l).sizing(Sizing::Fixed, Sizing::Fixed).size(50.0, 100.0)),
+            Op::create_as("spacer", "col", NodeSpec::rect("Spacer", 50.0, 0.0).sizing(Sizing::Fixed, Sizing::Fill)),
+            Op::create_as("body", "col", NodeSpec::text("Body", "hello world", style).sizing(Sizing::Fill, Sizing::Hug)),
+        ]);
+        assert_eq!(rect_of(&doc, &done, "body").3, 24.0);
+        assert_eq!(rect_of(&doc, &done, "spacer"), (0.0, 0.0, 50.0, 76.0));
+        assert_eq!(rect_of(&doc, &done, "body").1, 76.0);
     }
 
     #[test]
