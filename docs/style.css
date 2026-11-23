@@ -12,6 +12,7 @@
   --orange: #FF7800;
   --orange-dark: #C64600;
   --blue: #3584E4;
+  --purple: #C061CB;
   --shadow: 0 1px 2px rgba(36, 31, 49, .06), 0 8px 24px rgba(36, 31, 49, .06);
   --radius: 20px;
   color-scheme: light;
@@ -58,6 +59,7 @@ code { font-family: ui-monospace, "JetBrains Mono", monospace; font-size: .9em; 
 .brand b { font-weight: 800; }
 .brand.small { font-size: 16px; }
 .nav-links { display: flex; gap: 24px; }
+.nav-apps { display: none; }
 .nav-links a { text-decoration: none; color: var(--muted); font-weight: 500; font-size: 15px; }
 .nav-links a:hover { color: var(--text); }
 
@@ -95,6 +97,7 @@ h1 { font-size: clamp(42px, 6vw, 68px); line-height: 1.05; letter-spacing: -.03e
 .orbit { position: absolute; width: 96px; filter: drop-shadow(0 8px 16px rgba(0,0,0,.15)); }
 .orbit-a { left: -24px; bottom: 24px; animation: bob 5s ease-in-out infinite reverse; }
 .orbit-b { right: -24px; top: 24px; animation: bob 7s ease-in-out infinite; }
+.orbit-c { right: -8px; bottom: -4px; animation: bob 6.5s ease-in-out infinite; }
 @keyframes bob { 50% { transform: translateY(-10px) rotate(2deg); } }
 @media (prefers-reduced-motion: reduce) { .jar, .orbit { animation: none; } }
 
@@ -109,6 +112,7 @@ h1 { font-size: clamp(42px, 6vw, 68px); line-height: 1.05; letter-spacing: -.03e
 }
 .app-photosplash { --accent: var(--gold); }
 .app-cinematica { --accent: var(--orange); }
+.app-blobr { --accent: var(--purple); }
 .app-head { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
 .app-head img { width: 112px; }
 .app-head h3 { font-size: 32px; margin: 0; letter-spacing: -.02em; }
@@ -116,6 +120,7 @@ h1 { font-size: clamp(42px, 6vw, 68px); line-height: 1.05; letter-spacing: -.03e
 .pill { margin-left: auto; padding: 6px 14px; border-radius: 999px; font-size: 14px; font-weight: 600; }
 .pill-soon { background: color-mix(in srgb, var(--gold) 22%, transparent); color: var(--text); }
 .pill-dev { background: color-mix(in srgb, var(--orange) 18%, transparent); color: var(--text); }
+.pill-blobr { background: color-mix(in srgb, var(--purple) 20%, transparent); color: var(--text); }
 .app-blurb { font-size: 18px; margin: 20px 0; max-width: 44em; }
 .features {
   list-style: none; padding: 0; margin: 0;
@@ -171,6 +176,9 @@ pre {
   body { font-size: 16px; }
   .nav-links { gap: 16px; }
   .nav-links a[href="#install"] { display: none; }
+  /* One "Apps" link instead of one per app, so the bar fits a phone. */
+  .nav-links .nav-app { display: none; }
+  .nav-links .nav-apps { display: inline; }
   .app { padding: 24px; }
   .app-head img { width: 80px; }
   .pill { margin-left: 0; }

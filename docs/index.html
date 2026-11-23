@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>jamsdesign</title>
-  <meta name="description" content="jamsdesign is a Linux-first creative suite written in Rust: Photosplash for photos, Cinematica for video.">
+  <meta name="description" content="jamsdesign is a Linux-first creative suite written in Rust: Photosplash for photos, Cinematica for video, Blobr for interface and vector design.">
   <meta property="og:title" content="jamsdesign">
-  <meta property="og:description" content="A Linux-first creative suite: Photosplash for photos, Cinematica for video.">
+  <meta property="og:description" content="A Linux-first creative suite: Photosplash for photos, Cinematica for video, Blobr for design.">
   <meta property="og:image" content="img/jamsdesign.svg">
   <meta name="theme-color" content="#E01B5A">
   <link rel="icon" href="img/jamsdesign.svg" type="image/svg+xml">
@@ -24,8 +24,10 @@
       <span><b>jams</b>design</span>
     </a>
     <nav class="nav-links">
-      <a href="#photosplash">Photosplash</a>
-      <a href="#cinematica">Cinematica</a>
+      <a class="nav-apps" href="#apps">Apps</a>
+      <a class="nav-app" href="#photosplash">Photosplash</a>
+      <a class="nav-app" href="#cinematica">Cinematica</a>
+      <a class="nav-app" href="#blobr">Blobr</a>
       <a href="#install">Install</a>
       <a href="https://github.com/jamesisboredcoding/jamsdesign">GitHub</a>
     </nav>
@@ -41,7 +43,7 @@
         <h1>Make things.<br><span class="jam">Keep it jammy.</span></h1>
         <p class="lead">
           jamsdesign is a family of native, GPU-accelerated creative apps written in Rust.
-          Edit photos, cut video, and use the shortcuts your hands already know.
+          Edit photos, cut video, design interfaces, and use the shortcuts your hands already know.
         </p>
         <div class="cta">
           <a class="btn btn-primary" href="#apps">Meet the apps</a>
@@ -53,6 +55,7 @@
         <img class="jar" src="img/jamsdesign.svg" alt="" width="280" height="280">
         <img class="orbit orbit-a" src="img/photosplash.svg" alt="" width="96" height="96">
         <img class="orbit orbit-b" src="img/cinematica.svg" alt="" width="96" height="96">
+        <img class="orbit orbit-c" src="img/blobr.svg" alt="" width="96" height="96">
       </div>
     </div>
   </section>
@@ -106,6 +109,29 @@
         </ul>
       </article>
 
+      <article id="blobr" class="app app-blobr">
+        <div class="app-head">
+          <img src="img/blobr.svg" alt="Blobr icon" width="112" height="112">
+          <div>
+            <h3>Blobr</h3>
+            <p class="app-kind">Interface and vector design</p>
+          </div>
+          <span class="pill pill-blobr">In development</span>
+        </div>
+        <p class="app-blurb">
+          Design screens on an infinite canvas the way you already do in Figma, in a native app
+          that keeps your files on your disk. AI agents can build and edit designs in it too.
+        </p>
+        <ul class="features">
+          <li><b>Frames, shapes, pen and text</b> with auto layout, constraints and live boolean groups.</li>
+          <li><b>Components and variants</b>, variables with modes, styles, and libraries that stay up to date.</li>
+          <li><b>Prototypes</b> with smart animate, scrolling frames and flows, presented in their own window.</li>
+          <li><b>Comments, tabs and Inspect</b> with CSS, HTML and iced code for developers.</li>
+          <li><b>Imports and exports:</b> SVG in, PNG, SVG and PDF out, and a one-time Figma importer.</li>
+          <li><b>Built for agents:</b> an MCP server edits the open document live, every change an undo step.</li>
+        </ul>
+      </article>
+
       <article class="app app-more">
         <div class="more-jar" aria-hidden="true">+</div>
         <div>
@@ -151,8 +177,10 @@
           <h4>From source</h4>
           <p>Needs stable Rust and a Vulkan-capable GPU. Cinematica also needs FFmpeg.</p>
 <pre><code>git clone https://github.com/jamesisboredcoding/jamsdesign
-cd jamsdesign/photosplash
-cargo run --release -p photosplash</code></pre>
+cd jamsdesign
+cargo run --release -p photosplash
+cargo run --release -p cinematica
+cargo run --release -p blobr</code></pre>
         </div>
       </div>
     </div>
