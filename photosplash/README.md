@@ -152,6 +152,8 @@ left-click in, right-click out.
       to remove it); File > Open Recent
 - [x] 6n: open Photoshop files (.psd): layers with names, opacity, visibility and blend
       modes, and nested groups (Pass Through kept)
+- [x] 6o: File > Place a Blobr design (.jdb): pick one of its frames (when there are several)
+      and it becomes a new layer, drawn at full size or shrunk to fit the image
 - [ ] 6: Flatpak, PSD saving
 
 ## App icon

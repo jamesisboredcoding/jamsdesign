@@ -3532,6 +3532,8 @@ dependencies = [
  "jd-io",
  "jd-raster",
  "jd-ui",
+ "jd-vector",
+ "jd-vector-render",
  "octotablet",
  "raw-window-handle",
  "resvg",

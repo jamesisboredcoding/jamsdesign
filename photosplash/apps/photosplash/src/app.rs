@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use iced::keyboard::{self, Key, key::Named};
 use iced::widget::{image, operation};
@@ -10,6 +11,7 @@ use jd_raster::paint::{BrushParams, Effect, Stroke};
 use jd_raster::selection::{self, Combine, Selection};
 use jd_raster::mask::Mask;
 use jd_raster::{BlendMode, BlendSpace, Document, History, LayerId, TileGrid, TileId};
+use jd_vector_render::place::PlaceableFrame;
 
 use crate::adjust::{self as adj, Op, OpKind};
 use crate::prefs::{Prefs, SavedLayout};
@@ -610,6 +612,8 @@ pub struct Photo {
     pub options_pointer: Point,
     /// Command search (search icon / Ctrl+F): the query, while open.
     pub palette: Option<String>,
+    /// File > Place of a .jdb with several frames: which one to place.
+    pub place_picker: Option<PlacePicker>,
     /// Pointer over the dock, to place the layer right-click menu.
     pub dock_pointer: Point,
     /// Clone Stamp / Healing Brush source (document px), set with Alt+click.
@@ -863,6 +867,15 @@ pub enum Message {
     PopupSub(Option<usize>),
     Place,
     Placed(PathBuf, Result<Box<Document>, String>),
+    /// A Blobr design (.jdb) picked to place: its frames, or why it couldn't be read.
+    PlaceFrames(PathBuf, Result<Vec<PlaceableFrame>, String>),
+    /// One frame of `place_picker` chosen (by index).
+    PlaceFrame(usize),
+    /// Place this file: an image or document, or a Blobr design.
+    PlacePath(PathBuf),
+    CancelPlaceFrame,
+    /// A placed frame drawn to pixels: layer name, width, height, straight RGBA8.
+    PlacedPixels(String, Result<(u32, u32, Arc<Vec<u8>>), String>),
     DuplicateImage,
     CopyMerged,
     OrientLayer(Orient),
@@ -1049,6 +1062,42 @@ fn centred(src: &TileGrid, w: u32, h: u32) -> TileGrid {
     jd_raster::transform::place(src, w, h, dx, dy)
 }
 
+/// Blobr's file extension.
+const BLOBR_EXTENSION: &str = "jdb";
+
+/// A .jdb being placed, waiting for the user to choose one of its frames.
+pub struct PlacePicker {
+    pub path: PathBuf,
+    pub frames: Vec<PlaceableFrame>,
+}
+
+/// Reads a file to place in the background: a Blobr design lists its frames, anything else
+/// opens as an image or document.
+fn place_task(path: PathBuf) -> Task<Message> {
+    let blobr = path.extension().is_some_and(|e| e.eq_ignore_ascii_case(BLOBR_EXTENSION));
+    Task::perform(
+        async move {
+            if blobr {
+                let frames = jd_vector_render::place::open(&path).map(|d| jd_vector_render::place::frames(&d));
+                Message::PlaceFrames(path, frames)
+            } else {
+                let loaded = jd_io::open(&path).map(Box::new).map_err(|e| e.to_string());
+                Message::Placed(path, loaded)
+            }
+        },
+        |m| m,
+    )
+}
+
+/// How big to draw a placed frame: one pixel per design pixel, shrunk to fit inside the image
+/// (as Photoshop's Place does), drawn at that size so it stays sharp.
+fn place_scale(w: f64, h: f64, into_w: u32, into_h: u32) -> f64 {
+    if w <= 0.0 || h <= 0.0 {
+        return 1.0;
+    }
+    (into_w as f64 / w).min(into_h as f64 / h).min(1.0)
+}
+
 fn file_name(path: &Path) -> String {
     path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned())
 }
@@ -1113,6 +1162,7 @@ impl Photo {
             font_filter: String::new(),
             options_pointer: Point::ORIGIN,
             palette: None,
+            place_picker: None,
             dock_pointer: Point::ORIGIN,
             clone_source: None,
             clone_offset: None,
@@ -1421,15 +1471,7 @@ impl Photo {
                         if self.doc().is_none() {
                             return self.update(Message::Open(paths));
                         }
-                        return Task::batch(paths.into_iter().map(|path| {
-                            Task::perform(
-                                async move {
-                                    let loaded = jd_io::open(&path).map(Box::new).map_err(|e| e.to_string());
-                                    (path, loaded)
-                                },
-                                |(path, loaded)| Message::Placed(path, loaded),
-                            )
-                        }));
+                        return Task::batch(paths.into_iter().map(place_task));
                     }
                     _ if self.clipboard.is_some() => self.paste_internal(),
                     _ => self.info("Nothing to paste"),
@@ -1675,23 +1717,60 @@ impl Photo {
                 }
                 let mut types = jd_io::OPEN_EXTENSIONS.to_vec();
                 types.push(jd_io::jdp::EXTENSION);
+                types.push(BLOBR_EXTENSION);
                 return Task::perform(
                     async move {
                         let file = rfd::AsyncFileDialog::new()
                             .set_title("Place")
-                            .add_filter("Images and documents", &types)
+                            .add_filter("Images, documents and Blobr designs", &types)
                             .pick_file()
                             .await?;
-                        let path = file.path().to_path_buf();
-                        let loaded = jd_io::open(&path).map(Box::new).map_err(|e| e.to_string());
-                        Some((path, loaded))
+                        Some(file.path().to_path_buf())
                     },
                     |picked| match picked {
-                        Some((path, loaded)) => Message::Placed(path, loaded),
+                        Some(path) => Message::PlacePath(path),
                         None => Message::Noop,
                     },
                 );
             }
+            Message::PlacePath(path) => return place_task(path),
+            Message::PlaceFrames(path, result) => match result {
+                Err(e) => self.error(format!("Couldn't place {}: {e}", file_name(&path))),
+                Ok(frames) if frames.is_empty() => self.error(format!("{} has no frames to place", file_name(&path))),
+                Ok(frames) => {
+                    self.place_picker = Some(PlacePicker { path, frames });
+                    if self.place_picker.as_ref().is_some_and(|p| p.frames.len() == 1) {
+                        return self.update(Message::PlaceFrame(0));
+                    }
+                }
+            },
+            Message::PlaceFrame(i) => {
+                let Some(picker) = self.place_picker.take() else { return Task::none() };
+                let (Some(frame), Some(doc)) = (picker.frames.get(i).cloned(), self.document()) else { return Task::none() };
+                let scale = place_scale(frame.width, frame.height, doc.width, doc.height);
+                let path = picker.path;
+                return Task::perform(
+                    async move {
+                        let pixels = jd_vector_render::place::open(&path).and_then(|d| {
+                            jd_vector_render::place::render_rgba(&d, frame.id, scale).ok_or_else(|| "the frame is empty".to_owned())
+                        });
+                        (frame.name, pixels.map(|(w, h, px)| (w, h, Arc::new(px))))
+                    },
+                    |(name, pixels)| Message::PlacedPixels(name, pixels),
+                );
+            }
+            Message::CancelPlaceFrame => self.place_picker = None,
+            Message::PlacedPixels(name, result) => match result {
+                Err(e) => self.error(format!("Couldn't place {name}: {e}")),
+                Ok((w, h, rgba)) => {
+                    let placed = TileGrid::from_rgba8(w, h, &rgba);
+                    self.edit("Place", None, |doc| {
+                        let pixels = centred(&placed, doc.width, doc.height);
+                        let id = doc.add_layer(name);
+                        doc.layer_mut(id).map(|l| l.pixels = pixels).is_some()
+                    });
+                }
+            },
             Message::Placed(path, result) => match result {
                 Err(e) => self.error(format!("Couldn't place {}: {e}", file_name(&path))),
                 Ok(placed) => {
@@ -4572,6 +4651,12 @@ impl Photo {
                 _ => Task::none(),
             };
         }
+        if self.place_picker.is_some() {
+            return match key.as_ref() {
+                Key::Named(Named::Escape) => self.update(Message::CancelPlaceFrame),
+                _ => Task::none(),
+            };
+        }
         if self.new_doc.is_some() {
             return match key.as_ref() {
                 Key::Named(Named::Escape) => self.update(Message::CancelNewDoc),
@@ -6246,5 +6331,68 @@ mod tests {
         assert_eq!(app.document().unwrap().active().unwrap().name, "Sky");
         let _ = app.update(Message::Undo);
         assert_eq!(app.document().unwrap().active().unwrap().name, "Layer 1");
+    }
+
+    #[test]
+    fn place_scale_fits_inside_and_never_enlarges() {
+        assert_eq!(place_scale(100.0, 50.0, 400, 300), 1.0);
+        assert_eq!(place_scale(800.0, 200.0, 400, 300), 0.5);
+        assert_eq!(place_scale(100.0, 600.0, 400, 300), 0.5);
+    }
+
+    #[test]
+    fn placing_a_blobr_design_picks_a_frame_and_adds_a_layer() {
+        use jd_vector::{ApproxMeasure, NodeSpec, Op, Paint};
+        let mut design = jd_vector::Document::new();
+        let page = design.pages()[0];
+        design
+            .apply(
+                &[
+                    Op::create(page, NodeSpec::frame("Poster", 40.0, 20.0).fill(Paint::hex("#FF0000"))),
+                    Op::create(page, NodeSpec::frame("Card", 10.0, 10.0).fill(Paint::hex("#0000FF"))),
+                ],
+                &ApproxMeasure,
+            )
+            .unwrap();
+        let path = std::env::temp_dir().join(format!("photosplash-place-{}.jdb", std::process::id()));
+        jd_vector::file::save(&design, &path).unwrap();
+        let opened = jd_vector_render::place::open(&path).unwrap();
+        let frames = jd_vector_render::place::frames(&opened);
+        assert_eq!(frames.len(), 2);
+
+        let mut app = app_with_doc(100, 60);
+        // Two frames: asks which one; Escape backs out.
+        let _ = app.update(Message::PlaceFrames(path.clone(), Ok(frames.clone())));
+        assert_eq!(app.place_picker.as_ref().map(|p| p.frames.len()), Some(2));
+        let _ = app.update(Message::Key(keyboard::Event::KeyPressed {
+            key: Key::Named(Named::Escape),
+            modified_key: Key::Named(Named::Escape),
+            physical_key: keyboard::key::Physical::Unidentified(keyboard::key::NativeCode::Unidentified),
+            location: keyboard::Location::Standard,
+            modifiers: keyboard::Modifiers::empty(),
+            text: None,
+            repeat: false,
+        }));
+        assert!(app.place_picker.is_none());
+        // Picking one starts drawing it and closes the picker.
+        let _ = app.update(Message::PlaceFrames(path.clone(), Ok(frames.clone())));
+        let _ = app.update(Message::PlaceFrame(0));
+        assert!(app.place_picker.is_none());
+        let _ = std::fs::remove_file(&path);
+
+        // What that task produces: the frame's pixels, added centred as a new layer.
+        let (w, h, px) = jd_vector_render::place::render_rgba(&opened, frames[0].id, 1.0).unwrap();
+        let before = app.document().unwrap().layers().len();
+        let _ = app.update(Message::PlacedPixels("Poster".into(), Ok((w, h, Arc::new(px)))));
+        let doc = app.document().unwrap();
+        assert_eq!(doc.layers().len(), before + 1);
+        let layer = doc.active().unwrap();
+        assert_eq!(layer.name, "Poster");
+        assert_eq!(layer.pixels.pixel_at(50, 30), [255, 0, 0, 255]);
+        assert_eq!(layer.pixels.pixel_at(5, 5)[3], 0);
+
+        // A design with no frames says so instead of opening an empty picker.
+        let _ = app.update(Message::PlaceFrames(path, Ok(Vec::new())));
+        assert!(app.place_picker.is_none());
     }
 }

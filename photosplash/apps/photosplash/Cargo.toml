@@ -24,3 +24,6 @@ rfd.workspace = true
 octotablet.workspace = true
 raw-window-handle.workspace = true
 iced_winit.workspace = true
+# File > Place of a Blobr design (.jdb): its frames, drawn to pixels.
+jd-vector = { path = "../../../crates/jd-vector" }
+jd-vector-render = { path = "../../../crates/jd-vector-render" }

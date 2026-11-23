@@ -83,6 +83,9 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
     if let Some(new) = dialog::new_document(app) {
         layers = layers.push(new);
     }
+    if let Some(picker) = dialog::place_frame(app) {
+        layers = layers.push(picker);
+    }
     if let Some(confirm) = dialog::confirm(app) {
         layers = layers.push(confirm);
     }

@@ -170,6 +170,7 @@ pub fn view(app: &Photo) -> Element<'_, Message> {
         covered: app.popup.is_some()
             || app.adjusting.is_some()
             || app.new_doc.is_some()
+            || app.place_picker.is_some()
             || app.confirm.is_some()
             || app.dialog.is_some()
             || app.prefs_dialog.is_some()

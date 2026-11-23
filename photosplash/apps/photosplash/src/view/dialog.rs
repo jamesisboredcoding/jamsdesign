@@ -297,3 +297,61 @@ pub fn small(app: &Photo) -> Option<Element<'_, Message>> {
     let backdrop = if d.kind == DialogKind::BlendingOptions { |_: &iced::Theme| container::Style::default() } else { scrim };
     Some(opaque(container(iced::widget::pin(card).x(d.pos.x).y(d.pos.y)).width(iced::Fill).height(iced::Fill).style(backdrop)).into())
 }
+
+/// File > Place of a Blobr design with several frames: pick the one to place.
+pub fn place_frame(app: &Photo) -> Option<Element<'_, Message>> {
+    use iced::widget::scrollable;
+    let p = app.place_picker.as_ref()?;
+    let name = p.path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+
+    let mut list = column![].spacing(2);
+    let mut page = None;
+    for (i, f) in p.frames.iter().enumerate() {
+        if page != Some(&f.page) {
+            page = Some(&f.page);
+            list = list.push(container(text(&f.page).size(TEXT_SIZE_SMALL).color(TEXT_MUTED)).padding(Padding::ZERO.top(8).bottom(4).left(8)));
+        }
+        list = list.push(
+            button(
+                row![
+                    text(&f.name).size(TEXT_SIZE).width(iced::Fill),
+                    text(format!("{} × {}", f.width.round(), f.height.round())).size(TEXT_SIZE_SMALL).color(TEXT_SECONDARY),
+                ]
+                .align_y(Vertical::Center),
+            )
+            .width(iced::Fill)
+            .padding(Padding::from([6, 8]))
+            .style(style::row(false))
+            .on_press(Message::PlaceFrame(i)),
+        );
+    }
+
+    let card = container(
+        column![
+            text(format!("Place a frame from \"{name}\"")).size(14).font(bold()),
+            text("Pick the frame to add as a new layer.").size(TEXT_SIZE).color(TEXT_SECONDARY),
+            container(scrollable(list)).max_height(400),
+            row![
+                space::horizontal(),
+                button(text("Cancel").size(TEXT_SIZE)).padding(Padding::from([6, 14])).style(style::ghost(false)).on_press(Message::CancelPlaceFrame),
+            ],
+        ]
+        .spacing(10)
+        .width(420),
+    )
+    .padding(20)
+    .style(|_| container::Style {
+        background: Some(BG_PANEL.into()),
+        border: iced::Border { color: BORDER_SUBTLE, width: 1.0, radius: 8.0.into() },
+        shadow: iced::Shadow { color: Color::from_rgba(0.0, 0.0, 0.0, 0.5), offset: iced::Vector::new(0.0, 8.0), blur_radius: 30.0 },
+        ..Default::default()
+    });
+
+    Some(
+        opaque(center(card).style(|_| container::Style {
+            background: Some(Color::from_rgba(0.0, 0.0, 0.0, 0.45).into()),
+            ..Default::default()
+        }))
+        .into(),
+    )
+}
