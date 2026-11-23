@@ -10,30 +10,44 @@ mod view;
 pub const APP_NAME: &str = "Blobr";
 
 fn main() -> iced::Result {
-    iced::application(app::Blobr::boot, app::Blobr::update, view::view)
-        .title(|app: &app::Blobr| format!("{} - {APP_NAME}", app.file_name()))
-        .theme(|_: &app::Blobr| jd_ui::theme())
+    // A daemon rather than an application: presenting can open a second window.
+    iced::daemon(app::Blobr::boot, app::Blobr::update, view::view)
+        .title(|app: &app::Blobr, id| app.title(id))
+        .theme(|_: &app::Blobr, _| jd_ui::theme())
         .subscription(app::Blobr::subscription)
         .settings(iced::Settings {
             default_text_size: jd_ui::tokens::TEXT_SIZE.into(),
             antialiasing: true,
             ..Default::default()
         })
-        .window(iced::window::Settings {
-            size: iced::Size::new(1600.0, 960.0),
-            min_size: Some(iced::Size::new(1000.0, 600.0)),
-            // We draw our own title bar and window controls.
-            decorations: false,
-            icon: window_icon(),
-            platform_specific: iced::window::settings::PlatformSpecific {
-                application_id: APP_ID.to_owned(),
-                ..Default::default()
-            },
-            ..Default::default()
-        })
-        .centered()
-        .exit_on_close_request(false)
         .run()
+}
+
+/// The main window: no system decorations (we draw our own title bar), closing asks about
+/// unsaved work first.
+pub fn main_window() -> iced::window::Settings {
+    iced::window::Settings {
+        size: iced::Size::new(1600.0, 960.0),
+        min_size: Some(iced::Size::new(1000.0, 600.0)),
+        position: iced::window::Position::Centered,
+        decorations: false,
+        exit_on_close_request: false,
+        icon: window_icon(),
+        platform_specific: iced::window::settings::PlatformSpecific { application_id: APP_ID.to_owned(), ..Default::default() },
+        ..Default::default()
+    }
+}
+
+/// A window for presenting a prototype, with the system's own title bar.
+pub fn present_window() -> iced::window::Settings {
+    iced::window::Settings {
+        size: iced::Size::new(1280.0, 860.0),
+        position: iced::window::Position::Centered,
+        exit_on_close_request: false,
+        icon: window_icon(),
+        platform_specific: iced::window::settings::PlatformSpecific { application_id: APP_ID.to_owned(), ..Default::default() },
+        ..Default::default()
+    }
 }
 
 /// Wayland app id; also the name of the .desktop file and the installed icon.

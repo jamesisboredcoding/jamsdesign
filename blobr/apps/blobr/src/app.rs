@@ -161,6 +161,10 @@ pub struct Presentation {
     pub delay_done: bool,
     pub cursor: Point,
     pub hovered: Option<NodeId>,
+    /// How far each scrolling frame has been scrolled (page pixels).
+    pub scroll: HashMap<NodeId, Vec2>,
+    /// Smart animate in progress: in-between pictures, when it started, how long it takes.
+    pub smart: Option<(Vec<Shot>, Instant, f32)>,
 }
 
 /// A tick every two seconds (from a plain thread), to notice library files changing.
@@ -344,6 +348,8 @@ pub enum Field {
     VarValue(NodeId, String),
     StyleName(NodeId),
     PageBackground,
+    /// The selected frame's flow name.
+    FlowName,
 }
 
 #[derive(Debug, Clone)]
@@ -409,6 +415,11 @@ pub enum Message {
     SetTransition(usize, jd_vector::Transition),
     /// Present the prototype from a frame (None: the selection's frame, or the first).
     Present(Option<NodeId>),
+    /// Present in a window of its own (from this frame, or the selection's, or the first).
+    PresentInWindow(Option<NodeId>),
+    PresentWindowOpened(window::Id),
+    CloseRequested(window::Id),
+    WindowResized(window::Id, Size),
     StopPresenting,
     PresentMove(Point),
     PresentClick,
@@ -483,6 +494,11 @@ pub enum Message {
     CommentResolve(NodeId, bool),
     CommentDelete(NodeId),
     ShowResolved(bool),
+    /// Make the selected top-level frame a flow's starting point (or stop).
+    SetFlow(bool),
+    SetOverflow(jd_vector::Overflow),
+    /// Scrolling while presenting.
+    PresentScroll(Vector),
     Distribute(bool),
     Group,
     FrameSelection,
@@ -603,6 +619,8 @@ pub struct Blobr {
     fit_pending: bool,
     /// AI agents connected over MCP (shown in the status bar).
     pub agents: usize,
+    /// The window presenting is shown in, when it has its own, and that window's size.
+    pub present_window: Option<(window::Id, Size)>,
     /// One slot per tab, left to right; the active tab's slot is empty (its document is in
     /// the fields above).
     pub tabs: Vec<Option<Parked>>,
@@ -637,7 +655,15 @@ const MAX_ZOOM: f64 = 256.0;
 
 impl Blobr {
     pub fn boot() -> (Self, Task<Message>) {
-        let (chrome, task) = WindowChrome::new(MENU_COUNT, Size::new(1600.0, 960.0));
+        // The main window is opened here (a daemon starts with none); its id goes to the
+        // chrome instead of the chrome's own "oldest window" lookup.
+        let (chrome, _) = WindowChrome::new(MENU_COUNT, Size::new(1600.0, 960.0));
+        let task = if cfg!(test) {
+            Task::none()
+        } else {
+            let (_, open) = window::open(crate::main_window());
+            open.map(|id| chrome::Event::Opened(Some(id)))
+        };
         let doc = Document::new();
         let page = doc.pages()[0];
         let mut app = Self {
@@ -687,6 +713,7 @@ impl Blobr {
             last_click: None,
             fit_pending: false,
             agents: 0,
+            present_window: None,
             tabs: vec![None],
             active: 0,
             recent: Vec::new(),
@@ -711,6 +738,19 @@ impl Blobr {
         &self.ed.doc
     }
 
+    pub fn title(&self, id: window::Id) -> String {
+        if self.present_window.is_some_and(|(w, _)| w == id) {
+            let frame = self.present.as_ref().and_then(|p| self.doc().node(p.frame)).map_or(String::new(), |n| n.name.clone());
+            return format!("{frame} - Presenting - {}", crate::APP_NAME);
+        }
+        format!("{} - {}", self.file_name(), crate::APP_NAME)
+    }
+
+    /// The area presenting draws in: its own window, or the main one.
+    pub fn present_size(&self) -> Size {
+        self.present_window.map_or(self.chrome.size, |(_, s)| s)
+    }
+
     pub fn file_name(&self) -> String {
         title(self.path.as_deref(), self.ed.history.is_dirty())
     }
@@ -724,7 +764,8 @@ impl Blobr {
         Subscription::batch([
             keyboard::listen().map(Message::Key),
             WindowChrome::subscription().map(Message::Chrome),
-            window::close_requests().map(|_| Message::Quit),
+            window::close_requests().map(Message::CloseRequested),
+            if self.present_window.is_some() { window::resize_events().map(|(id, size)| Message::WindowResized(id, size)) } else { Subscription::none() },
             if self.drag.is_some() { window::frames().map(|_| Message::Frame) } else { Subscription::none() },
             if self.present_animating() { window::frames().map(|_| Message::PresentTick) } else { Subscription::none() },
             if self.libraries.is_empty() { Subscription::none() } else { Subscription::run(library_ticks) },
@@ -941,7 +982,47 @@ impl Blobr {
                 }
             }),
             Message::Present(from) => self.start_presenting(from),
-            Message::StopPresenting => self.present = None,
+            Message::StopPresenting => {
+                self.present = None;
+                if let Some((id, _)) = self.present_window.take() {
+                    return window::close(id);
+                }
+            }
+            Message::PresentInWindow(from) => {
+                if let Some((id, _)) = self.present_window {
+                    self.start_presenting(from);
+                    return window::gain_focus(id);
+                }
+                let (id, open) = window::open(crate::present_window());
+                self.present_window = Some((id, Size::new(1280.0, 860.0)));
+                self.start_presenting(from);
+                return open.map(Message::PresentWindowOpened);
+            }
+            // Draw the pictures for the window's real size.
+            Message::PresentWindowOpened(id) => return window::size(id).map(move |s| Message::WindowResized(id, s)),
+            Message::WindowResized(id, size) => {
+                if let Some((w, s)) = &mut self.present_window
+                    && *w == id
+                {
+                    *s = size;
+                    // Redraw the frame shown at the new size.
+                    if let Some(p) = &self.present {
+                        let (frame, overlay) = (p.frame, p.overlay.as_ref().map(|o| o.0));
+                        let shot = self.shoot(frame, false);
+                        let over = overlay.and_then(|o| self.shoot(o, true).map(|s| (o, s)));
+                        if let Some(p) = &mut self.present {
+                            p.shot = shot;
+                            p.overlay = over;
+                        }
+                    }
+                }
+            }
+            Message::CloseRequested(id) => {
+                if self.present_window.is_some_and(|(w, _)| w == id) {
+                    return self.handle(Message::StopPresenting);
+                }
+                return self.guard(After::Quit);
+            }
             Message::PresentMove(at) => self.present_move(at),
             Message::PresentClick => self.present_click(),
             Message::PresentTick => self.present_tick(),
@@ -1263,6 +1344,19 @@ impl Blobr {
                 self.comment_open = None;
             }
             Message::ShowResolved(on) => self.show_resolved = on,
+            Message::SetFlow(on) => {
+                let flow = on.then(|| {
+                    let used: Vec<String> = self.top_frames().iter().filter_map(|&f| self.doc().node(f)?.props.flow.clone()).collect();
+                    (1..).map(|i| format!("Flow {i}")).find(|n| !used.contains(n)).expect("endless")
+                });
+                let ops: Vec<Op> = self.selection.iter().map(|&id| Op::set(id, Patch { flow: Some(flow.clone()), ..Patch::default() })).collect();
+                self.run(if on { "Add flow" } else { "Remove flow" }, &ops);
+            }
+            Message::SetOverflow(o) => {
+                let ops: Vec<Op> = self.selection.iter().map(|&id| Op::set(id, Patch { overflow: Some(o), ..Patch::default() })).collect();
+                self.run("Overflow scrolling", &ops);
+            }
+            Message::PresentScroll(delta) => self.present_scroll(delta),
             Message::Flatten => {
                 let ops = boolean::flatten(self.doc(), &self.selection);
                 self.replace_with("result", "Flatten", ops);
@@ -1637,6 +1731,7 @@ impl Blobr {
                 self.selection = parent.into_iter().collect();
                 None
             }
+            Key::Named(Named::Enter) if cmd && alt && self.modifiers.shift() => Some(Message::PresentInWindow(None)),
             Key::Named(Named::Enter) if cmd && alt => Some(Message::Present(None)),
             Key::Named(Named::Enter) if plain => match self.selection[..] {
                 [one] if self.is_text(one) => Some(Message::EditText(one)),
@@ -1971,6 +2066,15 @@ impl Blobr {
                 });
                 return;
             }
+            Field::FlowName => {
+                let name = input.trim().to_owned();
+                if name.is_empty() {
+                    return bad(self);
+                }
+                let ops: Vec<Op> = self.selection.iter().map(|&id| Op::set(id, Patch { flow: Some(Some(name.clone())), ..Patch::default() })).collect();
+                self.run("Rename flow", &ops);
+                return;
+            }
             Field::Reaction(i, part) => {
                 let (i, part) = (*i, *part);
                 let v = num();
@@ -2250,20 +2354,33 @@ impl Blobr {
     // ----- Presenting --------------------------------------------------------------------
 
     fn shoot(&self, id: NodeId, overlay: bool) -> Option<Shot> {
-        let n = self.doc().node(id)?;
+        // Frames scrolled while presenting are drawn with their content moved.
+        let scrolled = self.present.as_ref().filter(|p| !p.scroll.is_empty()).map(|p| self.scrolled_doc(&p.scroll));
+        self.shoot_in(scrolled.as_ref().unwrap_or(self.doc()), id, overlay)
+    }
+
+    fn shoot_in(&self, doc: &Document, id: NodeId, overlay: bool) -> Option<Shot> {
+        let n = doc.node(id)?;
         let size = kurbo::Size::new(n.props.width, n.props.height);
-        let (w, h) = (self.chrome.size.width as f64, self.chrome.size.height as f64);
+        let area = self.present_size();
+        let (w, h) = (area.width as f64, area.height as f64);
         let room = if overlay { 0.9 } else { 1.0 };
         let fit = ((w - 48.0) * room / size.width.max(1.0)).min((h - 48.0) * room / size.height.max(1.0)).max(0.05);
         // Overlays keep the main frame's scale, so they sit at their real size relative to it.
         let fit = if overlay { self.present.as_ref().and_then(|p| p.shot.as_ref()).map_or(fit, |s| s.fit.min(fit)) } else { fit };
-        let pm = jd_vector_render::render_node(self.doc(), id, RenderOptions { scale: fit * self.scale_factor as f64, background: None })?;
+        let pm = jd_vector_render::render_node(doc, id, RenderOptions { scale: fit * self.scale_factor as f64, background: None })?;
         Some(Shot { image: image::Handle::from_rgba(pm.width(), pm.height(), clipboard::to_rgba(&pm)), fit, size })
+    }
+
+    /// Top-level frames on this page that start a flow, with the flows' names.
+    pub fn flows(&self) -> Vec<(NodeId, String)> {
+        self.top_frames().into_iter().filter_map(|f| Some((f, self.doc().node(f)?.props.flow.clone()?))).collect()
     }
 
     fn start_presenting(&mut self, from: Option<NodeId>) {
         let frames = self.top_frames();
-        let start = from.or_else(|| self.selection.first().and_then(|&s| self.top_frame(s))).or_else(|| frames.first().copied());
+        let first_flow = self.flows().first().map(|f| f.0);
+        let start = from.or_else(|| self.selection.first().and_then(|&s| self.top_frame(s))).or(first_flow).or_else(|| frames.first().copied());
         let Some(start) = start else { return self.error("Add a frame to present".into()) };
         self.chrome.open_menu = None;
         self.present = Some(Presentation {
@@ -2276,6 +2393,8 @@ impl Blobr {
             delay_done: false,
             cursor: Point::ORIGIN,
             hovered: None,
+            scroll: HashMap::new(),
+            smart: None,
         });
         let shot = self.shoot(start, false);
         if let Some(p) = &mut self.present {
@@ -2288,13 +2407,23 @@ impl Blobr {
         if !self.doc().node(to).is_some_and(|n| n.kind.is_frame_like()) {
             return;
         }
+        let from = self.present.as_ref().map(|p| p.frame);
+        if let Some(p) = &mut self.present {
+            // A new frame starts unscrolled.
+            p.scroll.retain(|&f, _| f != to && !self.ed.doc.is_ancestor(to, f));
+        }
         let shot = self.shoot(to, false);
+        let smart = match (transition, from) {
+            (jd_vector::Transition::SmartAnimate, Some(from)) => Some((self.smart_frames(from, to), Instant::now(), duration.max(0.05))),
+            _ => None,
+        };
         let Some(p) = &mut self.present else { return };
         if remember {
             p.history.push(p.frame);
         }
+        p.smart = smart;
         let old = p.shot.take();
-        if transition != jd_vector::Transition::Instant
+        if !matches!(transition, jd_vector::Transition::Instant | jd_vector::Transition::SmartAnimate)
             && let Some(old) = old
         {
             p.leaving = Some((old, transition, Instant::now(), duration.max(0.05)));
@@ -2336,7 +2465,7 @@ impl Blobr {
 
     /// Where a frame's picture sits in the window: its top-left and scale.
     pub fn shot_origin(&self, shot: &Shot) -> Point {
-        let (w, h) = (self.chrome.size.width, self.chrome.size.height);
+        let (w, h) = (self.present_size().width, self.present_size().height);
         let (sw, sh) = ((shot.size.width * shot.fit) as f32, (shot.size.height * shot.fit) as f32);
         Point::new((w - sw) / 2.0, (h - sh) / 2.0)
     }
@@ -2367,6 +2496,125 @@ impl Blobr {
             }
         }
         None
+    }
+
+    /// A copy of the document with each scrolled frame's content moved by its offset.
+    fn scrolled_doc(&self, scroll: &HashMap<NodeId, Vec2>) -> Document {
+        let mut doc = self.doc().clone();
+        for (&f, d) in scroll {
+            for c in self.doc().children(f).to_vec() {
+                doc.preview_props(c, |p| {
+                    p.x -= d.x;
+                    p.y -= d.y;
+                });
+            }
+        }
+        doc
+    }
+
+    /// Scrolls the frame under the pointer that has overflow scrolling, as far as its
+    /// content reaches.
+    fn present_scroll(&mut self, delta: Vector) {
+        let Some(p) = &self.present else { return };
+        let (frame, shot) = match (&p.overlay, &p.shot) {
+            (Some((o, s)), _) => (*o, s.clone()),
+            (None, Some(s)) => (p.frame, s.clone()),
+            _ => return,
+        };
+        let doc = self.doc();
+        let o = self.shot_origin(&shot);
+        let local = kurbo::Point::new((p.cursor.x - o.x) as f64 / shot.fit, (p.cursor.y - o.y) as f64 / shot.fit);
+        let page_pt = doc.world_transform(frame) * local;
+        let Some(page) = doc.page_of(frame) else { return };
+        // The deepest scrolling frame under the pointer (or the frame shown).
+        let target = doc
+            .nodes_at(page, page_pt, 0.0)
+            .into_iter()
+            .flat_map(|hit| std::iter::successors(Some(hit), |&c| if c == frame { None } else { doc.parent(c) }))
+            .find(|&c| (c == frame || doc.is_ancestor(frame, c)) && doc.node(c).is_some_and(|n| n.props.overflow != jd_vector::Overflow::None));
+        let Some(target) = target else { return };
+        let n = doc.node(target).expect("found");
+        let content = doc
+            .children(target)
+            .iter()
+            .filter_map(|&c| doc.node(c).map(|cn| jd_vector::Document::local_transform(cn).transform_rect_bbox(Rect::new(0.0, 0.0, cn.props.width, cn.props.height))))
+            .reduce(|a, b| a.union(b))
+            .unwrap_or_default();
+        let max = Vec2::new((content.x1 - n.props.width).max(0.0), (content.y1 - n.props.height).max(0.0));
+        let (h, v) = match n.props.overflow {
+            jd_vector::Overflow::Vertical => (false, true),
+            jd_vector::Overflow::Horizontal => (true, false),
+            jd_vector::Overflow::Both => (true, true),
+            jd_vector::Overflow::None => (false, false),
+        };
+        // Wheel lines are about 40 px; Shift turns vertical wheels sideways.
+        let (dx, dy) = if self.modifiers.shift() { (delta.y, delta.x) } else { (delta.x, delta.y) };
+        let Some(p) = &mut self.present else { return };
+        let cur = p.scroll.get(&target).copied().unwrap_or(Vec2::ZERO);
+        let next = Vec2::new(
+            if h { (cur.x - dx as f64 / shot.fit).clamp(0.0, max.x) } else { 0.0 },
+            if v { (cur.y - dy as f64 / shot.fit).clamp(0.0, max.y) } else { 0.0 },
+        );
+        if next == cur {
+            return;
+        }
+        p.scroll.insert(target, next);
+        let overlay = p.overlay.is_some();
+        let shot = self.shoot(frame, overlay);
+        if let (Some(p), Some(shot)) = (&mut self.present, shot) {
+            match &mut p.overlay {
+                Some((_, s)) => *s = shot,
+                None => p.shot = Some(shot),
+            }
+        }
+    }
+
+    /// In-between pictures for smart animate from `from` to `to`: layers named the same
+    /// (by their path of names under the frame) move, resize, turn and fade between the
+    /// two; layers only in `to` fade in.
+    fn smart_frames(&self, from: NodeId, to: NodeId) -> Vec<Shot> {
+        const STEPS: usize = 8;
+        let doc = self.doc();
+        let paths = |root: NodeId| -> HashMap<String, NodeId> {
+            let mut out = HashMap::new();
+            for d in doc.descendants(root) {
+                let mut names = Vec::new();
+                let mut cur = Some(d);
+                while let Some(c) = cur.filter(|&c| c != root) {
+                    names.push(doc.node(c).map_or(String::new(), |n| n.name.clone()));
+                    cur = doc.parent(c);
+                }
+                names.reverse();
+                out.entry(names.join("/")).or_insert(d);
+            }
+            out
+        };
+        let (old, new) = (paths(from), paths(to));
+        let lerp = |a: f64, b: f64, t: f64| a + (b - a) * t;
+        (1..STEPS)
+            .filter_map(|k| {
+                let t = k as f64 / STEPS as f64;
+                let mut frame_doc = doc.clone();
+                for (path, &id) in &new {
+                    let Some(end) = doc.node(id).map(|n| n.props.clone()) else { continue };
+                    match old.get(path).and_then(|&o| doc.node(o)) {
+                        Some(start) => {
+                            let s = &start.props;
+                            frame_doc.preview_props(id, |p| {
+                                p.x = lerp(s.x, end.x, t);
+                                p.y = lerp(s.y, end.y, t);
+                                p.width = lerp(s.width, end.width, t);
+                                p.height = lerp(s.height, end.height, t);
+                                p.rotation = lerp(s.rotation, end.rotation, t);
+                                p.opacity = lerp(s.opacity as f64, end.opacity as f64, t) as f32;
+                            });
+                        }
+                        None => frame_doc.preview_props(id, |p| p.opacity = (end.opacity as f64 * t) as f32),
+                    }
+                }
+                self.shoot_in(&frame_doc, to, false)
+            })
+            .collect()
     }
 
     fn present_move(&mut self, at: Point) {
@@ -2418,6 +2666,11 @@ impl Blobr {
         {
             p.leaving = None;
         }
+        if let Some((_, start, d)) = &p.smart
+            && start.elapsed().as_secs_f32() >= *d
+        {
+            p.smart = None;
+        }
         if p.delay_done {
             return;
         }
@@ -2438,6 +2691,7 @@ impl Blobr {
     pub fn present_animating(&self) -> bool {
         self.present.as_ref().is_some_and(|p| {
             p.leaving.is_some()
+                || p.smart.is_some()
                 || (!p.delay_done && self.doc().node(p.frame).is_some_and(|n| n.props.reactions.iter().any(|r| matches!(r.trigger, jd_vector::Trigger::AfterDelay { .. }))))
         })
     }
@@ -2721,7 +2975,7 @@ impl Blobr {
             After::Quit if self.ed.history.is_dirty() || self.tabs.iter().flatten().any(|t| t.ed.history.is_dirty()) => self.guard(After::Quit),
             After::Quit => {
                 crate::agent::cleanup();
-                self.chrome.close()
+                iced::exit()
             }
             After::CloseTab => {
                 self.drop_tab();
@@ -4283,6 +4537,74 @@ mod tests {
         assert_eq!(again.doc().children(instance).len(), 1, "the layers inside came across too");
         assert_eq!(again.ed.history.labels().last(), Some("Update from ui"));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn flows_scrolling_and_smart_animate_when_presenting() {
+        let mut app = app();
+        app.chrome.size = Size::new(1000.0, 800.0);
+        let p = app.page;
+        let done = app
+            .run(
+                "Add",
+                &[
+                    Op::create_as("a", p, NodeSpec::frame("Home", 400.0, 300.0)),
+                    Op::create_as("list", "a", NodeSpec::frame("List", 200.0, 100.0).at(100.0, 100.0)),
+                    Op::create_as("item", "list", NodeSpec::rect("Item", 200.0, 400.0)),
+                    Op::create_as("card", "a", NodeSpec::rect("Card", 50.0, 50.0).at(10.0, 10.0)),
+                    Op::create_as("b", p, NodeSpec::frame("Details", 400.0, 300.0).at(500.0, 0.0)),
+                    Op::create_as("card2", "b", NodeSpec::rect("Card", 300.0, 200.0).at(50.0, 50.0)),
+                ],
+            )
+            .unwrap();
+        let (a, list, card, b) = (done.id("a").unwrap(), done.id("list").unwrap(), done.id("card").unwrap(), done.id("b").unwrap());
+
+        // Flows: Details starts one, so presenting with nothing selected starts there.
+        app.selection = vec![b];
+        let _ = app.update(Message::SetFlow(true));
+        let _ = app.update(Message::FieldInput(Field::FlowName, "Checkout".into()));
+        let _ = app.update(Message::FieldSubmit(Field::FlowName));
+        assert_eq!(app.flows(), vec![(b, "Checkout".to_string())]);
+        app.selection.clear();
+        let _ = app.update(Message::Present(None));
+        assert_eq!(app.present.as_ref().unwrap().frame, b);
+
+        // Overflow: the list scrolls as far as its 400 px item reaches.
+        app.selection = vec![list];
+        let _ = app.update(Message::SetOverflow(jd_vector::Overflow::Vertical));
+        let _ = app.update(Message::Present(Some(a)));
+        let shot = app.present.as_ref().unwrap().shot.clone().unwrap();
+        let o = app.shot_origin(&shot);
+        let over_list = Point::new(o.x + (200.0 * shot.fit) as f32, o.y + (150.0 * shot.fit) as f32);
+        let _ = app.update(Message::PresentMove(over_list));
+        let _ = app.update(Message::PresentScroll(Vector::new(0.0, -10_000.0)));
+        assert_eq!(app.present.as_ref().unwrap().scroll[&list], Vec2::new(0.0, 300.0), "clamped to the content");
+        assert_eq!(app.doc().node(done.id("item").unwrap()).unwrap().props.y, 0.0, "the document itself doesn't move");
+
+        // In a window of its own: the presentation follows that window's size.
+        let _ = app.update(Message::PresentInWindow(Some(a)));
+        let (w, _) = app.present_window.expect("opened");
+        let _ = app.update(Message::WindowResized(w, Size::new(500.0, 400.0)));
+        assert_eq!(app.present_size(), Size::new(500.0, 400.0));
+        assert_eq!(app.chrome.size, Size::new(1000.0, 800.0), "the main window keeps its own");
+        let _ = app.update(Message::CloseRequested(w));
+        assert!(app.present.is_none() && app.present_window.is_none());
+
+        // Smart animate: Card grows from Home's to Details' over in-between pictures.
+        app.selection = vec![card];
+        let _ = app.update(Message::AddReaction);
+        let _ = app.update(Message::SetTarget(0, b));
+        let _ = app.update(Message::SetTransition(0, jd_vector::Transition::SmartAnimate));
+        let frames = app.smart_frames(a, b);
+        assert_eq!(frames.len(), 7);
+        let _ = app.update(Message::Present(Some(a)));
+        let shot = app.present.as_ref().unwrap().shot.clone().unwrap();
+        let o = app.shot_origin(&shot);
+        let _ = app.update(Message::PresentMove(Point::new(o.x + (30.0 * shot.fit) as f32, o.y + (30.0 * shot.fit) as f32)));
+        let _ = app.update(Message::PresentClick);
+        let pr = app.present.as_ref().unwrap();
+        assert_eq!(pr.frame, b);
+        assert!(pr.smart.is_some() && pr.leaving.is_none());
     }
 
     #[test]

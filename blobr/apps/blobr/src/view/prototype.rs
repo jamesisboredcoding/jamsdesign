@@ -44,11 +44,20 @@ pub fn view(app: &Blobr) -> Element<'_, Message> {
             .on_press(Message::Present(from))
     };
     let [id] = app.selection[..] else {
-        let mut col = column![
-            text("Flows").size(TEXT_SIZE_SMALL).font(bold()).color(TEXT_PRIMARY),
-            text("Select a layer and add an interaction to link frames. Present from any frame:").size(TEXT_SIZE_SMALL).color(TEXT_SECONDARY),
-        ]
-        .spacing(8);
+        let flows = app.flows();
+        let mut col = column![text("Flows").size(TEXT_SIZE_SMALL).font(bold()).color(TEXT_PRIMARY)].spacing(8);
+        if flows.is_empty() {
+            col = col.push(text("Select a top-level frame and add a starting point to save a flow here.").size(TEXT_SIZE_SMALL).color(TEXT_SECONDARY));
+        }
+        for (f, name) in flows {
+            col = col.push(
+                row![icon(Icon::Play, 10.0, TEXT_SECONDARY), text(name).size(TEXT_SIZE_SMALL).color(TEXT_PRIMARY), space::horizontal(), button(icon(Icon::Play, 12.0, ICON)).padding(4).style(style::primary).on_press(Message::Present(Some(f)))]
+                    .spacing(6)
+                    .align_y(Vertical::Center),
+            );
+        }
+        col = col.push(hline(BG_PANEL));
+        col = col.push(text("Select a layer and add an interaction to link frames. Present from any frame:").size(TEXT_SIZE_SMALL).color(TEXT_SECONDARY));
         for f in &frames {
             col = col.push(
                 row![text(f.1.clone()).size(TEXT_SIZE_SMALL).color(TEXT_PRIMARY), space::horizontal(), button(icon(Icon::Play, 12.0, ICON)).padding(4).style(style::ghost(false)).on_press(Message::Present(Some(f.0)))]
@@ -78,6 +87,7 @@ pub fn view(app: &Blobr) -> Element<'_, Message> {
         Choice(Transition::SlideRight, "Slide in from left".into()),
         Choice(Transition::SlideUp, "Slide in from bottom".into()),
         Choice(Transition::SlideDown, "Slide in from top".into()),
+        Choice(Transition::SmartAnimate, "Smart animate".into()),
     ];
     for (i, r) in n.props.reactions.iter().enumerate() {
         let trig = match r.trigger {
@@ -121,6 +131,42 @@ pub fn view(app: &Blobr) -> Element<'_, Message> {
             }
         }
         col = col.push(container(block).padding(8).style(style::fill(BG_PANEL)));
+    }
+    // Top-level frames can start a flow; frames can scroll what's inside them.
+    if app.top_frame(id) == Some(id) {
+        col = col.push(hline(BG_PANEL));
+        col = col.push(match &n.props.flow {
+            Some(name) => {
+                let name = name.clone();
+                column![
+                    row![text("Flow starting point").size(TEXT_SIZE_SMALL).font(bold()).color(TEXT_PRIMARY), space::horizontal(), button(icon(Icon::Minus, 12.0, ICON)).padding(3).style(style::ghost(false)).on_press(Message::SetFlow(false))]
+                        .align_y(Vertical::Center),
+                    line("Name", field(app, "", Field::FlowName, move || name.clone())),
+                ]
+                .spacing(6)
+                .into()
+            }
+            None => Element::from(
+                button(row![icon(Icon::Plus, 12.0, ICON), text("Add flow starting point").size(TEXT_SIZE_SMALL)].spacing(6).align_y(Vertical::Center))
+                    .padding(Padding::from([4, 8]))
+                    .style(style::ghost(false))
+                    .on_press(Message::SetFlow(true)),
+            ),
+        });
+    }
+    if n.kind.is_frame_like() {
+        use jd_vector::Overflow;
+        let options = vec![
+            Choice(Overflow::None, "No scrolling".into()),
+            Choice(Overflow::Vertical, "Vertical".into()),
+            Choice(Overflow::Horizontal, "Horizontal".into()),
+            Choice(Overflow::Both, "Both directions".into()),
+        ];
+        let cur = n.props.overflow;
+        col = col.push(line("Overflow", picker(options, move |o| *o == cur, Message::SetOverflow)));
+        if cur != Overflow::None && !n.props.clip {
+            col = col.push(text("Turn on Clip content for this frame so it scrolls.").size(10).color(TEXT_MUTED));
+        }
     }
     col = col.push(hline(BG_PANEL));
     col = col.push(present("Present from here", app.top_frame(id)));

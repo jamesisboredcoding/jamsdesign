@@ -21,7 +21,7 @@ fn picture<'a>(app: &Blobr, shot: &Shot, offset: Point, opacity: f32) -> Element
 
 pub fn view(app: &Blobr) -> Option<Element<'_, Message>> {
     let p = app.present.as_ref()?;
-    let (w, h) = (app.chrome.size.width, app.chrome.size.height);
+    let (w, h) = (app.present_size().width, app.present_size().height);
     let mut layers = stack![container(space()).width(Fill).height(Fill).style(jd_ui::style::fill(Color::from_rgb8(0x10, 0x10, 0x10)))];
     // Slides move both frames; a dissolve fades the new one in over the old.
     let (mut new_off, mut new_alpha) = (Point::ORIGIN, 1.0);
@@ -41,17 +41,37 @@ pub fn view(app: &Blobr) -> Option<Element<'_, Message>> {
         }
         layers = layers.push(picture(app, old, old_off, 1.0));
     }
-    if let Some(s) = &p.shot {
-        layers = layers.push(picture(app, s, new_off, new_alpha));
+    // Smart animate shows the in-between pictures, then the frame itself.
+    let between = p.smart.as_ref().and_then(|(frames, start, d)| {
+        let t = ease(start.elapsed().as_secs_f32() / d);
+        if t >= 1.0 { None } else { frames.get(((t * frames.len() as f32) as usize).min(frames.len().saturating_sub(1))) }
+    });
+    match (between, &p.shot) {
+        (Some(b), _) => layers = layers.push(picture(app, b, Point::ORIGIN, 1.0)),
+        (None, Some(s)) => layers = layers.push(picture(app, s, new_off, new_alpha)),
+        _ => {}
     }
     if let Some((_, s)) = &p.overlay {
         layers = layers.push(container(space()).width(Fill).height(Fill).style(jd_ui::style::fill(Color::from_rgba(0.0, 0.0, 0.0, 0.4))));
         layers = layers.push(picture(app, s, Point::ORIGIN, 1.0));
     }
     let name = app.doc().node(p.frame).map_or(String::new(), |n| n.name.clone());
+    // The page's flows, to jump to the start of one.
+    let flows = app.flows();
+    let mut chips = row![].spacing(6);
+    for (f, flow) in flows.iter().cloned() {
+        chips = chips.push(
+            iced::widget::button(text(flow).size(TEXT_SIZE_SMALL))
+                .padding(iced::Padding::from([3, 10]))
+                .style(jd_ui::style::ghost(f == p.frame))
+                .on_press(Message::Present(Some(f))),
+        );
+    }
     layers = layers.push(
         column![
-            row![text(name).size(TEXT_SIZE_SMALL).color(TEXT_SECONDARY), space::horizontal(), text("Esc to exit · ← → frames").size(TEXT_SIZE_SMALL).color(TEXT_MUTED)]
+            row![text(name).size(TEXT_SIZE_SMALL).color(TEXT_SECONDARY), space::horizontal(), chips, space::horizontal(), text("Esc to exit · ← → frames").size(TEXT_SIZE_SMALL).color(TEXT_MUTED)]
+                .spacing(12)
+                .align_y(iced::alignment::Vertical::Center)
                 .padding(12),
             space().height(Fill),
         ],
@@ -62,6 +82,12 @@ pub fn view(app: &Blobr) -> Option<Element<'_, Message>> {
             mouse_area(layers)
                 .on_move(Message::PresentMove)
                 .on_press(Message::PresentClick)
+                .on_scroll(|d| {
+                    Message::PresentScroll(match d {
+                        iced::mouse::ScrollDelta::Lines { x, y } => iced::Vector::new(x * 40.0, y * 40.0),
+                        iced::mouse::ScrollDelta::Pixels { x, y } => iced::Vector::new(x, y),
+                    })
+                })
                 .interaction(cursor),
         ),
     )

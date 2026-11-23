@@ -31,7 +31,8 @@ pub enum Event {
     /// Menu title `i` clicked: open its dropdown, or close it if it's already open.
     MenuTitle(usize),
     CloseMenu,
-    Resized(Size),
+    /// A window was resized (apps with more than one window only follow their main one).
+    Resized(window::Id, Size),
     Maximized(bool),
     ModeChanged(window::Mode),
     ResizeWindow(Direction),
@@ -109,7 +110,10 @@ impl WindowChrome {
             Event::CloseMenu => self.open_menu = None,
             // Maximised/fullscreen are re-queried on every resize so they stay right when
             // KWin maximises or snaps the window by other means.
-            Event::Resized(size) => {
+            Event::Resized(id, size) => {
+                if self.window.is_some_and(|w| w != id) {
+                    return Task::none();
+                }
                 self.size = size;
                 return self.with_window(|id| {
                     Task::batch([
@@ -140,7 +144,7 @@ impl WindowChrome {
     }
 
     pub fn subscription() -> Subscription<Event> {
-        window::resize_events().map(|(_, size)| Event::Resized(size))
+        window::resize_events().map(|(id, size)| Event::Resized(id, size))
     }
 
     fn with_window(&self, f: impl FnOnce(window::Id) -> Task<Event>) -> Task<Event> {

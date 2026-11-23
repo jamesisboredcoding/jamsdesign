@@ -173,7 +173,12 @@ CLI argument as a file to open. Names are provisional until Step 0.
         HTML for a subtree, an iced snippet, and the variables as Rust constants in the form
         `jd-ui`'s `theme.rs` uses (`jd_vector::inspect`, for the MCP server too); hovering
         shows distances while the tab is open
-  - [ ] Smart animate, scroll behaviour, prototype flows saved per page, a separate window
+  - [x] Smart animate (layers named the same move, resize, turn and fade; new ones fade in),
+        overflow scrolling (frames scroll their content while presenting, clamped to it),
+        flow starting points saved on a page's frames (listed in the Prototype tab and while
+        presenting), and View > Present in New Window (Ctrl+Alt+Shift+Enter): Blobr is now an
+        iced daemon, so the presentation gets a window of its own. Not done: fixed-position
+        layers while scrolling
 - [x] Step 7: interop and moving off Figma
   - [x] SVG import (File > Import SVG, or paste SVG markup): shapes, groups, gradients,
         strokes, images and text as outlines, through usvg (`jd_vector_render::import_svg`)

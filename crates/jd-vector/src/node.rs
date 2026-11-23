@@ -331,6 +331,24 @@ pub struct Props {
     /// Prototype interactions: what happens when this node is clicked, hovered, ...
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub reactions: Vec<Reaction>,
+    /// Prototype: this top-level frame starts a flow with this name (presenting lists the
+    /// page's flows).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flow: Option<String>,
+    /// Prototype: how a clipping frame scrolls what's inside it while presenting.
+    #[serde(skip_serializing_if = "is_default")]
+    pub overflow: Overflow,
+}
+
+/// Which way a frame's content scrolls when it doesn't fit (while presenting).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Overflow {
+    #[default]
+    None,
+    Vertical,
+    Horizontal,
+    Both,
 }
 
 /// A prototype interaction: a trigger on a node, and what it does.
@@ -380,6 +398,9 @@ pub enum Transition {
     SlideRight,
     SlideUp,
     SlideDown,
+    /// Layers with the same name in both frames move, resize and fade from one to the other;
+    /// the rest fades in.
+    SmartAnimate,
 }
 
 /// One file to export a node as.
@@ -443,6 +464,8 @@ impl Default for Props {
             modes: BTreeMap::new(),
             styles: StyleRefs::default(),
             reactions: Vec::new(),
+            flow: None,
+            overflow: Overflow::None,
         }
     }
 }

@@ -42,7 +42,15 @@ pub fn canvas_size(window: Size) -> Size {
     Size::new(w.max(1.0), h.max(1.0))
 }
 
-pub fn view(app: &Blobr) -> Element<'_, Message> {
+/// What a window shows: the presentation in its own window, or the main window.
+pub fn view(app: &Blobr, window: iced::window::Id) -> Element<'_, Message> {
+    if app.present_window.is_some_and(|(w, _)| w == window) {
+        return present::view(app).unwrap_or_else(|| container(space()).width(Fill).height(Fill).style(style::fill(BG_APP)).into());
+    }
+    main(app)
+}
+
+fn main(app: &Blobr) -> Element<'_, Message> {
     let center = column![doc_tabs(app), canvas::view(app), status_bar(app)].width(Fill).height(Fill);
     let workspace = container(
         row![
@@ -81,8 +89,10 @@ pub fn view(app: &Blobr) -> Element<'_, Message> {
     if app.variables_open {
         layers = layers.push(variables::view(app));
     }
-    if let Some(p) = present::view(app) {
-        // Presenting covers the whole window.
+    if app.present_window.is_none()
+        && let Some(p) = present::view(app)
+    {
+        // Presenting covers the whole window (unless it has one of its own).
         return p;
     }
     if let Some(after) = app.confirm {

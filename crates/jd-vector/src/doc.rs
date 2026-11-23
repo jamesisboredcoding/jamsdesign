@@ -59,6 +59,14 @@ impl Document {
         }
     }
 
+    /// Changes a node's properties directly, without an op, undo or layout: only for
+    /// throwaway copies of a document (animation frames, previews), never for edits.
+    pub fn preview_props(&mut self, id: NodeId, f: impl FnOnce(&mut crate::node::Props)) {
+        if let Some(n) = self.node_mut(id) {
+            f(&mut n.props);
+        }
+    }
+
     /// Every comment, by id.
     pub fn comments(&self) -> &BTreeMap<NodeId, crate::node::Comment> {
         &self.comments
