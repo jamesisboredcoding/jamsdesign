@@ -1,0 +1,4935 @@
+{
+ "icons": [
+  {
+   "op": "create",
+   "parent": 1,
+   "node": {
+    "type": "component",
+    "name": "icon/move",
+    "x": 1700,
+    "y": 1100,
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "clip": false
+   },
+   "key": "icon/move"
+  },
+  {
+   "op": "create",
+   "parent": "icon/move",
+   "node": {
+    "type": "vector",
+    "name": "Glyph",
+    "svg_path": "M6 3 L19 12 L12.5 13.5 L9.5 20 Z",
+    "svg_viewbox": [
+     24,
+     24
+    ],
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "stroke": {
+     "weight": 1.4,
+     "align": "center",
+     "cap": "round",
+     "join": "round"
+    },
+    "constraints": {
+     "horizontal": "scale",
+     "vertical": "scale"
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": 1,
+   "node": {
+    "type": "component",
+    "name": "icon/frame",
+    "x": 1724,
+    "y": 1100,
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "clip": false
+   },
+   "key": "icon/frame"
+  },
+  {
+   "op": "create",
+   "parent": "icon/frame",
+   "node": {
+    "type": "vector",
+    "name": "Glyph",
+    "svg_path": "M8 3 V21 M16 3 V21 M3 8 H21 M3 16 H21",
+    "svg_viewbox": [
+     24,
+     24
+    ],
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "stroke": {
+     "weight": 1.4,
+     "align": "center",
+     "cap": "round",
+     "join": "round"
+    },
+    "constraints": {
+     "horizontal": "scale",
+     "vertical": "scale"
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": 1,
+   "node": {
+    "type": "component",
+    "name": "icon/rectangle",
+    "x": 1748,
+    "y": 1100,
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "clip": false
+   },
+   "key": "icon/rectangle"
+  },
+  {
+   "op": "create",
+   "parent": "icon/rectangle",
+   "node": {
+    "type": "vector",
+    "name": "Glyph",
+    "svg_path": "M4 5 H20 V19 H4 Z",
+    "svg_viewbox": [
+     24,
+     24
+    ],
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "stroke": {
+     "weight": 1.4,
+     "align": "center",
+     "cap": "round",
+     "join": "round"
+    },
+    "constraints": {
+     "horizontal": "scale",
+     "vertical": "scale"
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": 1,
+   "node": {
+    "type": "component",
+    "name": "icon/ellipse",
+    "x": 1772,
+    "y": 1100,
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "clip": false
+   },
+   "key": "icon/ellipse"
+  },
+  {
+   "op": "create",
+   "parent": "icon/ellipse",
+   "node": {
+    "type": "vector",
+    "name": "Glyph",
+    "svg_path": "M12 4 C16.4 4 20 7.6 20 12 C20 16.4 16.4 20 12 20 C7.6 20 4 16.4 4 12 C4 7.6 7.6 4 12 4 Z",
+    "svg_viewbox": [
+     24,
+     24
+    ],
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "stroke": {
+     "weight": 1.4,
+     "align": "center",
+     "cap": "round",
+     "join": "round"
+    },
+    "constraints": {
+     "horizontal": "scale",
+     "vertical": "scale"
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": 1,
+   "node": {
+    "type": "component",
+    "name": "icon/pen",
+    "x": 1796,
+    "y": 1100,
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "clip": false
+   },
+   "key": "icon/pen"
+  },
+  {
+   "op": "create",
+   "parent": "icon/pen",
+   "node": {
+    "type": "vector",
+    "name": "Glyph",
+    "svg_path": "M12 3 L18 13 L12 21 L6 13 Z M12 3 V11",
+    "svg_viewbox": [
+     24,
+     24
+    ],
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "stroke": {
+     "weight": 1.4,
+     "align": "center",
+     "cap": "round",
+     "join": "round"
+    },
+    "constraints": {
+     "horizontal": "scale",
+     "vertical": "scale"
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": 1,
+   "node": {
+    "type": "component",
+    "name": "icon/text",
+    "x": 1820,
+    "y": 1100,
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "clip": false
+   },
+   "key": "icon/text"
+  },
+  {
+   "op": "create",
+   "parent": "icon/text",
+   "node": {
+    "type": "vector",
+    "name": "Glyph",
+    "svg_path": "M5 5 H19 M12 5 V20",
+    "svg_viewbox": [
+     24,
+     24
+    ],
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "stroke": {
+     "weight": 1.4,
+     "align": "center",
+     "cap": "round",
+     "join": "round"
+    },
+    "constraints": {
+     "horizontal": "scale",
+     "vertical": "scale"
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": 1,
+   "node": {
+    "type": "component",
+    "name": "icon/comment",
+    "x": 1844,
+    "y": 1100,
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "clip": false
+   },
+   "key": "icon/comment"
+  },
+  {
+   "op": "create",
+   "parent": "icon/comment",
+   "node": {
+    "type": "vector",
+    "name": "Glyph",
+    "svg_path": "M4 5 H20 V16 H10 L5 20 V16 H4 Z",
+    "svg_viewbox": [
+     24,
+     24
+    ],
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "stroke": {
+     "weight": 1.4,
+     "align": "center",
+     "cap": "round",
+     "join": "round"
+    },
+    "constraints": {
+     "horizontal": "scale",
+     "vertical": "scale"
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": 1,
+   "node": {
+    "type": "component",
+    "name": "icon/hand",
+    "x": 1868,
+    "y": 1100,
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "clip": false
+   },
+   "key": "icon/hand"
+  },
+  {
+   "op": "create",
+   "parent": "icon/hand",
+   "node": {
+    "type": "vector",
+    "name": "Glyph",
+    "svg_path": "M8 12 V6 M11 11 V4 M14 11 V5 M17 12 V8 M8 12 C8 18 10 20 13 20 C16 20 17 18 17 14",
+    "svg_viewbox": [
+     24,
+     24
+    ],
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "stroke": {
+     "weight": 1.4,
+     "align": "center",
+     "cap": "round",
+     "join": "round"
+    },
+    "constraints": {
+     "horizontal": "scale",
+     "vertical": "scale"
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": 1,
+   "node": {
+    "type": "component",
+    "name": "icon/search",
+    "x": 1892,
+    "y": 1100,
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "clip": false
+   },
+   "key": "icon/search"
+  },
+  {
+   "op": "create",
+   "parent": "icon/search",
+   "node": {
+    "type": "vector",
+    "name": "Glyph",
+    "svg_path": "M10.5 4 C14.1 4 17 6.9 17 10.5 C17 14.1 14.1 17 10.5 17 C6.9 17 4 14.1 4 10.5 C4 6.9 6.9 4 10.5 4 Z M15.5 15.5 L20 20",
+    "svg_viewbox": [
+     24,
+     24
+    ],
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "stroke": {
+     "weight": 1.4,
+     "align": "center",
+     "cap": "round",
+     "join": "round"
+    },
+    "constraints": {
+     "horizontal": "scale",
+     "vertical": "scale"
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": 1,
+   "node": {
+    "type": "component",
+    "name": "icon/page",
+    "x": 1916,
+    "y": 1100,
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "clip": false
+   },
+   "key": "icon/page"
+  },
+  {
+   "op": "create",
+   "parent": "icon/page",
+   "node": {
+    "type": "vector",
+    "name": "Glyph",
+    "svg_path": "M6 3 H14 L18 7 V21 H6 Z",
+    "svg_viewbox": [
+     24,
+     24
+    ],
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "stroke": {
+     "weight": 1.4,
+     "align": "center",
+     "cap": "round",
+     "join": "round"
+    },
+    "constraints": {
+     "horizontal": "scale",
+     "vertical": "scale"
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": 1,
+   "node": {
+    "type": "component",
+    "name": "icon/hash",
+    "x": 1940,
+    "y": 1100,
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "clip": false
+   },
+   "key": "icon/hash"
+  },
+  {
+   "op": "create",
+   "parent": "icon/hash",
+   "node": {
+    "type": "vector",
+    "name": "Glyph",
+    "svg_path": "M9 4 L7 20 M17 4 L15 20 M4 9 H20 M4 15 H20",
+    "svg_viewbox": [
+     24,
+     24
+    ],
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "stroke": {
+     "weight": 1.4,
+     "align": "center",
+     "cap": "round",
+     "join": "round"
+    },
+    "constraints": {
+     "horizontal": "scale",
+     "vertical": "scale"
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": 1,
+   "node": {
+    "type": "component",
+    "name": "icon/type",
+    "x": 1964,
+    "y": 1100,
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "clip": false
+   },
+   "key": "icon/type"
+  },
+  {
+   "op": "create",
+   "parent": "icon/type",
+   "node": {
+    "type": "vector",
+    "name": "Glyph",
+    "svg_path": "M6 6 H18 M12 6 V19",
+    "svg_viewbox": [
+     24,
+     24
+    ],
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "stroke": {
+     "weight": 1.4,
+     "align": "center",
+     "cap": "round",
+     "join": "round"
+    },
+    "constraints": {
+     "horizontal": "scale",
+     "vertical": "scale"
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": 1,
+   "node": {
+    "type": "component",
+    "name": "icon/component",
+    "x": 1988,
+    "y": 1100,
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "clip": false
+   },
+   "key": "icon/component"
+  },
+  {
+   "op": "create",
+   "parent": "icon/component",
+   "node": {
+    "type": "vector",
+    "name": "Glyph",
+    "svg_path": "M12 3 L16 7 L12 11 L8 7 Z M12 13 L16 17 L12 21 L8 17 Z M7 8 L11 12 L7 16 L3 12 Z M17 8 L21 12 L17 16 L13 12 Z",
+    "svg_viewbox": [
+     24,
+     24
+    ],
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "stroke": {
+     "weight": 1.4,
+     "align": "center",
+     "cap": "round",
+     "join": "round"
+    },
+    "constraints": {
+     "horizontal": "scale",
+     "vertical": "scale"
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": 1,
+   "node": {
+    "type": "component",
+    "name": "icon/plus",
+    "x": 2012,
+    "y": 1100,
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "clip": false
+   },
+   "key": "icon/plus"
+  },
+  {
+   "op": "create",
+   "parent": "icon/plus",
+   "node": {
+    "type": "vector",
+    "name": "Glyph",
+    "svg_path": "M12 5 V19 M5 12 H19",
+    "svg_viewbox": [
+     24,
+     24
+    ],
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "stroke": {
+     "weight": 1.4,
+     "align": "center",
+     "cap": "round",
+     "join": "round"
+    },
+    "constraints": {
+     "horizontal": "scale",
+     "vertical": "scale"
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": 1,
+   "node": {
+    "type": "component",
+    "name": "icon/chevron",
+    "x": 2036,
+    "y": 1100,
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "clip": false
+   },
+   "key": "icon/chevron"
+  },
+  {
+   "op": "create",
+   "parent": "icon/chevron",
+   "node": {
+    "type": "vector",
+    "name": "Glyph",
+    "svg_path": "M8 10 L12 14 L16 10",
+    "svg_viewbox": [
+     24,
+     24
+    ],
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "stroke": {
+     "weight": 1.4,
+     "align": "center",
+     "cap": "round",
+     "join": "round"
+    },
+    "constraints": {
+     "horizontal": "scale",
+     "vertical": "scale"
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": 1,
+   "node": {
+    "type": "component",
+    "name": "icon/eye",
+    "x": 2060,
+    "y": 1100,
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "clip": false
+   },
+   "key": "icon/eye"
+  },
+  {
+   "op": "create",
+   "parent": "icon/eye",
+   "node": {
+    "type": "vector",
+    "name": "Glyph",
+    "svg_path": "M3 12 C6 7 18 7 21 12 C18 17 6 17 3 12 Z M12 10 C13.1 10 14 10.9 14 12 C14 13.1 13.1 14 12 14 C10.9 14 10 13.1 10 12 C10 10.9 10.9 10 12 10 Z",
+    "svg_viewbox": [
+     24,
+     24
+    ],
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "stroke": {
+     "weight": 1.4,
+     "align": "center",
+     "cap": "round",
+     "join": "round"
+    },
+    "constraints": {
+     "horizontal": "scale",
+     "vertical": "scale"
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": 1,
+   "node": {
+    "type": "component",
+    "name": "icon/minus",
+    "x": 2084,
+    "y": 1100,
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "clip": false
+   },
+   "key": "icon/minus"
+  },
+  {
+   "op": "create",
+   "parent": "icon/minus",
+   "node": {
+    "type": "vector",
+    "name": "Glyph",
+    "svg_path": "M5 12 H19",
+    "svg_viewbox": [
+     24,
+     24
+    ],
+    "width": 16,
+    "height": 16,
+    "fills": [],
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "stroke": {
+     "weight": 1.4,
+     "align": "center",
+     "cap": "round",
+     "join": "round"
+    },
+    "constraints": {
+     "horizontal": "scale",
+     "vertical": "scale"
+    }
+   }
+  }
+ ],
+ "window": [
+  {
+   "op": "create",
+   "parent": 1,
+   "node": {
+    "type": "frame",
+    "name": "Components",
+    "x": 0,
+    "y": 1040,
+    "width": 1640,
+    "height": 260,
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#141414"
+     }
+    ],
+    "corner": 12
+   },
+   "key": "lib"
+  },
+  {
+   "op": "create",
+   "parent": "lib",
+   "node": {
+    "type": "text",
+    "name": "Heading",
+    "text": {
+     "content": "Components",
+     "style": {
+      "family": "Noto Sans",
+      "size": 14,
+      "style": "Bold"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#8C8C8C"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug",
+    "x": 24,
+    "y": 16
+   }
+  },
+  {
+   "op": "create",
+   "parent": "lib",
+   "node": {
+    "type": "component",
+    "name": "State=Default",
+    "x": 24,
+    "y": 56,
+    "width": 32,
+    "height": 32,
+    "corner": 8,
+    "fills": [],
+    "layout": {
+     "direction": "horizontal",
+     "align": "center",
+     "counter_align": "center"
+    }
+   },
+   "key": "tool.default"
+  },
+  {
+   "op": "create_instance",
+   "parent": "tool.default",
+   "component": "$icon/move",
+   "key": "tool.default.Icon"
+  },
+  {
+   "op": "set",
+   "id": "tool.default.Icon",
+   "patch": {
+    "refs": {
+     "swap": "Icon"
+    }
+   }
+  },
+  {
+   "op": "set",
+   "id": "tool.default",
+   "patch": {
+    "properties": {
+     "Icon": {
+      "type": "instance_swap",
+      "default": "$icon/move"
+     }
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": "lib",
+   "node": {
+    "type": "component",
+    "name": "State=Active",
+    "x": 64,
+    "y": 56,
+    "width": 32,
+    "height": 32,
+    "corner": 8,
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#4C8DFF"
+     }
+    ],
+    "layout": {
+     "direction": "horizontal",
+     "align": "center",
+     "counter_align": "center"
+    }
+   },
+   "key": "tool.active"
+  },
+  {
+   "op": "create_instance",
+   "parent": "tool.active",
+   "component": "$icon/move",
+   "key": "tool.active.Icon"
+  },
+  {
+   "op": "set",
+   "id": "tool.active.Icon",
+   "patch": {
+    "refs": {
+     "swap": "Icon"
+    }
+   }
+  },
+  {
+   "op": "set",
+   "id": "tool.active",
+   "patch": {
+    "properties": {
+     "Icon": {
+      "type": "instance_swap",
+      "default": "$icon/move"
+     }
+    }
+   }
+  },
+  {
+   "op": "combine_as_variants",
+   "ids": [
+    "tool.default",
+    "tool.active"
+   ],
+   "name": "Tool Button",
+   "key": "Tool Button"
+  },
+  {
+   "op": "set",
+   "id": "Tool Button",
+   "patch": {
+    "x": 24,
+    "y": 48
+   }
+  },
+  {
+   "op": "create",
+   "parent": "lib",
+   "node": {
+    "type": "component",
+    "name": "State=Active",
+    "x": 160,
+    "y": 56,
+    "height": 26,
+    "corner": 4,
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#2E2E2E"
+     }
+    ],
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#4C8DFF",
+      "opacity": 0.6
+     }
+    ],
+    "stroke": {
+     "weight": 1,
+     "align": "inside"
+    },
+    "layout": {
+     "direction": "horizontal",
+     "padding": {
+      "top": 0,
+      "right": 10,
+      "bottom": 0,
+      "left": 10
+     },
+     "counter_align": "center"
+    },
+    "sizing_h": "hug"
+   },
+   "key": "tab.active"
+  },
+  {
+   "op": "create",
+   "parent": "tab.active",
+   "node": {
+    "type": "text",
+    "name": "Label",
+    "text": {
+     "content": "Layers",
+     "style": {
+      "family": "Noto Sans",
+      "size": 12,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug",
+    "refs": {
+     "text": "Label"
+    }
+   }
+  },
+  {
+   "op": "set",
+   "id": "tab.active",
+   "patch": {
+    "properties": {
+     "Label": {
+      "type": "text",
+      "default": "Layers"
+     }
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": "lib",
+   "node": {
+    "type": "component",
+    "name": "State=Inactive",
+    "x": 240,
+    "y": 56,
+    "height": 26,
+    "corner": 4,
+    "fills": [],
+    "strokes": [],
+    "stroke": {
+     "weight": 1,
+     "align": "inside"
+    },
+    "layout": {
+     "direction": "horizontal",
+     "padding": {
+      "top": 0,
+      "right": 10,
+      "bottom": 0,
+      "left": 10
+     },
+     "counter_align": "center"
+    },
+    "sizing_h": "hug"
+   },
+   "key": "tab.inactive"
+  },
+  {
+   "op": "create",
+   "parent": "tab.inactive",
+   "node": {
+    "type": "text",
+    "name": "Label",
+    "text": {
+     "content": "Layers",
+     "style": {
+      "family": "Noto Sans",
+      "size": 12,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#8C8C8C"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug",
+    "refs": {
+     "text": "Label"
+    }
+   }
+  },
+  {
+   "op": "set",
+   "id": "tab.inactive",
+   "patch": {
+    "properties": {
+     "Label": {
+      "type": "text",
+      "default": "Layers"
+     }
+    }
+   }
+  },
+  {
+   "op": "combine_as_variants",
+   "ids": [
+    "tab.active",
+    "tab.inactive"
+   ],
+   "name": "Panel Tab",
+   "key": "Panel Tab"
+  },
+  {
+   "op": "set",
+   "id": "Panel Tab",
+   "patch": {
+    "x": 140,
+    "y": 48
+   }
+  },
+  {
+   "op": "create",
+   "parent": "lib",
+   "node": {
+    "type": "component",
+    "name": "State=Default",
+    "x": 360,
+    "y": 56,
+    "width": 248,
+    "height": 26,
+    "fills": [],
+    "layout": {
+     "direction": "horizontal",
+     "gap": 6,
+     "counter_align": "center",
+     "padding": {
+      "top": 0,
+      "right": 12,
+      "bottom": 0,
+      "left": 12
+     }
+    }
+   },
+   "key": "layer.default"
+  },
+  {
+   "op": "create",
+   "parent": "layer.default",
+   "node": {
+    "type": "frame",
+    "name": "Indent",
+    "width": 12,
+    "height": 16,
+    "fills": [],
+    "refs": {
+     "visible": "Nested"
+    }
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "layer.default",
+   "component": "$icon/hash",
+   "key": "layer.default.Icon"
+  },
+  {
+   "op": "set",
+   "id": "layer.default.Icon",
+   "patch": {
+    "refs": {
+     "swap": "Icon"
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": "layer.default",
+   "node": {
+    "type": "text",
+    "name": "Label",
+    "text": {
+     "content": "Layer",
+     "style": {
+      "family": "Noto Sans",
+      "size": 12,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug",
+    "refs": {
+     "text": "Label"
+    }
+   }
+  },
+  {
+   "op": "set",
+   "id": "layer.default",
+   "patch": {
+    "properties": {
+     "Label": {
+      "type": "text",
+      "default": "Layer"
+     },
+     "Icon": {
+      "type": "instance_swap",
+      "default": "$icon/hash"
+     },
+     "Nested": {
+      "type": "boolean",
+      "default": false
+     }
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": "lib",
+   "node": {
+    "type": "component",
+    "name": "State=Selected",
+    "x": 360,
+    "y": 90,
+    "width": 248,
+    "height": 26,
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#4C8DFF",
+      "opacity": 0.25
+     }
+    ],
+    "layout": {
+     "direction": "horizontal",
+     "gap": 6,
+     "counter_align": "center",
+     "padding": {
+      "top": 0,
+      "right": 12,
+      "bottom": 0,
+      "left": 12
+     }
+    }
+   },
+   "key": "layer.selected"
+  },
+  {
+   "op": "create",
+   "parent": "layer.selected",
+   "node": {
+    "type": "frame",
+    "name": "Indent",
+    "width": 12,
+    "height": 16,
+    "fills": [],
+    "refs": {
+     "visible": "Nested"
+    }
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "layer.selected",
+   "component": "$icon/hash",
+   "key": "layer.selected.Icon"
+  },
+  {
+   "op": "set",
+   "id": "layer.selected.Icon",
+   "patch": {
+    "refs": {
+     "swap": "Icon"
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": "layer.selected",
+   "node": {
+    "type": "text",
+    "name": "Label",
+    "text": {
+     "content": "Layer",
+     "style": {
+      "family": "Noto Sans",
+      "size": 12,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug",
+    "refs": {
+     "text": "Label"
+    }
+   }
+  },
+  {
+   "op": "set",
+   "id": "layer.selected",
+   "patch": {
+    "properties": {
+     "Label": {
+      "type": "text",
+      "default": "Layer"
+     },
+     "Icon": {
+      "type": "instance_swap",
+      "default": "$icon/hash"
+     },
+     "Nested": {
+      "type": "boolean",
+      "default": false
+     }
+    }
+   }
+  },
+  {
+   "op": "combine_as_variants",
+   "ids": [
+    "layer.default",
+    "layer.selected"
+   ],
+   "name": "Layer Row",
+   "key": "Layer Row"
+  },
+  {
+   "op": "set",
+   "id": "Layer Row",
+   "patch": {
+    "x": 340,
+    "y": 48
+   }
+  },
+  {
+   "op": "create",
+   "parent": "lib",
+   "node": {
+    "type": "component",
+    "name": "Section Header",
+    "x": 660,
+    "y": 56,
+    "width": 276,
+    "height": 36,
+    "fills": [],
+    "layout": {
+     "direction": "horizontal",
+     "align": "space_between",
+     "counter_align": "center",
+     "padding": {
+      "top": 0,
+      "right": 12,
+      "bottom": 0,
+      "left": 12
+     }
+    }
+   },
+   "key": "Section Header"
+  },
+  {
+   "op": "create",
+   "parent": "Section Header",
+   "node": {
+    "type": "text",
+    "name": "Title",
+    "text": {
+     "content": "Section",
+     "style": {
+      "family": "Noto Sans",
+      "size": 12,
+      "style": "Bold"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug",
+    "refs": {
+     "text": "Title"
+    }
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "Section Header",
+   "component": "$icon/plus",
+   "key": "sh.plus"
+  },
+  {
+   "op": "set",
+   "id": "sh.plus",
+   "patch": {
+    "refs": {
+     "visible": "Add"
+    }
+   }
+  },
+  {
+   "op": "set",
+   "id": "Section Header",
+   "patch": {
+    "properties": {
+     "Title": {
+      "type": "text",
+      "default": "Section"
+     },
+     "Add": {
+      "type": "boolean",
+      "default": true
+     }
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": "lib",
+   "node": {
+    "type": "component",
+    "name": "Field",
+    "x": 660,
+    "y": 110,
+    "width": 120,
+    "height": 28,
+    "corner": 4,
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#2A2A2A"
+     }
+    ],
+    "layout": {
+     "direction": "horizontal",
+     "gap": 8,
+     "counter_align": "center",
+     "padding": {
+      "top": 0,
+      "right": 8,
+      "bottom": 0,
+      "left": 8
+     }
+    }
+   },
+   "key": "Field"
+  },
+  {
+   "op": "create",
+   "parent": "Field",
+   "node": {
+    "type": "text",
+    "name": "Label",
+    "text": {
+     "content": "W",
+     "style": {
+      "family": "Noto Sans",
+      "size": 11,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#8C8C8C"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug",
+    "refs": {
+     "text": "Label"
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": "Field",
+   "node": {
+    "type": "text",
+    "name": "Value",
+    "text": {
+     "content": "100",
+     "style": {
+      "family": "Noto Sans",
+      "size": 12,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug",
+    "refs": {
+     "text": "Value"
+    }
+   }
+  },
+  {
+   "op": "set",
+   "id": "Field",
+   "patch": {
+    "properties": {
+     "Label": {
+      "type": "text",
+      "default": "W"
+     },
+     "Value": {
+      "type": "text",
+      "default": "100"
+     }
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": "lib",
+   "node": {
+    "type": "component",
+    "name": "Paint Row",
+    "x": 960,
+    "y": 56,
+    "width": 252,
+    "height": 28,
+    "fills": [],
+    "layout": {
+     "direction": "horizontal",
+     "gap": 8,
+     "counter_align": "center"
+    }
+   },
+   "key": "Paint Row"
+  },
+  {
+   "op": "create",
+   "parent": "Paint Row",
+   "node": {
+    "type": "rectangle",
+    "name": "Swatch",
+    "width": 16,
+    "height": 16,
+    "corner": 3,
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#4C8DFF"
+     }
+    ],
+    "strokes": []
+   }
+  },
+  {
+   "op": "create",
+   "parent": "Paint Row",
+   "node": {
+    "type": "text",
+    "name": "Hex",
+    "text": {
+     "content": "4C8DFF",
+     "style": {
+      "family": "Noto Sans",
+      "size": 12,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "sizing_h": "fill",
+    "sizing_v": "hug",
+    "refs": {
+     "text": "Hex"
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": "Paint Row",
+   "node": {
+    "type": "text",
+    "name": "Opacity",
+    "text": {
+     "content": "100%",
+     "style": {
+      "family": "Noto Sans",
+      "size": 12,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#8C8C8C"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "Paint Row",
+   "component": "$icon/eye"
+  },
+  {
+   "op": "create_instance",
+   "parent": "Paint Row",
+   "component": "$icon/minus"
+  },
+  {
+   "op": "set",
+   "id": "Paint Row",
+   "patch": {
+    "properties": {
+     "Hex": {
+      "type": "text",
+      "default": "4C8DFF"
+     }
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": 1,
+   "node": {
+    "type": "frame",
+    "name": "Blobr - Main Window",
+    "x": 0,
+    "y": 0,
+    "width": 1600,
+    "height": 960,
+    "corner": 10,
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#1E1E1E"
+     }
+    ],
+    "clip": true,
+    "layout": {
+     "direction": "vertical"
+    }
+   },
+   "key": "win"
+  },
+  {
+   "op": "create",
+   "parent": "win",
+   "node": {
+    "type": "frame",
+    "name": "Menu bar",
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#1A1A1A"
+     }
+    ],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 18,
+     "padding": {
+      "top": 0,
+      "right": 12,
+      "bottom": 0,
+      "left": 12
+     },
+     "align": "start",
+     "counter_align": "center"
+    },
+    "sizing_h": "fill",
+    "sizing_v": "fixed",
+    "height": 32
+   },
+   "key": "menu"
+  },
+  {
+   "op": "create",
+   "parent": "menu",
+   "node": {
+    "type": "rectangle",
+    "name": "Logo",
+    "width": 20,
+    "height": 20,
+    "corner": 5,
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#7B61FF"
+     }
+    ],
+    "strokes": []
+   }
+  },
+  {
+   "op": "create",
+   "parent": "menu",
+   "node": {
+    "type": "text",
+    "name": "File",
+    "text": {
+     "content": "File",
+     "style": {
+      "family": "Noto Sans",
+      "size": 13,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "menu",
+   "node": {
+    "type": "text",
+    "name": "Edit",
+    "text": {
+     "content": "Edit",
+     "style": {
+      "family": "Noto Sans",
+      "size": 13,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "menu",
+   "node": {
+    "type": "text",
+    "name": "View",
+    "text": {
+     "content": "View",
+     "style": {
+      "family": "Noto Sans",
+      "size": 13,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "menu",
+   "node": {
+    "type": "text",
+    "name": "Object",
+    "text": {
+     "content": "Object",
+     "style": {
+      "family": "Noto Sans",
+      "size": 13,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "menu",
+   "node": {
+    "type": "text",
+    "name": "Text",
+    "text": {
+     "content": "Text",
+     "style": {
+      "family": "Noto Sans",
+      "size": 13,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "menu",
+   "node": {
+    "type": "text",
+    "name": "Arrange",
+    "text": {
+     "content": "Arrange",
+     "style": {
+      "family": "Noto Sans",
+      "size": 13,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "menu",
+   "node": {
+    "type": "text",
+    "name": "Plugins",
+    "text": {
+     "content": "Plugins",
+     "style": {
+      "family": "Noto Sans",
+      "size": 13,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "menu",
+   "node": {
+    "type": "text",
+    "name": "Window",
+    "text": {
+     "content": "Window",
+     "style": {
+      "family": "Noto Sans",
+      "size": 13,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "menu",
+   "node": {
+    "type": "text",
+    "name": "Help",
+    "text": {
+     "content": "Help",
+     "style": {
+      "family": "Noto Sans",
+      "size": 13,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#E8E8E8"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "menu",
+   "node": {
+    "type": "text",
+    "name": "Title",
+    "text": {
+     "content": "Onboarding Flow.jdb - Blobr",
+     "style": {
+      "family": "Noto Sans",
+      "size": 12,
+      "style": "Regular",
+      "align": "center"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#8C8C8C"
+     }
+    ],
+    "sizing_h": "fill",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "menu",
+   "node": {
+    "type": "frame",
+    "name": "Export",
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#4C8DFF"
+     }
+    ],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 6,
+     "padding": {
+      "top": 4,
+      "right": 10,
+      "bottom": 4,
+      "left": 10
+     },
+     "align": "start",
+     "counter_align": "center"
+    },
+    "sizing_h": "hug",
+    "sizing_v": "hug",
+    "corner": 5
+   },
+   "key": "export"
+  },
+  {
+   "op": "create",
+   "parent": "export",
+   "node": {
+    "type": "text",
+    "name": "Label",
+    "text": {
+     "content": "Export",
+     "style": {
+      "family": "Noto Sans",
+      "size": 12,
+      "style": "Bold"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#FFFFFF"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "menu",
+   "node": {
+    "type": "ellipse",
+    "name": "Window control",
+    "width": 12,
+    "height": 12,
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#3A3A3A"
+     }
+    ],
+    "strokes": []
+   }
+  },
+  {
+   "op": "create",
+   "parent": "menu",
+   "node": {
+    "type": "ellipse",
+    "name": "Window control",
+    "width": 12,
+    "height": 12,
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#3A3A3A"
+     }
+    ],
+    "strokes": []
+   }
+  },
+  {
+   "op": "create",
+   "parent": "menu",
+   "node": {
+    "type": "ellipse",
+    "name": "Window control",
+    "width": 12,
+    "height": 12,
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#E5484D"
+     }
+    ],
+    "strokes": []
+   }
+  },
+  {
+   "op": "create",
+   "parent": "win",
+   "node": {
+    "type": "frame",
+    "name": "Body",
+    "fills": [],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 0,
+     "padding": 0,
+     "align": "start",
+     "counter_align": "start"
+    },
+    "sizing_h": "fill",
+    "sizing_v": "fill"
+   },
+   "key": "body"
+  },
+  {
+   "op": "create",
+   "parent": "body",
+   "node": {
+    "type": "frame",
+    "name": "Toolbar",
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#1A1A1A"
+     }
+    ],
+    "clip": false,
+    "layout": {
+     "direction": "vertical",
+     "gap": 6,
+     "padding": {
+      "top": 8,
+      "right": 8,
+      "bottom": 8,
+      "left": 8
+     },
+     "align": "start",
+     "counter_align": "center"
+    },
+    "sizing_h": "hug",
+    "sizing_v": "fill"
+   },
+   "key": "tools"
+  },
+  {
+   "op": "create_instance",
+   "parent": "tools",
+   "component": "tool.active",
+   "key": "tool0"
+  },
+  {
+   "op": "set",
+   "id": "tool0",
+   "patch": {
+    "values": {
+     "Icon": "$icon/move"
+    }
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "tools",
+   "component": "tool.default",
+   "key": "tool1"
+  },
+  {
+   "op": "set",
+   "id": "tool1",
+   "patch": {
+    "values": {
+     "Icon": "$icon/frame"
+    }
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "tools",
+   "component": "tool.default",
+   "key": "tool2"
+  },
+  {
+   "op": "set",
+   "id": "tool2",
+   "patch": {
+    "values": {
+     "Icon": "$icon/rectangle"
+    }
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "tools",
+   "component": "tool.default",
+   "key": "tool3"
+  },
+  {
+   "op": "set",
+   "id": "tool3",
+   "patch": {
+    "values": {
+     "Icon": "$icon/ellipse"
+    }
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "tools",
+   "component": "tool.default",
+   "key": "tool4"
+  },
+  {
+   "op": "set",
+   "id": "tool4",
+   "patch": {
+    "values": {
+     "Icon": "$icon/pen"
+    }
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "tools",
+   "component": "tool.default",
+   "key": "tool5"
+  },
+  {
+   "op": "set",
+   "id": "tool5",
+   "patch": {
+    "values": {
+     "Icon": "$icon/text"
+    }
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "tools",
+   "component": "tool.default",
+   "key": "tool6"
+  },
+  {
+   "op": "set",
+   "id": "tool6",
+   "patch": {
+    "values": {
+     "Icon": "$icon/comment"
+    }
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "tools",
+   "component": "tool.default",
+   "key": "tool7"
+  },
+  {
+   "op": "set",
+   "id": "tool7",
+   "patch": {
+    "values": {
+     "Icon": "$icon/hand"
+    }
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "tools",
+   "component": "tool.default",
+   "key": "tool8"
+  },
+  {
+   "op": "set",
+   "id": "tool8",
+   "patch": {
+    "values": {
+     "Icon": "$icon/search"
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": "body",
+   "node": {
+    "type": "frame",
+    "name": "Left panel",
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#252525"
+     }
+    ],
+    "clip": false,
+    "layout": {
+     "direction": "vertical",
+     "gap": 0,
+     "padding": 0,
+     "align": "start",
+     "counter_align": "start"
+    },
+    "sizing_h": "fixed",
+    "sizing_v": "fill",
+    "width": 248,
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#333333"
+     }
+    ],
+    "stroke": {
+     "weight": 1,
+     "align": "inside"
+    }
+   },
+   "key": "left"
+  },
+  {
+   "op": "create",
+   "parent": "left",
+   "node": {
+    "type": "frame",
+    "name": "Tabs",
+    "fills": [],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 4,
+     "padding": 8,
+     "align": "start",
+     "counter_align": "center"
+    },
+    "sizing_h": "fill",
+    "sizing_v": "hug"
+   },
+   "key": "ltabs"
+  },
+  {
+   "op": "create_instance",
+   "parent": "ltabs",
+   "component": "tab.active",
+   "key": "lt1"
+  },
+  {
+   "op": "set",
+   "id": "lt1",
+   "patch": {
+    "values": {
+     "Label": "Layers"
+    }
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "ltabs",
+   "component": "tab.inactive",
+   "key": "lt2"
+  },
+  {
+   "op": "set",
+   "id": "lt2",
+   "patch": {
+    "values": {
+     "Label": "Assets"
+    }
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "left",
+   "component": "Section Header",
+   "key": "pages.h"
+  },
+  {
+   "op": "set",
+   "id": "pages.h",
+   "patch": {
+    "values": {
+     "Title": "Pages"
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "left",
+   "component": "layer.default",
+   "key": "page0"
+  },
+  {
+   "op": "set",
+   "id": "page0",
+   "patch": {
+    "values": {
+     "Label": "Cover",
+     "Icon": "$icon/page"
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "left",
+   "component": "layer.selected",
+   "key": "page1"
+  },
+  {
+   "op": "set",
+   "id": "page1",
+   "patch": {
+    "values": {
+     "Label": "Onboarding",
+     "Icon": "$icon/page"
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "left",
+   "component": "layer.default",
+   "key": "page2"
+  },
+  {
+   "op": "set",
+   "id": "page2",
+   "patch": {
+    "values": {
+     "Label": "Components",
+     "Icon": "$icon/page"
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "left",
+   "component": "layer.default",
+   "key": "page3"
+  },
+  {
+   "op": "set",
+   "id": "page3",
+   "patch": {
+    "values": {
+     "Label": "Archive",
+     "Icon": "$icon/page"
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "left",
+   "component": "Section Header",
+   "key": "layers.h"
+  },
+  {
+   "op": "set",
+   "id": "layers.h",
+   "patch": {
+    "values": {
+     "Title": "Layers",
+     "Add": false
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "left",
+   "component": "layer.default",
+   "key": "layer0"
+  },
+  {
+   "op": "set",
+   "id": "layer0",
+   "patch": {
+    "values": {
+     "Label": "Sign up",
+     "Icon": "$icon/hash",
+     "Nested": false
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "left",
+   "component": "layer.default",
+   "key": "layer1"
+  },
+  {
+   "op": "set",
+   "id": "layer1",
+   "patch": {
+    "values": {
+     "Label": "Interests",
+     "Icon": "$icon/hash",
+     "Nested": false
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "left",
+   "component": "layer.default",
+   "key": "layer2"
+  },
+  {
+   "op": "set",
+   "id": "layer2",
+   "patch": {
+    "values": {
+     "Label": "Welcome",
+     "Icon": "$icon/hash",
+     "Nested": false
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "left",
+   "component": "layer.selected",
+   "key": "layer3"
+  },
+  {
+   "op": "set",
+   "id": "layer3",
+   "patch": {
+    "values": {
+     "Label": "Get started",
+     "Icon": "$icon/component",
+     "Nested": true
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "left",
+   "component": "layer.default",
+   "key": "layer4"
+  },
+  {
+   "op": "set",
+   "id": "layer4",
+   "patch": {
+    "values": {
+     "Label": "Already have an account?",
+     "Icon": "$icon/type",
+     "Nested": true
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "left",
+   "component": "layer.default",
+   "key": "layer5"
+  },
+  {
+   "op": "set",
+   "id": "layer5",
+   "patch": {
+    "values": {
+     "Label": "Subtitle",
+     "Icon": "$icon/type",
+     "Nested": true
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "left",
+   "component": "layer.default",
+   "key": "layer6"
+  },
+  {
+   "op": "set",
+   "id": "layer6",
+   "patch": {
+    "values": {
+     "Label": "Title",
+     "Icon": "$icon/type",
+     "Nested": true
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "left",
+   "component": "layer.default",
+   "key": "layer7"
+  },
+  {
+   "op": "set",
+   "id": "layer7",
+   "patch": {
+    "values": {
+     "Label": "Pager dots",
+     "Icon": "$icon/hash",
+     "Nested": true
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "left",
+   "component": "layer.default",
+   "key": "layer8"
+  },
+  {
+   "op": "set",
+   "id": "layer8",
+   "patch": {
+    "values": {
+     "Label": "Hero blobs",
+     "Icon": "$icon/hash",
+     "Nested": true
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "left",
+   "component": "layer.default",
+   "key": "layer9"
+  },
+  {
+   "op": "set",
+   "id": "layer9",
+   "patch": {
+    "values": {
+     "Label": "Status bar",
+     "Icon": "$icon/component",
+     "Nested": true
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "body",
+   "node": {
+    "type": "frame",
+    "name": "Canvas",
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#181818"
+     }
+    ],
+    "sizing_h": "fill",
+    "sizing_v": "fill",
+    "clip": true
+   },
+   "key": "canvas"
+  },
+  {
+   "op": "create",
+   "parent": "canvas",
+   "node": {
+    "type": "frame",
+    "name": "Tabs",
+    "fills": [],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 2,
+     "padding": {
+      "top": 4,
+      "right": 0,
+      "bottom": 0,
+      "left": 4
+     },
+     "align": "start",
+     "counter_align": "center"
+    },
+    "sizing_h": "hug",
+    "sizing_v": "hug",
+    "x": 0,
+    "y": 0
+   },
+   "key": "dtabs"
+  },
+  {
+   "op": "create_instance",
+   "parent": "dtabs",
+   "component": "tab.active",
+   "key": "dt1"
+  },
+  {
+   "op": "set",
+   "id": "dt1",
+   "patch": {
+    "values": {
+     "Label": "Onboarding Flow.jdb @ 50%"
+    }
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "dtabs",
+   "component": "tab.inactive",
+   "key": "dt2"
+  },
+  {
+   "op": "set",
+   "id": "dt2",
+   "patch": {
+    "values": {
+     "Label": "Design System.jdb @ 100%"
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": "canvas",
+   "node": {
+    "type": "text",
+    "name": "Welcome label",
+    "text": {
+     "content": "Welcome",
+     "style": {
+      "family": "Noto Sans",
+      "size": 11,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#4C8DFF"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug",
+    "x": 150,
+    "y": 226
+   }
+  },
+  {
+   "op": "create",
+   "parent": "canvas",
+   "node": {
+    "type": "frame",
+    "name": "Welcome",
+    "x": 150,
+    "y": 244,
+    "width": 196,
+    "height": 426,
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#FAF6F0"
+     }
+    ],
+    "layout": {
+     "direction": "vertical",
+     "gap": 8,
+     "padding": {
+      "top": 12,
+      "right": 12,
+      "bottom": 16,
+      "left": 12
+     }
+    }
+   },
+   "key": "s0"
+  },
+  {
+   "op": "create",
+   "parent": "s0",
+   "node": {
+    "type": "text",
+    "name": "Status bar",
+    "text": {
+     "content": "9:41",
+     "style": {
+      "family": "Noto Sans",
+      "size": 7,
+      "style": "Bold"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#1A1A1A"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "s0",
+   "node": {
+    "type": "frame",
+    "name": "Hero blobs",
+    "width": 172,
+    "height": 170,
+    "fills": [],
+    "sizing_h": "fill"
+   },
+   "key": "hero"
+  },
+  {
+   "op": "create",
+   "parent": "hero",
+   "node": {
+    "type": "ellipse",
+    "name": "Coral",
+    "x": 18,
+    "y": 28,
+    "width": 100,
+    "height": 96,
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#FF7A59"
+     }
+    ],
+    "strokes": []
+   }
+  },
+  {
+   "op": "create",
+   "parent": "hero",
+   "node": {
+    "type": "ellipse",
+    "name": "Violet",
+    "x": 80,
+    "y": 60,
+    "width": 66,
+    "height": 66,
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#8B5CF6"
+     }
+    ],
+    "strokes": []
+   }
+  },
+  {
+   "op": "create",
+   "parent": "hero",
+   "node": {
+    "type": "ellipse",
+    "name": "Sun",
+    "x": 10,
+    "y": 98,
+    "width": 36,
+    "height": 36,
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#F5C542"
+     }
+    ],
+    "strokes": []
+   }
+  },
+  {
+   "op": "create",
+   "parent": "s0",
+   "node": {
+    "type": "text",
+    "name": "Title",
+    "text": {
+     "content": "Make something\nwonderful",
+     "style": {
+      "family": "Noto Sans",
+      "size": 15,
+      "style": "Bold"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#141414"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "s0",
+   "node": {
+    "type": "text",
+    "name": "Subtitle",
+    "text": {
+     "content": "Sketch, plan and ship ideas together, on a canvas that never runs out.",
+     "style": {
+      "family": "Noto Sans",
+      "size": 7.5,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#6B6B6B"
+     }
+    ],
+    "sizing_h": "fill",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "s0",
+   "node": {
+    "type": "frame",
+    "name": "Spacer",
+    "fills": [],
+    "sizing_h": "fill",
+    "sizing_v": "fill",
+    "height": 1
+   }
+  },
+  {
+   "op": "create",
+   "parent": "s0",
+   "node": {
+    "type": "frame",
+    "name": "Get started",
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#4C8DFF"
+     }
+    ],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 0,
+     "padding": 8,
+     "align": "center",
+     "counter_align": "center"
+    },
+    "sizing_h": "fill",
+    "sizing_v": "hug",
+    "corner": 6
+   },
+   "key": "cta0"
+  },
+  {
+   "op": "create",
+   "parent": "cta0",
+   "node": {
+    "type": "text",
+    "name": "Label",
+    "text": {
+     "content": "Get started",
+     "style": {
+      "family": "Noto Sans",
+      "size": 8,
+      "style": "Bold"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#FFFFFF"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "canvas",
+   "node": {
+    "type": "text",
+    "name": "Interests label",
+    "text": {
+     "content": "Interests",
+     "style": {
+      "family": "Noto Sans",
+      "size": 11,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#8C8C8C"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug",
+    "x": 406,
+    "y": 226
+   }
+  },
+  {
+   "op": "create",
+   "parent": "canvas",
+   "node": {
+    "type": "frame",
+    "name": "Interests",
+    "x": 406,
+    "y": 244,
+    "width": 196,
+    "height": 426,
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#FAF6F0"
+     }
+    ],
+    "layout": {
+     "direction": "vertical",
+     "gap": 8,
+     "padding": {
+      "top": 12,
+      "right": 12,
+      "bottom": 16,
+      "left": 12
+     }
+    }
+   },
+   "key": "s1"
+  },
+  {
+   "op": "create",
+   "parent": "s1",
+   "node": {
+    "type": "text",
+    "name": "Status bar",
+    "text": {
+     "content": "9:41",
+     "style": {
+      "family": "Noto Sans",
+      "size": 7,
+      "style": "Bold"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#1A1A1A"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "s1",
+   "node": {
+    "type": "text",
+    "name": "Step",
+    "text": {
+     "content": "Step 2 of 3",
+     "style": {
+      "family": "Noto Sans",
+      "size": 7,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#4C8DFF"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "s1",
+   "node": {
+    "type": "text",
+    "name": "Title",
+    "text": {
+     "content": "What do you like\nmaking?",
+     "style": {
+      "family": "Noto Sans",
+      "size": 15,
+      "style": "Bold"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#141414"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "s1",
+   "node": {
+    "type": "frame",
+    "name": "Chips",
+    "fills": [],
+    "sizing_h": "fill",
+    "sizing_v": "hug",
+    "layout": {
+     "direction": "horizontal",
+     "wrap": true,
+     "gap": 4,
+     "row_gap": 4
+    }
+   },
+   "key": "chips"
+  },
+  {
+   "op": "create",
+   "parent": "chips",
+   "node": {
+    "type": "frame",
+    "name": "Illustration",
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#FFFFFF"
+     }
+    ],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 0,
+     "padding": {
+      "top": 3,
+      "right": 7,
+      "bottom": 3,
+      "left": 7
+     },
+     "align": "start",
+     "counter_align": "center"
+    },
+    "sizing_h": "hug",
+    "sizing_v": "hug",
+    "corner": 10,
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#DDDDDD"
+     }
+    ],
+    "stroke": {
+     "weight": 0.5,
+     "align": "inside"
+    }
+   },
+   "key": "chip0"
+  },
+  {
+   "op": "create",
+   "parent": "chip0",
+   "node": {
+    "type": "text",
+    "name": "Label",
+    "text": {
+     "content": "Illustration",
+     "style": {
+      "family": "Noto Sans",
+      "size": 6.5,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#333333"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "chips",
+   "node": {
+    "type": "frame",
+    "name": "UI design",
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#1A1A1A"
+     }
+    ],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 0,
+     "padding": {
+      "top": 3,
+      "right": 7,
+      "bottom": 3,
+      "left": 7
+     },
+     "align": "start",
+     "counter_align": "center"
+    },
+    "sizing_h": "hug",
+    "sizing_v": "hug",
+    "corner": 10,
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#DDDDDD"
+     }
+    ],
+    "stroke": {
+     "weight": 0.5,
+     "align": "inside"
+    }
+   },
+   "key": "chip1"
+  },
+  {
+   "op": "create",
+   "parent": "chip1",
+   "node": {
+    "type": "text",
+    "name": "Label",
+    "text": {
+     "content": "UI design",
+     "style": {
+      "family": "Noto Sans",
+      "size": 6.5,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#FFFFFF"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "chips",
+   "node": {
+    "type": "frame",
+    "name": "Posters",
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#1A1A1A"
+     }
+    ],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 0,
+     "padding": {
+      "top": 3,
+      "right": 7,
+      "bottom": 3,
+      "left": 7
+     },
+     "align": "start",
+     "counter_align": "center"
+    },
+    "sizing_h": "hug",
+    "sizing_v": "hug",
+    "corner": 10,
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#DDDDDD"
+     }
+    ],
+    "stroke": {
+     "weight": 0.5,
+     "align": "inside"
+    }
+   },
+   "key": "chip2"
+  },
+  {
+   "op": "create",
+   "parent": "chip2",
+   "node": {
+    "type": "text",
+    "name": "Label",
+    "text": {
+     "content": "Posters",
+     "style": {
+      "family": "Noto Sans",
+      "size": 6.5,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#FFFFFF"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "chips",
+   "node": {
+    "type": "frame",
+    "name": "Typography",
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#FFFFFF"
+     }
+    ],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 0,
+     "padding": {
+      "top": 3,
+      "right": 7,
+      "bottom": 3,
+      "left": 7
+     },
+     "align": "start",
+     "counter_align": "center"
+    },
+    "sizing_h": "hug",
+    "sizing_v": "hug",
+    "corner": 10,
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#DDDDDD"
+     }
+    ],
+    "stroke": {
+     "weight": 0.5,
+     "align": "inside"
+    }
+   },
+   "key": "chip3"
+  },
+  {
+   "op": "create",
+   "parent": "chip3",
+   "node": {
+    "type": "text",
+    "name": "Label",
+    "text": {
+     "content": "Typography",
+     "style": {
+      "family": "Noto Sans",
+      "size": 6.5,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#333333"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "chips",
+   "node": {
+    "type": "frame",
+    "name": "Motion",
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#1A1A1A"
+     }
+    ],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 0,
+     "padding": {
+      "top": 3,
+      "right": 7,
+      "bottom": 3,
+      "left": 7
+     },
+     "align": "start",
+     "counter_align": "center"
+    },
+    "sizing_h": "hug",
+    "sizing_v": "hug",
+    "corner": 10,
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#DDDDDD"
+     }
+    ],
+    "stroke": {
+     "weight": 0.5,
+     "align": "inside"
+    }
+   },
+   "key": "chip4"
+  },
+  {
+   "op": "create",
+   "parent": "chip4",
+   "node": {
+    "type": "text",
+    "name": "Label",
+    "text": {
+     "content": "Motion",
+     "style": {
+      "family": "Noto Sans",
+      "size": 6.5,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#FFFFFF"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "chips",
+   "node": {
+    "type": "frame",
+    "name": "3D",
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#FFFFFF"
+     }
+    ],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 0,
+     "padding": {
+      "top": 3,
+      "right": 7,
+      "bottom": 3,
+      "left": 7
+     },
+     "align": "start",
+     "counter_align": "center"
+    },
+    "sizing_h": "hug",
+    "sizing_v": "hug",
+    "corner": 10,
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#DDDDDD"
+     }
+    ],
+    "stroke": {
+     "weight": 0.5,
+     "align": "inside"
+    }
+   },
+   "key": "chip5"
+  },
+  {
+   "op": "create",
+   "parent": "chip5",
+   "node": {
+    "type": "text",
+    "name": "Label",
+    "text": {
+     "content": "3D",
+     "style": {
+      "family": "Noto Sans",
+      "size": 6.5,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#333333"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "chips",
+   "node": {
+    "type": "frame",
+    "name": "Photography",
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#FFFFFF"
+     }
+    ],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 0,
+     "padding": {
+      "top": 3,
+      "right": 7,
+      "bottom": 3,
+      "left": 7
+     },
+     "align": "start",
+     "counter_align": "center"
+    },
+    "sizing_h": "hug",
+    "sizing_v": "hug",
+    "corner": 10,
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#DDDDDD"
+     }
+    ],
+    "stroke": {
+     "weight": 0.5,
+     "align": "inside"
+    }
+   },
+   "key": "chip6"
+  },
+  {
+   "op": "create",
+   "parent": "chip6",
+   "node": {
+    "type": "text",
+    "name": "Label",
+    "text": {
+     "content": "Photography",
+     "style": {
+      "family": "Noto Sans",
+      "size": 6.5,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#333333"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "chips",
+   "node": {
+    "type": "frame",
+    "name": "Branding",
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#FFFFFF"
+     }
+    ],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 0,
+     "padding": {
+      "top": 3,
+      "right": 7,
+      "bottom": 3,
+      "left": 7
+     },
+     "align": "start",
+     "counter_align": "center"
+    },
+    "sizing_h": "hug",
+    "sizing_v": "hug",
+    "corner": 10,
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#DDDDDD"
+     }
+    ],
+    "stroke": {
+     "weight": 0.5,
+     "align": "inside"
+    }
+   },
+   "key": "chip7"
+  },
+  {
+   "op": "create",
+   "parent": "chip7",
+   "node": {
+    "type": "text",
+    "name": "Label",
+    "text": {
+     "content": "Branding",
+     "style": {
+      "family": "Noto Sans",
+      "size": 6.5,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#333333"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "chips",
+   "node": {
+    "type": "frame",
+    "name": "Icons",
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#FFFFFF"
+     }
+    ],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 0,
+     "padding": {
+      "top": 3,
+      "right": 7,
+      "bottom": 3,
+      "left": 7
+     },
+     "align": "start",
+     "counter_align": "center"
+    },
+    "sizing_h": "hug",
+    "sizing_v": "hug",
+    "corner": 10,
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#DDDDDD"
+     }
+    ],
+    "stroke": {
+     "weight": 0.5,
+     "align": "inside"
+    }
+   },
+   "key": "chip8"
+  },
+  {
+   "op": "create",
+   "parent": "chip8",
+   "node": {
+    "type": "text",
+    "name": "Label",
+    "text": {
+     "content": "Icons",
+     "style": {
+      "family": "Noto Sans",
+      "size": 6.5,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#333333"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "s1",
+   "node": {
+    "type": "frame",
+    "name": "Spacer",
+    "fills": [],
+    "sizing_h": "fill",
+    "sizing_v": "fill",
+    "height": 1
+   }
+  },
+  {
+   "op": "create",
+   "parent": "s1",
+   "node": {
+    "type": "frame",
+    "name": "Continue",
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#4C8DFF"
+     }
+    ],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 0,
+     "padding": 8,
+     "align": "center",
+     "counter_align": "center"
+    },
+    "sizing_h": "fill",
+    "sizing_v": "hug",
+    "corner": 6
+   },
+   "key": "cta1"
+  },
+  {
+   "op": "create",
+   "parent": "cta1",
+   "node": {
+    "type": "text",
+    "name": "Label",
+    "text": {
+     "content": "Continue",
+     "style": {
+      "family": "Noto Sans",
+      "size": 8,
+      "style": "Bold"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#FFFFFF"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "canvas",
+   "node": {
+    "type": "text",
+    "name": "Sign up label",
+    "text": {
+     "content": "Sign up",
+     "style": {
+      "family": "Noto Sans",
+      "size": 11,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#8C8C8C"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug",
+    "x": 662,
+    "y": 226
+   }
+  },
+  {
+   "op": "create",
+   "parent": "canvas",
+   "node": {
+    "type": "frame",
+    "name": "Sign up",
+    "x": 662,
+    "y": 244,
+    "width": 196,
+    "height": 426,
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#FAF6F0"
+     }
+    ],
+    "layout": {
+     "direction": "vertical",
+     "gap": 8,
+     "padding": {
+      "top": 12,
+      "right": 12,
+      "bottom": 16,
+      "left": 12
+     }
+    }
+   },
+   "key": "s2"
+  },
+  {
+   "op": "create",
+   "parent": "s2",
+   "node": {
+    "type": "text",
+    "name": "Status bar",
+    "text": {
+     "content": "9:41",
+     "style": {
+      "family": "Noto Sans",
+      "size": 7,
+      "style": "Bold"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#1A1A1A"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "s2",
+   "node": {
+    "type": "text",
+    "name": "Step",
+    "text": {
+     "content": "Step 3 of 3",
+     "style": {
+      "family": "Noto Sans",
+      "size": 7,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#4C8DFF"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "s2",
+   "node": {
+    "type": "text",
+    "name": "Title",
+    "text": {
+     "content": "Create your account",
+     "style": {
+      "family": "Noto Sans",
+      "size": 15,
+      "style": "Bold"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#141414"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "s2",
+   "node": {
+    "type": "text",
+    "name": "Name label",
+    "text": {
+     "content": "Name",
+     "style": {
+      "family": "Noto Sans",
+      "size": 6,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#6B6B6B"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "s2",
+   "node": {
+    "type": "frame",
+    "name": "Name field",
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#FFFFFF"
+     }
+    ],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 0,
+     "padding": {
+      "top": 6,
+      "right": 6,
+      "bottom": 6,
+      "left": 6
+     },
+     "align": "start",
+     "counter_align": "center"
+    },
+    "sizing_h": "fill",
+    "sizing_v": "hug",
+    "corner": 4,
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#E2E2E2"
+     }
+    ],
+    "stroke": {
+     "weight": 1,
+     "align": "inside"
+    }
+   },
+   "key": "f0"
+  },
+  {
+   "op": "create",
+   "parent": "f0",
+   "node": {
+    "type": "text",
+    "name": "Value",
+    "text": {
+     "content": "Robin Ash",
+     "style": {
+      "family": "Noto Sans",
+      "size": 7,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#1A1A1A"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "s2",
+   "node": {
+    "type": "text",
+    "name": "Email label",
+    "text": {
+     "content": "Email",
+     "style": {
+      "family": "Noto Sans",
+      "size": 6,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#6B6B6B"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "s2",
+   "node": {
+    "type": "frame",
+    "name": "Email field",
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#FFFFFF"
+     }
+    ],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 0,
+     "padding": {
+      "top": 6,
+      "right": 6,
+      "bottom": 6,
+      "left": 6
+     },
+     "align": "start",
+     "counter_align": "center"
+    },
+    "sizing_h": "fill",
+    "sizing_v": "hug",
+    "corner": 4,
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#4C8DFF"
+     }
+    ],
+    "stroke": {
+     "weight": 1,
+     "align": "inside"
+    }
+   },
+   "key": "f1"
+  },
+  {
+   "op": "create",
+   "parent": "f1",
+   "node": {
+    "type": "text",
+    "name": "Value",
+    "text": {
+     "content": "robin@example.com",
+     "style": {
+      "family": "Noto Sans",
+      "size": 7,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#1A1A1A"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "s2",
+   "node": {
+    "type": "text",
+    "name": "Password label",
+    "text": {
+     "content": "Password",
+     "style": {
+      "family": "Noto Sans",
+      "size": 6,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#6B6B6B"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "s2",
+   "node": {
+    "type": "frame",
+    "name": "Password field",
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#FFFFFF"
+     }
+    ],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 0,
+     "padding": {
+      "top": 6,
+      "right": 6,
+      "bottom": 6,
+      "left": 6
+     },
+     "align": "start",
+     "counter_align": "center"
+    },
+    "sizing_h": "fill",
+    "sizing_v": "hug",
+    "corner": 4,
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#E2E2E2"
+     }
+    ],
+    "stroke": {
+     "weight": 1,
+     "align": "inside"
+    }
+   },
+   "key": "f2"
+  },
+  {
+   "op": "create",
+   "parent": "f2",
+   "node": {
+    "type": "text",
+    "name": "Value",
+    "text": {
+     "content": "At least 8 characters",
+     "style": {
+      "family": "Noto Sans",
+      "size": 7,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#AAAAAA"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "s2",
+   "node": {
+    "type": "frame",
+    "name": "Spacer",
+    "fills": [],
+    "sizing_h": "fill",
+    "sizing_v": "fill",
+    "height": 1
+   }
+  },
+  {
+   "op": "create",
+   "parent": "s2",
+   "node": {
+    "type": "frame",
+    "name": "Create account",
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#4C8DFF"
+     }
+    ],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 0,
+     "padding": 8,
+     "align": "center",
+     "counter_align": "center"
+    },
+    "sizing_h": "fill",
+    "sizing_v": "hug",
+    "corner": 6
+   },
+   "key": "cta2"
+  },
+  {
+   "op": "create",
+   "parent": "cta2",
+   "node": {
+    "type": "text",
+    "name": "Label",
+    "text": {
+     "content": "Create account",
+     "style": {
+      "family": "Noto Sans",
+      "size": 8,
+      "style": "Bold"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#FFFFFF"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "body",
+   "node": {
+    "type": "frame",
+    "name": "Right panel",
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#252525"
+     }
+    ],
+    "clip": false,
+    "layout": {
+     "direction": "vertical",
+     "gap": 0,
+     "padding": 0,
+     "align": "start",
+     "counter_align": "start"
+    },
+    "sizing_h": "fixed",
+    "sizing_v": "fill",
+    "width": 276,
+    "strokes": [
+     {
+      "type": "solid",
+      "color": "#333333"
+     }
+    ],
+    "stroke": {
+     "weight": 1,
+     "align": "inside"
+    }
+   },
+   "key": "right"
+  },
+  {
+   "op": "create",
+   "parent": "right",
+   "node": {
+    "type": "frame",
+    "name": "Tabs",
+    "fills": [],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 4,
+     "padding": 8,
+     "align": "start",
+     "counter_align": "center"
+    },
+    "sizing_h": "fill",
+    "sizing_v": "hug"
+   },
+   "key": "rtabs"
+  },
+  {
+   "op": "create_instance",
+   "parent": "rtabs",
+   "component": "tab.active",
+   "key": "rt1"
+  },
+  {
+   "op": "set",
+   "id": "rt1",
+   "patch": {
+    "values": {
+     "Label": "Design"
+    }
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "rtabs",
+   "component": "tab.inactive",
+   "key": "rt2"
+  },
+  {
+   "op": "set",
+   "id": "rt2",
+   "patch": {
+    "values": {
+     "Label": "Prototype"
+    }
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "rtabs",
+   "component": "tab.inactive",
+   "key": "rt3"
+  },
+  {
+   "op": "set",
+   "id": "rt3",
+   "patch": {
+    "values": {
+     "Label": "Inspect"
+    }
+   }
+  },
+  {
+   "op": "create",
+   "parent": "right",
+   "node": {
+    "type": "frame",
+    "name": "Selection",
+    "fills": [],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 8,
+     "padding": {
+      "top": 6,
+      "right": 12,
+      "bottom": 10,
+      "left": 12
+     },
+     "align": "start",
+     "counter_align": "center"
+    },
+    "sizing_h": "fill",
+    "sizing_v": "hug"
+   },
+   "key": "selrow"
+  },
+  {
+   "op": "create_instance",
+   "parent": "selrow",
+   "component": "$icon/component",
+   "key": "selicon"
+  },
+  {
+   "op": "create",
+   "parent": "selrow",
+   "node": {
+    "type": "text",
+    "name": "Name",
+    "text": {
+     "content": "Button / Primary",
+     "style": {
+      "family": "Noto Sans",
+      "size": 12,
+      "style": "Bold"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#A88BFF"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "right",
+   "component": "Section Header",
+   "key": "sec.Layout"
+  },
+  {
+   "op": "set",
+   "id": "sec.Layout",
+   "patch": {
+    "values": {
+     "Title": "Layout",
+     "Add": false
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "right",
+   "node": {
+    "type": "frame",
+    "name": "xy",
+    "fills": [],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 8,
+     "padding": {
+      "top": 2,
+      "right": 12,
+      "bottom": 4,
+      "left": 12
+     },
+     "align": "start",
+     "counter_align": "center"
+    },
+    "sizing_h": "fill",
+    "sizing_v": "hug"
+   },
+   "key": "xy"
+  },
+  {
+   "op": "create_instance",
+   "parent": "xy",
+   "component": "Field",
+   "key": "xy.0"
+  },
+  {
+   "op": "set",
+   "id": "xy.0",
+   "patch": {
+    "values": {
+     "Label": "X",
+     "Value": "24"
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "xy",
+   "component": "Field",
+   "key": "xy.1"
+  },
+  {
+   "op": "set",
+   "id": "xy.1",
+   "patch": {
+    "values": {
+     "Label": "Y",
+     "Value": "668"
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "right",
+   "node": {
+    "type": "frame",
+    "name": "wh",
+    "fills": [],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 8,
+     "padding": {
+      "top": 2,
+      "right": 12,
+      "bottom": 4,
+      "left": 12
+     },
+     "align": "start",
+     "counter_align": "center"
+    },
+    "sizing_h": "fill",
+    "sizing_v": "hug"
+   },
+   "key": "wh"
+  },
+  {
+   "op": "create_instance",
+   "parent": "wh",
+   "component": "Field",
+   "key": "wh.0"
+  },
+  {
+   "op": "set",
+   "id": "wh.0",
+   "patch": {
+    "values": {
+     "Label": "W",
+     "Value": "345"
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "wh",
+   "component": "Field",
+   "key": "wh.1"
+  },
+  {
+   "op": "set",
+   "id": "wh.1",
+   "patch": {
+    "values": {
+     "Label": "H",
+     "Value": "52"
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "right",
+   "node": {
+    "type": "frame",
+    "name": "rot",
+    "fills": [],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 8,
+     "padding": {
+      "top": 2,
+      "right": 12,
+      "bottom": 4,
+      "left": 12
+     },
+     "align": "start",
+     "counter_align": "center"
+    },
+    "sizing_h": "fill",
+    "sizing_v": "hug"
+   },
+   "key": "rot"
+  },
+  {
+   "op": "create_instance",
+   "parent": "rot",
+   "component": "Field",
+   "key": "rot.0"
+  },
+  {
+   "op": "set",
+   "id": "rot.0",
+   "patch": {
+    "values": {
+     "Label": "°",
+     "Value": "0"
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "rot",
+   "component": "Field",
+   "key": "rot.1"
+  },
+  {
+   "op": "set",
+   "id": "rot.1",
+   "patch": {
+    "values": {
+     "Label": "R",
+     "Value": "14"
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "right",
+   "component": "Section Header",
+   "key": "sec.Auto layout"
+  },
+  {
+   "op": "set",
+   "id": "sec.Auto layout",
+   "patch": {
+    "values": {
+     "Title": "Auto layout",
+     "Add": false
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "right",
+   "node": {
+    "type": "frame",
+    "name": "gap",
+    "fills": [],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 8,
+     "padding": {
+      "top": 2,
+      "right": 12,
+      "bottom": 4,
+      "left": 12
+     },
+     "align": "start",
+     "counter_align": "center"
+    },
+    "sizing_h": "fill",
+    "sizing_v": "hug"
+   },
+   "key": "gap"
+  },
+  {
+   "op": "create_instance",
+   "parent": "gap",
+   "component": "Field",
+   "key": "gap.0"
+  },
+  {
+   "op": "set",
+   "id": "gap.0",
+   "patch": {
+    "values": {
+     "Label": "Gap",
+     "Value": "8"
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "gap",
+   "component": "Field",
+   "key": "gap.1"
+  },
+  {
+   "op": "set",
+   "id": "gap.1",
+   "patch": {
+    "values": {
+     "Label": "Pad",
+     "Value": "24, 16"
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "right",
+   "node": {
+    "type": "frame",
+    "name": "sizing",
+    "fills": [],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 8,
+     "padding": {
+      "top": 2,
+      "right": 12,
+      "bottom": 4,
+      "left": 12
+     },
+     "align": "start",
+     "counter_align": "center"
+    },
+    "sizing_h": "fill",
+    "sizing_v": "hug"
+   },
+   "key": "sizing"
+  },
+  {
+   "op": "create_instance",
+   "parent": "sizing",
+   "component": "Field",
+   "key": "sizing.0"
+  },
+  {
+   "op": "set",
+   "id": "sizing.0",
+   "patch": {
+    "values": {
+     "Label": "W",
+     "Value": "Fill"
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "sizing",
+   "component": "Field",
+   "key": "sizing.1"
+  },
+  {
+   "op": "set",
+   "id": "sizing.1",
+   "patch": {
+    "values": {
+     "Label": "H",
+     "Value": "Hug"
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "right",
+   "component": "Section Header",
+   "key": "sec.Fill"
+  },
+  {
+   "op": "set",
+   "id": "sec.Fill",
+   "patch": {
+    "values": {
+     "Title": "Fill",
+     "Add": true
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "right",
+   "node": {
+    "type": "frame",
+    "name": "Fills",
+    "fills": [],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 0,
+     "padding": {
+      "top": 0,
+      "right": 12,
+      "bottom": 4,
+      "left": 12
+     },
+     "align": "start",
+     "counter_align": "center"
+    },
+    "sizing_h": "fill",
+    "sizing_v": "hug"
+   },
+   "key": "fills"
+  },
+  {
+   "op": "create_instance",
+   "parent": "fills",
+   "component": "Paint Row",
+   "key": "paint"
+  },
+  {
+   "op": "set",
+   "id": "paint",
+   "patch": {
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "right",
+   "component": "Section Header",
+   "key": "sec.Stroke"
+  },
+  {
+   "op": "set",
+   "id": "sec.Stroke",
+   "patch": {
+    "values": {
+     "Title": "Stroke",
+     "Add": true
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "right",
+   "component": "Section Header",
+   "key": "sec.Effects"
+  },
+  {
+   "op": "set",
+   "id": "sec.Effects",
+   "patch": {
+    "values": {
+     "Title": "Effects",
+     "Add": true
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create_instance",
+   "parent": "right",
+   "component": "Section Header",
+   "key": "sec.Export"
+  },
+  {
+   "op": "set",
+   "id": "sec.Export",
+   "patch": {
+    "values": {
+     "Title": "Export",
+     "Add": true
+    },
+    "sizing_h": "fill"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "win",
+   "node": {
+    "type": "frame",
+    "name": "Status bar",
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#1A1A1A"
+     }
+    ],
+    "clip": false,
+    "layout": {
+     "direction": "horizontal",
+     "gap": 16,
+     "padding": {
+      "top": 0,
+      "right": 12,
+      "bottom": 0,
+      "left": 60
+     },
+     "align": "start",
+     "counter_align": "center"
+    },
+    "sizing_h": "fill",
+    "sizing_v": "fixed",
+    "height": 28
+   },
+   "key": "status"
+  },
+  {
+   "op": "create",
+   "parent": "status",
+   "node": {
+    "type": "text",
+    "name": "50%",
+    "text": {
+     "content": "50%",
+     "style": {
+      "family": "Noto Sans",
+      "size": 11,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#8C8C8C"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "status",
+   "node": {
+    "type": "text",
+    "name": "Welcome · Phone 393 × 852",
+    "text": {
+     "content": "Welcome · Phone 393 × 852",
+     "style": {
+      "family": "Noto Sans",
+      "size": 11,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#8C8C8C"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "status",
+   "node": {
+    "type": "text",
+    "name": "3 frames · 1 selected",
+    "text": {
+     "content": "3 frames · 1 selected",
+     "style": {
+      "family": "Noto Sans",
+      "size": 11,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#8C8C8C"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  },
+  {
+   "op": "create",
+   "parent": "status",
+   "node": {
+    "type": "frame",
+    "name": "Spacer",
+    "fills": [],
+    "sizing_h": "fill",
+    "height": 1
+   }
+  },
+  {
+   "op": "create",
+   "parent": "status",
+   "node": {
+    "type": "text",
+    "name": "Saved",
+    "text": {
+     "content": "Saved",
+     "style": {
+      "family": "Noto Sans",
+      "size": 11,
+      "style": "Regular"
+     }
+    },
+    "fills": [
+     {
+      "type": "solid",
+      "color": "#8C8C8C"
+     }
+    ],
+    "sizing_h": "hug",
+    "sizing_v": "hug"
+   }
+  }
+ ]
+}

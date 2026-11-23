@@ -90,8 +90,10 @@ CLI argument as a file to open. Names are provisional until Step 0.
         properties by path (`fills/0`, `gap`, `padding/top`, ...), modes chosen per frame;
         typing a value unbinds it
   - [x] Paint, text and effect styles
-  - [ ] Acceptance: an example builds the Blobr main-window mockup, components included, as
-        a `.jdb` and renders it to PNG
+  - [x] Acceptance: `cargo run -p blobr-mcp --example blobr_window -- out.jdb out.png` builds
+        the Blobr main-window mockup from ops (icon, tool button, panel tab, layer row,
+        section header, field and paint row components, about 280 ops), saves it and renders
+        it; a test runs the same ops
 - [ ] Step 3: the app, viewing (`cargo run -p blobr -- file.jdb`)
   - [x] Window, menus, toolbar and panels laid out like the mockup, built from `jd-ui` (theme
         tokens, icons, panel tabs) so it matches Photosplash and Cinematica
@@ -101,8 +103,10 @@ CLI argument as a file to open. Names are provisional until Step 0.
   - [x] Canvas: tiny-skia render of the visible region at screen resolution, redrawn only when
         the document, camera or window changes; zoom (Ctrl+scroll, Shift+0/1/2), pan (scroll,
         Space, middle drag, Hand), frame labels, hover and selection outlines
-  - [ ] Faster redraws: a full-viewport render is ~30 ms at 2x in debug (drags render once
-        per frame); cache shaped text and the untouched layers, GPU later if needed
+  - [x] Faster redraws: renders run off the UI thread (the last picture follows the camera
+        meanwhile), only visible layers are drawn, shaped text outlines are cached, effect and
+        clip layers are sized to what they cover; a dense window went from 860 ms to about
+        33 ms. Not done: caching untouched layers as bitmaps, and GPU rendering
   - [x] Pages list (add, switch), layer tree (expand, select, hide, lock); clicks pick a
         frame's children, Ctrl picks the deepest layer, double-click goes one level deeper
   - [x] Design panel showing (and editing) the selection: name, position, size, rotation,
