@@ -4228,6 +4228,21 @@ mod tests {
     }
 
     #[test]
+    fn the_last_picture_keeps_its_size_while_panning_and_zooming() {
+        let mut app = app();
+        app.canvas_size = Size::new(1000.0, 600.0);
+        app.canvas_camera = Camera { origin: kurbo::Point::ORIGIN, zoom: 1.0 };
+        // Panned 300 px right: moved, not squashed into the room that's left.
+        app.camera = Camera { origin: kurbo::Point::new(-300.0, 0.0), zoom: 1.0 };
+        let r = crate::view::canvas::picture_bounds(&app);
+        assert_eq!((r.x, r.y, r.width, r.height), (300.0, 0.0, 1000.0, 600.0));
+        // Zoomed in 2x: twice the size, even past the edge of the view.
+        app.camera = Camera { origin: kurbo::Point::new(100.0, 50.0), zoom: 2.0 };
+        let r = crate::view::canvas::picture_bounds(&app);
+        assert_eq!((r.x, r.y, r.width, r.height), (-200.0, -100.0, 2000.0, 1200.0));
+    }
+
+    #[test]
     fn quitting_asks_about_each_tab_with_changes() {
         let mut app = app();
         three_rects(&mut app);

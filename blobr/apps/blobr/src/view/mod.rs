@@ -2,7 +2,7 @@
 //! panel on a dark gutter, under the suite's title bar.
 
 mod assets;
-mod canvas;
+pub(crate) mod canvas;
 mod comments;
 mod design;
 mod inspect;
