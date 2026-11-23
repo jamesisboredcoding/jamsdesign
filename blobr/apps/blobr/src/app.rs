@@ -246,7 +246,10 @@ pub enum Message {
     /// A screen refresh while dragging (see `update`).
     Frame,
     /// A canvas render finished uploading.
-    CanvasReady(u64, Option<Allocation>),
+    /// A canvas render finished (on its own thread): sequence number, the camera and canvas
+    /// size it was drawn for, and the pixels.
+    CanvasRendered(u64, Camera, Size, Option<(u32, u32, Vec<u8>)>),
+    CanvasReady(u64, Camera, Size, Option<Allocation>),
     Tool(Tool),
     CanvasPress { at: Point, button: mouse::Button },
     CanvasMove(Point),
@@ -409,6 +412,12 @@ pub struct Blobr {
     /// The canvas image on screen. A new render replaces it only once uploaded to the GPU
     /// (`CanvasReady`), so zooming and panning never show an empty frame.
     pub canvas: Option<Allocation>,
+    /// The camera and canvas size the picture on screen was drawn for: while a new one
+    /// renders, the old one is moved and scaled to follow panning and zooming.
+    pub canvas_camera: Camera,
+    pub canvas_size: Size,
+    /// A render is running on its own thread (at most one at a time).
+    rendering: bool,
     rendered: Option<(u64, Camera, Size, f32, NodeId)>,
     /// Number of the latest render, so a late upload can't replace a newer one.
     render_seq: u64,
@@ -490,6 +499,9 @@ impl Blobr {
             scale_factor: 1.0,
             canvas: None,
             rendered: None,
+            canvas_camera: Camera { origin: kurbo::Point::ORIGIN, zoom: 1.0 },
+            canvas_size: Size::ZERO,
+            rendering: false,
             render_seq: 0,
             shown_seq: 0,
             version: 0,
@@ -622,12 +634,27 @@ impl Blobr {
             }
             Message::Noop => {}
             Message::Frame => return self.refresh(),
-            Message::CanvasReady(seq, allocation) => {
+            Message::CanvasRendered(seq, camera, size, pixels) => {
+                self.rendering = false;
+                let upload = match pixels {
+                    Some((w, h, px)) => {
+                        // Opaque (the page background covers everything), so premultiplied data is fine.
+                        let handle = image::Handle::from_rgba(w, h, px);
+                        iced_runtime::image::allocate(handle).map(move |r| Message::CanvasReady(seq, camera, size, r.ok()))
+                    }
+                    None => Task::none(),
+                };
+                // The view may have moved on while this one was drawing.
+                return Task::batch([upload, self.refresh()]);
+            }
+            Message::CanvasReady(seq, camera, size, allocation) => {
                 if seq > self.shown_seq
                     && let Some(a) = allocation
                 {
                     self.shown_seq = seq;
                     self.canvas = Some(a);
+                    self.canvas_camera = camera;
+                    self.canvas_size = size;
                 }
             }
             Message::Quit => return self.guard(After::Quit),
@@ -2442,7 +2469,7 @@ impl Blobr {
     /// Re-renders the canvas image if anything it shows changed.
     fn refresh(&mut self) -> Task<Message> {
         let key = (self.version, self.camera, self.viewport, self.scale_factor, self.page);
-        if self.rendered == Some(key) {
+        if self.rendered == Some(key) || self.rendering {
             return Task::none();
         }
         let (w, h) = (self.viewport.width as f64, self.viewport.height as f64);
@@ -2455,13 +2482,24 @@ impl Blobr {
             _ => Rgba::from_srgb8(0x1E, 0x1E, 0x1E),
         };
         let opts = RenderOptions { scale: self.camera.zoom * self.scale_factor as f64, background: Some(background) };
-        let Some(pm) = render_region(self.doc(), self.page, view, opts) else { return Task::none() };
-        // Opaque (the page background covers everything), so premultiplied data is fine.
-        let handle = image::Handle::from_rgba(pm.width(), pm.height(), pm.take());
         self.rendered = Some(key);
         self.render_seq += 1;
+        self.rendering = true;
         let seq = self.render_seq;
-        iced_runtime::image::allocate(handle).map(move |r| Message::CanvasReady(seq, r.ok()))
+        let (camera, size) = (self.camera, self.viewport);
+        // Off the UI thread, on a snapshot (cheap: nodes are shared), so input never waits.
+        let (doc, page) = (self.ed.doc.clone(), self.page);
+        Task::perform(
+            async move {
+                let (tx, rx) = iced::futures::channel::oneshot::channel();
+                std::thread::spawn(move || {
+                    let pm = render_region(&doc, page, view, opts);
+                    let _ = tx.send(pm.map(|pm| (pm.width(), pm.height(), pm.take())));
+                });
+                rx.await.ok().flatten()
+            },
+            move |px| Message::CanvasRendered(seq, camera, size, px),
+        )
     }
 
     /// Whether the canvas has been rendered for the current view (for tests).

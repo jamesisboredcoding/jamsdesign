@@ -4,6 +4,7 @@
 //! stays sharp at any zoom or rotation, takes any paint (gradients, images), and exports to
 //! SVG as plain paths.
 
+use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 
 use cosmic_text::{Attrs, Buffer, CacheKeyFlags, Family, FontSystem, Metrics, Shaping, Style, SwashCache, Weight, Wrap};
@@ -103,9 +104,30 @@ impl TextMeasure for CosmicMeasure {
     }
 }
 
+/// Outlines already made, so redrawing (every pan and zoom step) doesn't shape text again.
+static OUTLINES: LazyLock<Mutex<HashMap<String, BezPath>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
 /// Every glyph of the text as one path, laid out in a `width` x `height` box (the text node's
 /// own space): wrapped at the width, aligned horizontally and vertically.
 pub fn text_outline(content: &str, style: &TextStyle, width: f64, height: f64) -> BezPath {
+    let key = format!("{width}x{height}\u{0}{style:?}\u{0}{content}");
+    if let Ok(cache) = OUTLINES.lock()
+        && let Some(p) = cache.get(&key)
+    {
+        return p.clone();
+    }
+    let path = shape_outline(content, style, width, height);
+    if let Ok(mut cache) = OUTLINES.lock() {
+        // Edits make new keys; start over now and then rather than grow forever.
+        if cache.len() > 20_000 {
+            cache.clear();
+        }
+        cache.insert(key, path.clone());
+    }
+    path
+}
+
+fn shape_outline(content: &str, style: &TextStyle, width: f64, height: f64) -> BezPath {
     let mut path = BezPath::new();
     let Ok(mut engine) = ENGINE.lock() else { return path };
     // A hair of slack, so text measured at exactly this width doesn't wrap.

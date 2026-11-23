@@ -51,6 +51,24 @@ opt-level = 2
 [profile.dev.package.jd-raster]
 opt-level = 3
 
+# Blobr's canvas redraws on every pan and zoom step.
+[profile.dev.package.jd-vector]
+opt-level = 3
+
+[profile.dev.package.jd-vector-render]
+opt-level = 3
+
+# tiny-skia's inner loops are full of debug assertions; they cost a 3x slower canvas.
+[profile.dev.package.tiny-skia]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+
+[profile.dev.package.tiny-skia-path]
+opt-level = 3
+debug-assertions = false
+overflow-checks = false
+
 [profile.dev.package.jd-ai]
 opt-level = 3
 

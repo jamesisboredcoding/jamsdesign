@@ -3,7 +3,7 @@
 
 use iced::mouse::{self, Cursor, ScrollDelta};
 use iced::widget::canvas::{self, Frame, Geometry, Path, Stroke, Text};
-use iced::widget::{container, image, space, stack};
+use iced::widget::{container, image, pin, space, stack};
 use iced::{Color, Element, Fill, Point, Rectangle, Renderer, Size, Theme};
 use jd_ui::tokens::*;
 
@@ -11,8 +11,19 @@ use crate::app::{Blobr, Drag, Handle, Message};
 use crate::tool::Tool;
 
 pub fn view(app: &Blobr) -> Element<'_, Message> {
+    // The last picture, moved and scaled to where the camera is now (a newer one is on its
+    // way if they differ), so panning and zooming follow the pointer at once.
     let picture: Element<'_, Message> = match &app.canvas {
-        Some(a) => image(a.handle().clone()).width(app.viewport.width).height(app.viewport.height).filter_method(image::FilterMethod::Linear).into(),
+        Some(a) => {
+            let (now, then) = (app.camera, app.canvas_camera);
+            let z = (now.zoom / then.zoom) as f32;
+            let x = ((then.origin.x - now.origin.x) * now.zoom) as f32;
+            let y = ((then.origin.y - now.origin.y) * now.zoom) as f32;
+            pin(image(a.handle().clone()).width(app.canvas_size.width * z).height(app.canvas_size.height * z).filter_method(image::FilterMethod::Linear))
+                .x(x)
+                .y(y)
+                .into()
+        }
         None => space().into(),
     };
     let mut layers = stack![picture, canvas::Canvas::new(Overlay { app }).width(Fill).height(Fill)];

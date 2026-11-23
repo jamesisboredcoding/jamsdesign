@@ -152,13 +152,78 @@ pub(crate) fn is_closed(p: &BezPath) -> bool {
 struct Ctx<'a> {
     doc: &'a Document,
     images: HashMap<String, Option<sk::Pixmap>>,
+    /// Size of the pixmap being drawn into (the canvas, or a node's own layer).
     w: u32,
     h: u32,
+    /// Where that pixmap sits on the canvas (non-zero inside a node's layer).
+    offset: kurbo::Vec2,
+    /// What each node (with everything in it) covers, in canvas pixels; `None` if nothing.
+    vis: HashMap<NodeId, Option<Rect>>,
 }
 
 impl<'a> Ctx<'a> {
     fn new(doc: &'a Document, w: u32, h: u32) -> Self {
-        Self { doc, images: HashMap::new(), w, h }
+        Self { doc, images: HashMap::new(), w, h, offset: kurbo::Vec2::ZERO, vis: HashMap::new() }
+    }
+
+    /// The pixels `id` can touch, in the current target's space (`t`: its transform there).
+    /// Shadows, blurs and outside strokes count; children count unless clipped away.
+    fn vis(&mut self, id: NodeId, t: Affine) -> Option<Rect> {
+        if let Some(r) = self.vis.get(&id) {
+            return r.map(|r| r - self.offset);
+        }
+        let doc = self.doc;
+        let n = doc.node(id)?;
+        let r = if !n.props.visible {
+            None
+        } else {
+            let scale = t.determinant().abs().sqrt();
+            let own = match &n.kind {
+                NodeKind::Group => None,
+                NodeKind::Text { .. } => {
+                    let (shape, _) = shape_of(n);
+                    let b = kurbo::Shape::bounding_box(&shape);
+                    (b.area() > 0.0).then(|| t.transform_rect_bbox(b.union(Rect::new(0.0, 0.0, n.props.width, n.props.height))))
+                }
+                _ => Some(t.transform_rect_bbox(Rect::new(0.0, 0.0, n.props.width, n.props.height))),
+            };
+            let clips = n.props.clip && (n.kind.is_frame_like() || matches!(n.kind, NodeKind::Section));
+            let mut all = own;
+            if n.kind.is_container() && !clips {
+                for &c in &n.children {
+                    let Some(cn) = doc.node(c) else { continue };
+                    if let Some(cb) = self.vis(c, t * Document::local_transform(cn)) {
+                        all = Some(all.map_or(cb, |a| a.union(cb)));
+                    }
+                }
+            }
+            all.map(|a| a.inflate(1.0, 1.0) + margin(n, scale))
+        };
+        self.vis.insert(id, r.map(|r| r + self.offset));
+        r
+    }
+
+    /// Whether everything inside a clipping frame stays within it, so clipping would change
+    /// nothing. Only for frames drawn without rotation; rounded corners count as cut off.
+    fn children_fit(&mut self, n: &Node, t: Affine) -> bool {
+        let [a, b, c, d, ..] = t.as_coeffs();
+        if b.abs() > 1e-9 || c.abs() > 1e-9 || a <= 0.0 || d <= 0.0 {
+            return false;
+        }
+        let k = n.props.corner;
+        let r = k.top_left.max(k.top_right).max(k.bottom_right).max(k.bottom_left) * a.max(d);
+        let inner = t.transform_rect_bbox(Rect::new(0.0, 0.0, n.props.width, n.props.height)).inset(-r);
+        n.children.iter().all(|&ch| {
+            let Some(cn) = self.doc.node(ch) else { return true };
+            match self.vis(ch, t * Document::local_transform(cn)) {
+                None => true,
+                Some(v) => {
+                    // vis is padded by a pixel; allow for that.
+                    let v = v.inset(-1.0);
+                    v.x0 >= inner.x0 && v.y0 >= inner.y0 && v.x1 <= inner.x1 && v.y1 <= inner.y1
+                }
+            }
+        })
     }
 
     fn full_mask(&self) -> sk::Mask {
@@ -194,6 +259,12 @@ impl<'a> Ctx<'a> {
             return;
         }
         let t = parent * Document::local_transform(n);
+        // Off screen (with everything it draws): skip it.
+        let Some(v) = self.vis(id, t) else { return };
+        let screen = Rect::new(0.0, 0.0, self.w as f64, self.h as f64);
+        if !overlaps(v, screen) {
+            return;
+        }
         let scale = t.determinant().abs().sqrt();
         let effects: Vec<&Effect> = n.props.effects.iter().filter(|e| effect_visible(e)).collect();
         for e in &effects {
@@ -207,11 +278,19 @@ impl<'a> Ctx<'a> {
             self.content(target, n, t, clip);
             return;
         }
-        let Some(mut layer) = sk::Pixmap::new(self.w, self.h) else { return };
-        self.content(&mut layer, n, t, None);
+        // Its own layer covers only what it draws (shadows included), not the whole canvas.
+        let r = v.intersect(screen);
+        let (x0, y0) = (r.x0.floor(), r.y0.floor());
+        let (lw, lh) = ((r.x1.ceil() - x0).max(1.0) as u32, (r.y1.ceil() - y0).max(1.0) as u32);
+        let Some(mut layer) = sk::Pixmap::new(lw, lh) else { return };
+        let saved = (self.w, self.h, self.offset);
+        (self.w, self.h) = (lw, lh);
+        self.offset += kurbo::Vec2::new(x0, y0);
+        self.content(&mut layer, n, Affine::translate((-x0, -y0)) * t, None);
+        (self.w, self.h, self.offset) = saved;
         apply_effects(&mut layer, &effects, scale);
         let paint = sk::PixmapPaint { opacity: n.props.opacity, blend_mode: blend(n.props.blend), quality: sk::FilterQuality::Nearest };
-        target.draw_pixmap(0, 0, layer.as_ref(), &paint, sk::Transform::identity(), clip);
+        target.draw_pixmap(x0 as i32, y0 as i32, layer.as_ref(), &paint, sk::Transform::identity(), clip);
     }
 
     fn content(&mut self, target: &mut sk::Pixmap, n: &'a Node, t: Affine, clip: Option<&sk::Mask>) {
@@ -243,6 +322,37 @@ impl<'a> Ctx<'a> {
 
         if n.kind.is_container() {
             let clips = n.props.clip && (n.kind.is_frame_like() || matches!(n.kind, NodeKind::Section));
+            // Clipping costs a canvas-sized mask; skip it when everything inside fits anyway.
+            let clips = clips && !self.children_fit(n, t);
+            // Or draw the children into a layer just the frame's size, clipped by a mask that
+            // size, when that looks the same: nothing inside blends with what's underneath.
+            // (Big frames are cheaper with the canvas-sized mask than a big layer to blend.)
+            let screen = Rect::new(0.0, 0.0, self.w as f64, self.h as f64);
+            let r = t.transform_rect_bbox(Rect::new(0.0, 0.0, w, h)).intersect(screen);
+            if clips
+                && let Some(p) = &path
+                && r.area() < screen.area() / 4.0
+                && n.children.iter().all(|&c| plain(self.doc, c))
+            {
+                if r.width() > 0.0 && r.height() > 0.0 {
+                    let (x0, y0) = (r.x0.floor(), r.y0.floor());
+                    let (lw, lh) = ((r.x1.ceil() - x0).max(1.0) as u32, (r.y1.ceil() - y0).max(1.0) as u32);
+                    if let (Some(mut layer), Some(mut mask)) = (sk::Pixmap::new(lw, lh), sk::Mask::new(lw, lh)) {
+                        let lt = Affine::translate((-x0, -y0)) * t;
+                        mask.fill_path(p, rule, true, to_ts(lt));
+                        let saved = (self.w, self.h, self.offset);
+                        (self.w, self.h) = (lw, lh);
+                        self.offset += kurbo::Vec2::new(x0, y0);
+                        for &c in &n.children {
+                            self.draw(&mut layer, c, lt, Some(&mask));
+                        }
+                        (self.w, self.h, self.offset) = saved;
+                        target.draw_pixmap(x0 as i32, y0 as i32, layer.as_ref(), &sk::PixmapPaint::default(), sk::Transform::identity(), clip);
+                    }
+                }
+                self.stroke(target, n, &shape, &path, rule, ts, clip);
+                return;
+            }
             let own = match (&path, clips) {
                 (Some(p), true) => Some(self.clip_to(clip, p, rule, ts)),
                 _ => None,
@@ -253,12 +363,32 @@ impl<'a> Ctx<'a> {
             }
         }
 
+        self.stroke(target, n, &shape, &path, rule, ts, clip);
+    }
+
+    /// The node's strokes, on top of its fills and children.
+    #[allow(clippy::too_many_arguments)]
+    fn stroke(&mut self, target: &mut sk::Pixmap, n: &'a Node, shape: &BezPath, path: &Option<sk::Path>, rule: sk::FillRule, ts: sk::Transform, clip: Option<&sk::Mask>) {
+        let (w, h) = (n.props.width, n.props.height);
         let st = &n.props.stroke;
-        if let Some(p) = &path
+        if let Some(p) = path
             && st.weight > 0.0
             && n.props.strokes.iter().any(|s| s.visible)
         {
-            let align = if is_closed(&shape) && !matches!(n.kind, NodeKind::Line) { st.align } else { StrokeAlign::Center };
+            let mut align = if is_closed(shape) && !matches!(n.kind, NodeKind::Line) { st.align } else { StrokeAlign::Center };
+            // Boxes and ellipses: an inside or outside stroke is a centred stroke on a
+            // smaller or bigger copy of the shape, which needs no mask.
+            let mut p = p.clone();
+            // (Not for dashes: the copy's path starts elsewhere, which would move them.)
+            if align != StrokeAlign::Center
+                && st.dash.len() < 2
+                && let Some(moved) = offset_shape(n, if align == StrokeAlign::Inside { -(st.weight as f64) / 2.0 } else { st.weight as f64 / 2.0 })
+                && let Some(mp) = to_path(&moved)
+            {
+                p = mp;
+                align = StrokeAlign::Center;
+            }
+            let p = &p;
             let width = st.weight * if align == StrokeAlign::Center { 1.0 } else { 2.0 };
             let mask = match align {
                 StrokeAlign::Center => None,
@@ -367,6 +497,62 @@ pub(crate) fn image_transform(fit: ImageFit, iw: f64, ih: f64, w: f64, h: f64) -
 }
 
 /// A dash pattern needs an even number of entries.
+/// Whether a node and everything in it blend normally and don't blur what's under them
+/// (so drawing them into a separate layer first looks the same).
+fn plain(doc: &Document, id: NodeId) -> bool {
+    let Some(n) = doc.node(id) else { return true };
+    matches!(n.props.blend, BlendMode::Normal | BlendMode::PassThrough)
+        && n.props.fills.iter().chain(&n.props.strokes).all(|p| matches!(p.blend, BlendMode::Normal | BlendMode::PassThrough))
+        && !n.props.effects.iter().any(|e| matches!(e, Effect::BackgroundBlur { .. }) && effect_visible(e))
+        && n.children.iter().all(|&c| plain(doc, c))
+}
+
+fn overlaps(a: Rect, b: Rect) -> bool {
+    a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1
+}
+
+/// How far past its box a node can draw, in pixels: outside strokes, shadows, blurs.
+fn margin(n: &Node, scale: f64) -> kurbo::Insets {
+    let mut m: f64 = 0.0;
+    if n.props.strokes.iter().any(|s| s.visible) {
+        let w = n.props.stroke.weight as f64;
+        // Ends of open paths, caps and miters can reach past half the width.
+        m = m.max(match n.props.stroke.align {
+            StrokeAlign::Inside => 0.0,
+            _ => w * 2.0,
+        });
+    }
+    for e in n.props.effects.iter().filter(|e| effect_visible(e)) {
+        let reach = match e {
+            Effect::DropShadow(s) => (s.x.abs().max(s.y.abs()) + s.blur * 1.5 + s.spread.max(0.0)) as f64,
+            Effect::LayerBlur { radius, .. } => *radius as f64 * 1.5,
+            _ => 0.0,
+        };
+        m = m.max(reach);
+    }
+    kurbo::Insets::uniform(m * scale)
+}
+
+/// A box or ellipse grown (or shrunk, if `d` < 0) by `d` on every side, with its corners
+/// following; `None` for other shapes.
+fn offset_shape(n: &Node, d: f64) -> Option<BezPath> {
+    let (w, h) = (n.props.width, n.props.height);
+    let r = Rect::new(-d, -d, w + d, h + d);
+    if r.width() <= 0.0 || r.height() <= 0.0 {
+        return None;
+    }
+    match &n.kind {
+        NodeKind::Frame | NodeKind::Rectangle | NodeKind::Section | NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. } => {
+            let c = n.props.corner;
+            let rad = |v: f64| if v > 0.0 { (v + d).max(0.0) } else { 0.0 };
+            let radii = kurbo::RoundedRectRadii::new(rad(c.top_left), rad(c.top_right), rad(c.bottom_right), rad(c.bottom_left));
+            Some(kurbo::Shape::to_path(&kurbo::RoundedRect::from_rect(r, radii), 0.1))
+        }
+        NodeKind::Ellipse { arc } if arc.sweep.abs() >= 360.0 && arc.inner <= 0.0 => Some(kurbo::Shape::to_path(&kurbo::Ellipse::from_rect(r), 0.1)),
+        _ => None,
+    }
+}
+
 fn even(d: &[f32]) -> Vec<f32> {
     if d.len() % 2 == 0 { d.to_vec() } else { d.iter().chain(d).copied().collect() }
 }
