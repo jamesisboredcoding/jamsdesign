@@ -34,10 +34,17 @@ fn entries(app: &Blobr, menu: usize) -> Vec<MenuEntry<'_, Message>> {
     let sel = !app.selection.is_empty();
     let on = |cond: bool, m: Message| cond.then_some(m);
     match MENUS[menu] {
-        "File" => vec![
-            item("New", "Ctrl+N", Some(Message::New)),
-            item("Open...", "Ctrl+O", Some(Message::Open)),
-            Separator,
+        "File" => {
+            let mut v = vec![item("New", "Ctrl+N", Some(Message::New)), item("Open...", "Ctrl+O", Some(Message::Open)), Separator];
+            // Open Recent, inline (the menus have no submenus).
+            for (i, (name, dir)) in app.recent_labels.iter().take(8).enumerate() {
+                v.push(item(name, dir, Some(Message::OpenRecent(i))));
+            }
+            if !app.recent.is_empty() {
+                v.push(item("Clear Recent", "", Some(Message::ClearRecent)));
+                v.push(Separator);
+            }
+            v.extend([
             item("Save", "Ctrl+S", Some(Message::Save)),
             item("Save As...", "Ctrl+Shift+S", Some(Message::SaveAs)),
             Separator,
@@ -47,8 +54,11 @@ fn entries(app: &Blobr, menu: usize) -> Vec<MenuEntry<'_, Message>> {
             Separator,
             item("Import SVG...", "", Some(Message::ImportSvg)),
             Separator,
+            item("Close Tab", "Ctrl+W", Some(Message::TabClose(app.active))),
             item("Quit", "Ctrl+Q", Some(Message::Quit)),
-        ],
+            ]);
+            v
+        }
         "Edit" => vec![
             item("Undo", "Ctrl+Z", on(app.ed.history.can_undo(), Message::Undo)),
             item("Redo", "Ctrl+Shift+Z", on(app.ed.history.can_redo(), Message::Redo)),

@@ -101,9 +101,8 @@ fn panel<'a>(content: impl Into<Element<'a, Message>>, width: Option<f32>) -> El
 /// "Save changes?" before quitting, opening or starting a new file.
 fn confirm(app: &Blobr, after: After) -> Element<'_, Message> {
     let verb = match after {
-        After::Quit => "closing",
-        After::New => "starting a new file",
-        After::Open => "opening another file",
+        After::Quit => "quitting",
+        After::CloseTab => "closing it",
     };
     let name = app.path.as_ref().and_then(|p| p.file_name()).map_or("Untitled".into(), |n| n.to_string_lossy().into_owned());
     let action = |label: &'static str, m: Message, primary: bool| {
@@ -175,15 +174,21 @@ fn toolbar(app: &Blobr) -> Element<'_, Message> {
 }
 
 fn doc_tabs(app: &Blobr) -> Element<'_, Message> {
-    let tab = container(
-        row![text(app.file_name()).size(TEXT_SIZE_SMALL).color(TEXT_PRIMARY), icon(Icon::Close, 10.0, TEXT_SECONDARY)]
-            .spacing(10)
-            .align_y(Vertical::Center),
-    )
-    .padding(Padding::from([7, 12]))
-    .height(TABS_HEIGHT)
-    .style(style::fill(BG_PANEL));
-    container(row![tab]).width(Fill).height(TABS_HEIGHT).style(style::fill(BG_PANEL_HEADER)).into()
+    let tabs = app.tab_titles().into_iter().enumerate().map(|(i, title)| {
+        let active = i == app.active;
+        let close = button(icon(Icon::Close, 10.0, TEXT_SECONDARY)).padding(2).style(style::ghost(false)).on_press(Message::TabClose(i));
+        let tab = container(
+            row![text(title).size(TEXT_SIZE_SMALL).color(if active { TEXT_PRIMARY } else { TEXT_SECONDARY }), close]
+                .spacing(8)
+                .align_y(Vertical::Center),
+        )
+        .padding(Padding::from([5, 8]).left(12))
+        .height(TABS_HEIGHT)
+        .style(style::fill(if active { BG_PANEL } else { BG_PANEL_HEADER }));
+        mouse_area(tab).on_press(Message::TabSelect(i)).into()
+    });
+    let new = button(icon(Icon::Plus, 12.0, TEXT_SECONDARY)).padding(6).style(style::ghost(false)).on_press(Message::New);
+    container(row(tabs).push(new).spacing(1).align_y(Vertical::Center)).width(Fill).height(TABS_HEIGHT).style(style::fill(BG_PANEL_HEADER)).into()
 }
 
 fn status_bar(app: &Blobr) -> Element<'_, Message> {

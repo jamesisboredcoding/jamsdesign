@@ -94,12 +94,14 @@ CLI argument as a file to open. Names are provisional until Step 0.
         the Blobr main-window mockup from ops (icon, tool button, panel tab, layer row,
         section header, field and paint row components, about 280 ops), saves it and renders
         it; a test runs the same ops
-- [ ] Step 3: the app, viewing (`cargo run -p blobr -- file.jdb`)
+- [x] Step 3: the app, viewing (`cargo run -p blobr -- file.jdb`)
   - [x] Window, menus, toolbar and panels laid out like the mockup, built from `jd-ui` (theme
         tokens, icons, panel tabs) so it matches Photosplash and Cinematica
   - [x] Open/save/save as `.jdb`, PNG/SVG export of the selection
   - [x] Unsaved-changes prompt (Save / Don't Save / Cancel) before quit, new and open
-  - [ ] Document tabs, recent files
+  - [x] Document tabs (each with its own undo, page, selection and view; Ctrl+W closes,
+        Ctrl+Tab cycles, quitting asks about each tab with changes; agents work on the active
+        tab) and recent files in the File menu
   - [x] Canvas: tiny-skia render of the visible region at screen resolution, redrawn only when
         the document, camera or window changes; zoom (Ctrl+scroll, Shift+0/1/2), pan (scroll,
         Space, middle drag, Hand), frame labels, hover and selection outlines

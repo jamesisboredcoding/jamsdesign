@@ -188,8 +188,33 @@ pub enum PropLink {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum After {
     Quit,
-    New,
-    Open,
+    /// Close the active tab.
+    CloseTab,
+}
+
+/// A document open in a tab that isn't showing: what each tab keeps of its own.
+pub struct Parked {
+    ed: Editor,
+    path: Option<PathBuf>,
+    page: NodeId,
+    selection: Vec<NodeId>,
+    expanded: BTreeSet<NodeId>,
+    camera: Camera,
+    var_collection: Option<NodeId>,
+    libraries: Vec<Library>,
+    imported: HashMap<(PathBuf, NodeId), NodeId>,
+}
+
+impl Parked {
+    /// The tab's title: the file name, with `*` when it has unsaved changes.
+    pub fn title(&self) -> String {
+        title(self.path.as_deref(), self.ed.history.is_dirty())
+    }
+}
+
+fn title(path: Option<&std::path::Path>, dirty: bool) -> String {
+    let name = path.and_then(|p| p.file_name()).map_or("Untitled".into(), |n| n.to_string_lossy().into_owned());
+    if dirty { format!("{name} *") } else { name }
 }
 
 /// Id of the on-canvas text editor.
@@ -384,6 +409,15 @@ pub enum Message {
     New,
     Open,
     Opened(Option<PathBuf>),
+    /// Show the tab at this index.
+    TabSelect(usize),
+    /// Close the tab at this index (asking first if it has unsaved changes).
+    TabClose(usize),
+    /// The next (or with `false`, previous) tab.
+    TabCycle(bool),
+    /// Open the recent file at this index.
+    OpenRecent(usize),
+    ClearRecent,
     Save,
     SaveAs,
     SavedAs(Option<PathBuf>),
@@ -463,6 +497,13 @@ pub struct Blobr {
     fit_pending: bool,
     /// AI agents connected over MCP (shown in the status bar).
     pub agents: usize,
+    /// One slot per tab, left to right; the active tab's slot is empty (its document is in
+    /// the fields above).
+    pub tabs: Vec<Option<Parked>>,
+    pub active: usize,
+    /// Recently opened or saved files, newest first, with their menu labels.
+    pub recent: Vec<PathBuf>,
+    pub recent_labels: Vec<(String, String)>,
 }
 
 const MIN_ZOOM: f64 = 0.02;
@@ -533,7 +574,12 @@ impl Blobr {
             last_click: None,
             fit_pending: false,
             agents: 0,
+            tabs: vec![None],
+            active: 0,
+            recent: Vec::new(),
+            recent_labels: Vec::new(),
         };
+        app.set_recent(crate::recent::load());
         app.viewport = view::canvas_size(app.chrome.size);
         // Every command-line argument is a file to open (the suite's apps take no flags).
         let open = std::env::args().nth(1).map(PathBuf::from);
@@ -549,8 +595,12 @@ impl Blobr {
     }
 
     pub fn file_name(&self) -> String {
-        let name = self.path.as_ref().and_then(|p| p.file_name()).map_or("Untitled".into(), |n| n.to_string_lossy().into_owned());
-        if self.ed.history.is_dirty() { format!("{name} *") } else { name }
+        title(self.path.as_deref(), self.ed.history.is_dirty())
+    }
+
+    /// Every tab's title, left to right.
+    pub fn tab_titles(&self) -> Vec<String> {
+        self.tabs.iter().map(|t| t.as_ref().map_or_else(|| self.file_name(), Parked::title)).collect()
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
@@ -659,11 +709,15 @@ impl Blobr {
             }
             Message::Quit => return self.guard(After::Quit),
             Message::ConfirmCancel => self.confirm = None,
-            Message::ConfirmDiscard => {
-                if let Some(a) = self.confirm.take() {
-                    return self.proceed(a);
+            Message::ConfirmDiscard => match self.confirm.take() {
+                // Drop this tab's changes, then ask about the next one with unsaved changes.
+                Some(After::Quit) => {
+                    self.drop_tab();
+                    return self.guard(After::Quit);
                 }
-            }
+                Some(a) => return self.proceed(a),
+                None => {}
+            },
             Message::ConfirmSave => {
                 let Some(a) = self.confirm.take() else { return Task::none() };
                 match self.path.clone() {
@@ -1218,9 +1272,32 @@ impl Blobr {
             Message::ZoomFit => self.zoom_fit(false),
             Message::ZoomSelection => self.zoom_fit(true),
             Message::Zoom100 => self.zoom_at(1.0 / self.camera.zoom, None),
-            Message::New => return self.guard(After::New),
-            Message::Open => return self.guard(After::Open),
+            Message::New => self.open_tab(Document::new(), None),
+            Message::Open => {
+                return Task::perform(
+                    rfd::AsyncFileDialog::new().add_filter("Blobr document", &[file::EXTENSION]).pick_file(),
+                    |f| Message::Opened(f.map(|f| f.path().to_path_buf())),
+                );
+            }
             Message::Opened(Some(path)) => self.open_path(path),
+            Message::TabSelect(i) => self.switch_tab(i),
+            Message::TabClose(i) => {
+                self.switch_tab(i);
+                return self.guard(After::CloseTab);
+            }
+            Message::TabCycle(forward) => {
+                let n = self.tabs.len();
+                self.switch_tab(if forward { (self.active + 1) % n } else { (self.active + n - 1) % n });
+            }
+            Message::OpenRecent(i) => {
+                if let Some(path) = self.recent.get(i).cloned() {
+                    self.open_path(path);
+                }
+            }
+            Message::ClearRecent => {
+                self.set_recent(Vec::new());
+                crate::recent::save(&self.recent);
+            }
             Message::SavedAs(None) => self.after_save = None,
             Message::Opened(None) | Message::Exported(None, _) => {}
             Message::Save => match self.path.clone() {
@@ -1356,6 +1433,7 @@ impl Blobr {
                 None
             }
             Key::Named(Named::F11) => Some(Message::Chrome(chrome::Event::ToggleFullscreen)),
+            Key::Named(Named::Tab) if cmd => Some(Message::TabCycle(!self.modifiers.shift())),
             Key::Named(Named::Escape) => {
                 // Up one level, like Figma.
                 let parent = self.selection.first().and_then(|&s| self.doc().parent(s)).filter(|&p| p != self.page);
@@ -1417,6 +1495,7 @@ impl Blobr {
                     ("s", true, false, false) => Some(Message::Save),
                     ("s", true, true, false) => Some(Message::SaveAs),
                     ("o", true, false, false) => Some(Message::Open),
+                    ("w", true, false, false) => Some(Message::TabClose(self.active)),
                     ("n", true, false, false) => Some(Message::New),
                     ("e", true, true, false) => Some(Message::Export(ExportFormat::Png)),
                     ("k", true, false, true) => Some(Message::CreateComponent),
@@ -2355,8 +2434,15 @@ impl Blobr {
 
     // ----- Unsaved changes --------------------------------------------------------------
 
-    /// Asks about unsaved changes before `after`, or just does it.
+    /// Asks about unsaved changes before `after`, or just does it. Quitting asks about each
+    /// tab with unsaved changes in turn, showing it first.
     fn guard(&mut self, after: After) -> Task<Message> {
+        if after == After::Quit
+            && !self.ed.history.is_dirty()
+            && let Some(i) = self.tabs.iter().position(|t| t.as_ref().is_some_and(|t| t.ed.history.is_dirty()))
+        {
+            self.switch_tab(i);
+        }
         if self.ed.history.is_dirty() {
             self.chrome.open_menu = None;
             self.confirm = Some(after);
@@ -2368,29 +2454,143 @@ impl Blobr {
 
     fn proceed(&mut self, after: After) -> Task<Message> {
         match after {
+            // Saved: there may be more tabs to ask about.
+            After::Quit if self.ed.history.is_dirty() || self.tabs.iter().flatten().any(|t| t.ed.history.is_dirty()) => self.guard(After::Quit),
             After::Quit => {
                 crate::agent::cleanup();
                 self.chrome.close()
             }
-            After::New => {
-                self.load(Document::new(), None);
+            After::CloseTab => {
+                self.drop_tab();
                 Task::none()
             }
-            After::Open => Task::perform(
-                rfd::AsyncFileDialog::new().add_filter("Blobr document", &[file::EXTENSION]).pick_file(),
-                |f| Message::Opened(f.map(|f| f.path().to_path_buf())),
-            ),
         }
+    }
+
+    // ----- Tabs -------------------------------------------------------------------------
+
+    /// Takes the active document out of the fields, leaving a blank one.
+    fn park(&mut self) -> Parked {
+        let blank = Document::new();
+        Parked {
+            page: std::mem::replace(&mut self.page, blank.pages()[0]),
+            ed: std::mem::replace(&mut self.ed, Editor::new(blank)),
+            path: self.path.take(),
+            selection: std::mem::take(&mut self.selection),
+            expanded: std::mem::take(&mut self.expanded),
+            camera: self.camera,
+            var_collection: self.var_collection.take(),
+            libraries: std::mem::take(&mut self.libraries),
+            imported: std::mem::take(&mut self.imported),
+        }
+    }
+
+    /// Shows a parked document.
+    fn unpark(&mut self, p: Parked) {
+        self.ed = p.ed;
+        self.path = p.path;
+        self.page = p.page;
+        self.selection = p.selection;
+        self.expanded = p.expanded;
+        self.camera = p.camera;
+        self.var_collection = p.var_collection;
+        self.libraries = p.libraries;
+        self.imported = p.imported;
+        self.view_changed();
+    }
+
+    /// Forgets what belonged to the document shown before: edits in progress, the picture
+    /// (a render still running for it is dropped when it arrives), thumbnails.
+    fn view_changed(&mut self) {
+        self.hover = None;
+        self.drag = None;
+        self.guides.clear();
+        self.layer_drag = None;
+        self.renaming = None;
+        self.text_edit = None;
+        self.pen = None;
+        self.vector_edit = None;
+        self.present = None;
+        self.drafts.clear();
+        self.thumbnails.clear();
+        self.thumbs_version = u64::MAX;
+        self.version += 1;
+        self.canvas = None;
+        self.rendered = None;
+        self.shown_seq = self.render_seq;
+    }
+
+    fn switch_tab(&mut self, i: usize) {
+        if i == self.active || i >= self.tabs.len() {
+            return;
+        }
+        let Some(next) = self.tabs[i].take() else { return };
+        self.tabs[self.active] = Some(self.park());
+        self.active = i;
+        self.unpark(next);
+    }
+
+    /// Whether the active tab is an untouched new document (opening a file reuses it).
+    fn pristine(&self) -> bool {
+        self.path.is_none() && !self.ed.history.can_undo() && !self.ed.history.is_dirty()
+    }
+
+    /// Shows `doc` in a new tab after the active one (or in the active tab, if untouched).
+    fn open_tab(&mut self, doc: Document, path: Option<PathBuf>) {
+        if !self.pristine() || path.is_none() {
+            self.tabs[self.active] = Some(self.park());
+            self.active += 1;
+            self.tabs.insert(self.active, None);
+            self.var_collection = None;
+        }
+        self.load(doc, path);
+    }
+
+    /// Closes the active tab without asking; the last tab becomes a new document.
+    fn drop_tab(&mut self) {
+        if self.tabs.len() == 1 {
+            let _ = self.park();
+            self.libraries.clear();
+            self.load(Document::new(), None);
+            return;
+        }
+        self.tabs.remove(self.active);
+        self.active = self.active.min(self.tabs.len() - 1);
+        if let Some(next) = self.tabs[self.active].take() {
+            self.unpark(next);
+        }
+    }
+
+    fn set_recent(&mut self, list: Vec<PathBuf>) {
+        self.recent_labels = list.iter().map(|p| crate::recent::label(p)).collect();
+        self.recent = list;
+    }
+
+    fn remember(&mut self, path: &std::path::Path) {
+        let mut list = std::mem::take(&mut self.recent);
+        crate::recent::remember(&mut list, path);
+        crate::recent::save(&list);
+        self.set_recent(list);
     }
 
     // ----- Files ------------------------------------------------------------------------
 
     fn open_path(&mut self, path: PathBuf) {
+        // Already open: show that tab.
+        let same = |p: &Option<PathBuf>| p.as_ref().is_some_and(|p| p == &path);
+        if same(&self.path) {
+            return;
+        }
+        if let Some(i) = self.tabs.iter().position(|t| t.as_ref().is_some_and(|t| same(&t.path))) {
+            self.switch_tab(i);
+            return;
+        }
         match file::load(&path) {
             Ok(mut doc) => {
                 // Lay out again with the real fonts (files may come from elsewhere).
                 jd_vector::layout::run(&mut doc, &CosmicMeasure);
-                self.load(doc, Some(path));
+                self.remember(&path);
+                self.open_tab(doc, Some(path));
             }
             Err(e) => self.error(format!("Couldn't open {}: {e}", path.display())),
         }
@@ -2403,8 +2603,7 @@ impl Blobr {
         self.selection.clear();
         self.expanded.clear();
         self.drafts.clear();
-        self.hover = None;
-        self.version += 1;
+        self.view_changed();
         self.fit_pending = true;
         self.zoom_fit(false);
         self.info(match &self.path {
@@ -2418,6 +2617,7 @@ impl Blobr {
             Ok(()) => {
                 self.ed.history.mark_saved();
                 self.info(format!("Saved {}", path.display()));
+                self.remember(&path);
                 self.path = Some(path);
             }
             Err(e) => self.error(format!("Couldn't save {}: {e}", path.display())),
@@ -3346,20 +3546,89 @@ mod tests {
     fn unsaved_changes_are_asked_about() {
         let mut app = app();
         three_rects(&mut app);
-        let _ = app.update(Message::New);
-        assert_eq!(app.confirm, Some(After::New), "dirty: ask first");
-        assert_eq!(app.doc().children(app.page).len(), 3);
+        let _ = app.update(Message::TabClose(0));
+        assert_eq!(app.confirm, Some(After::CloseTab), "dirty: ask first");
         let _ = app.update(Message::ConfirmCancel);
         assert_eq!(app.confirm, None);
         assert_eq!(app.doc().children(app.page).len(), 3);
         let _ = app.update(Message::Quit);
         assert_eq!(app.confirm, Some(After::Quit));
         let _ = app.update(Message::ConfirmCancel);
-        let _ = app.update(Message::New);
+        let _ = app.update(Message::TabClose(0));
         let _ = app.update(Message::ConfirmDiscard);
-        assert!(app.doc().children(app.page).is_empty(), "discarded");
-        let _ = app.update(Message::New);
+        assert!(app.doc().children(app.page).is_empty(), "discarded: the last tab becomes a new document");
+        assert_eq!(app.tabs.len(), 1);
+        let _ = app.update(Message::TabClose(0));
         assert_eq!(app.confirm, None, "clean: no question");
+    }
+
+    #[test]
+    fn tabs_keep_their_own_document_undo_and_view() {
+        let mut app = app();
+        three_rects(&mut app);
+        let first_camera = app.camera;
+        let _ = app.update(Message::New);
+        assert_eq!((app.tabs.len(), app.active), (2, 1));
+        assert!(app.doc().children(app.page).is_empty());
+        assert!(!app.ed.history.can_undo(), "a new tab has its own history");
+        let _ = app.update(Message::Tool(Tool::Rectangle));
+        drag(&mut app, Point::new(10.0, 10.0), Point::new(60.0, 60.0));
+        assert_eq!(app.doc().children(app.page).len(), 1);
+        assert_eq!(app.tab_titles(), vec!["Untitled *", "Untitled *"]);
+
+        let _ = app.update(Message::TabSelect(0));
+        assert_eq!(app.doc().children(app.page).len(), 3);
+        assert_eq!(app.camera, first_camera);
+        let undone = app.doc().children(app.page).len();
+        let _ = app.update(Message::Undo);
+        assert!(app.doc().children(app.page).len() < undone, "undo works on this tab's history");
+        let _ = app.update(Message::TabCycle(true));
+        assert_eq!((app.active, app.doc().children(app.page).len()), (1, 1));
+    }
+
+    #[test]
+    fn a_render_for_another_tab_is_dropped() {
+        let mut app = app();
+        let _ = app.refresh();
+        let stale = app.render_seq;
+        let _ = app.update(Message::New);
+        let _ = app.update(Message::CanvasReady(stale, app.camera, app.viewport, None));
+        assert!(app.shown_seq >= stale, "a picture from before the switch can't be shown");
+        assert!(app.canvas.is_none());
+    }
+
+    #[test]
+    fn quitting_asks_about_each_tab_with_changes() {
+        let mut app = app();
+        three_rects(&mut app);
+        let _ = app.update(Message::New);
+        let _ = app.update(Message::New);
+        let _ = app.update(Message::Tool(Tool::Rectangle));
+        drag(&mut app, Point::new(10.0, 10.0), Point::new(60.0, 60.0));
+        // Tabs 0 and 2 have changes; tab 1 doesn't.
+        let _ = app.update(Message::Quit);
+        assert_eq!((app.confirm, app.active), (Some(After::Quit), 2));
+        let _ = app.update(Message::ConfirmDiscard);
+        assert_eq!(app.confirm, Some(After::Quit), "then the next one");
+        assert_eq!(app.doc().children(app.page).len(), 3, "showing the first tab's changes");
+        let _ = app.update(Message::ConfirmCancel);
+        assert_eq!(app.tabs.len(), 2, "the discarded tab closed; cancelling keeps the rest");
+    }
+
+    #[test]
+    fn opening_an_open_file_shows_its_tab_and_untouched_tabs_are_reused() {
+        let dir = std::env::temp_dir().join(format!("blobr-tabs-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.jdb");
+        file::save(&Document::new(), &path).unwrap();
+        let mut app = app();
+        let _ = app.update(Message::Opened(Some(path.clone())));
+        assert_eq!(app.tabs.len(), 1, "the untouched new document's tab is reused");
+        assert_eq!(app.recent.first(), Some(&path));
+        let _ = app.update(Message::New);
+        let _ = app.update(Message::Opened(Some(path.clone())));
+        assert_eq!((app.tabs.len(), app.active), (2, 0), "already open: switch to it");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
