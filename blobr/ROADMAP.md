@@ -209,7 +209,7 @@ CLI argument as a file to open. Names are provisional until Step 0.
         new nodes get the drawing tools' defaults; errors name the op and say nothing was
         applied. The reference's examples are tested against the real op format
   - [x] Scripting spike: JSON ops only for now (batches + keys cover building screens)
-  - [x] Live bridge: a running Blobr listens on `$XDG_RUNTIME_DIR/blobr.sock`; `blobr-mcp`
+  - [x] Live bridge: a running Blobr listens on `$XDG_RUNTIME_DIR/app/dev.jamsdesign.Blobr/blobr.sock`; `blobr-mcp`
         uses it while it runs (never switching away from unsaved headless work) and falls
         back to headless files. Agent edits show at once and are named undo steps; edits
         wait while the user drags or a dialog is open; "Agent connected" in the status bar

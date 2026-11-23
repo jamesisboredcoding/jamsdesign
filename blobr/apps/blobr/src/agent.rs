@@ -1,4 +1,5 @@
-//! The live MCP bridge: a running Blobr listens on `$XDG_RUNTIME_DIR/blobr.sock` (see
+//! The live MCP bridge: a running Blobr listens on
+//! `$XDG_RUNTIME_DIR/app/dev.jamsdesign.Blobr/blobr.sock` (see
 //! `blobr_mcp::live`). A thread accepts connections from `blobr-mcp`; each call is handed to
 //! the app as a [`Message::Agent`] and runs on the open document like any other edit, so it
 //! shows up at once and lands in History as an undo step.

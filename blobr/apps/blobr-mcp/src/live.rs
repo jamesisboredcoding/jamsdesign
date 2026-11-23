@@ -1,4 +1,4 @@
-//! The bridge to a running Blobr: the app listens on a Unix socket in `$XDG_RUNTIME_DIR`;
+//! The bridge to a running Blobr: the app listens on a Unix socket under `$XDG_RUNTIME_DIR`;
 //! `blobr-mcp` sends it each tool call as one JSON line (`{"name", "args"}`) and gets one
 //! line back (`{"ok": [content]}` or `{"err": "..."}`, images as base64 PNG). The app runs
 //! the same [`crate::call`] on its own document.
@@ -12,11 +12,24 @@ use base64::Engine;
 use jd_mcp::{Content, ToolResult};
 use serde_json::{Value, json};
 
-/// Where a running Blobr listens. Only under `$XDG_RUNTIME_DIR` (private to the user); with
-/// no runtime dir there's no live mode.
+/// Blobr's app id (also its Flatpak id).
+pub const APP_ID: &str = "dev.jamsdesign.Blobr";
+
+/// Where a running Blobr listens: `$XDG_RUNTIME_DIR/app/dev.jamsdesign.Blobr/blobr.sock`.
+/// That folder is the one a Flatpak'd Blobr shares with the host, so `blobr-mcp` finds the
+/// app whether either of them is sandboxed or not. Only under `$XDG_RUNTIME_DIR` (private to
+/// the user); with no runtime dir there's no live mode.
 pub fn socket_path() -> Option<PathBuf> {
-    let dir = std::env::var_os("XDG_RUNTIME_DIR").filter(|d| !d.is_empty())?;
-    Some(PathBuf::from(dir).join("blobr.sock"))
+    Some(runtime_dir()?.join("app").join(APP_ID).join("blobr.sock"))
+}
+
+/// Where Blobr listened before it moved to [`socket_path`] (still tried, for older builds).
+fn legacy_socket_path() -> Option<PathBuf> {
+    Some(runtime_dir()?.join("blobr.sock"))
+}
+
+fn runtime_dir() -> Option<PathBuf> {
+    std::env::var_os("XDG_RUNTIME_DIR").filter(|d| !d.is_empty()).map(PathBuf::from)
 }
 
 pub fn request(name: &str, args: &Value) -> String {
@@ -76,7 +89,7 @@ pub struct Client {
 impl Client {
     /// Connects if Blobr is running.
     pub fn connect() -> Option<Self> {
-        let stream = UnixStream::connect(socket_path()?).ok()?;
+        let stream = [socket_path(), legacy_socket_path()].into_iter().flatten().find_map(|p| UnixStream::connect(p).ok())?;
         // Renders of big pages, or the app being busy, can take a while.
         stream.set_read_timeout(Some(Duration::from_secs(120))).ok()?;
         let writer = stream.try_clone().ok()?;
@@ -99,6 +112,13 @@ impl Client {
 /// from a crashed app is replaced).
 pub fn bind() -> Option<UnixListener> {
     let path = socket_path()?;
+    let dir = path.parent()?;
+    if !dir.exists() {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir).ok()?;
+        // `recursive` leaves existing parents alone; the app folder itself stays private.
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
     if path.exists() {
         if UnixStream::connect(&path).is_ok() {
             return None;
