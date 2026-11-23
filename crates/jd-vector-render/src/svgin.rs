@@ -14,7 +14,18 @@ use usvg::tiny_skia_path::PathSegment;
 /// key is `"svg"`.
 pub fn import_svg(data: &[u8], parent: Ref, name: &str, x: f64, y: f64) -> Result<Vec<Op>, String> {
     let mut opt = usvg::Options::default();
-    opt.fontdb_mut().load_system_fonts();
+    let db = opt.fontdb_mut();
+    db.load_system_fonts();
+    let loaded: Vec<std::path::PathBuf> = db
+        .faces()
+        .filter_map(|f| match &f.source {
+            usvg::fontdb::Source::File(p) | usvg::fontdb::Source::SharedFile(p, _) => Some(p.clone()),
+            _ => None,
+        })
+        .collect();
+    for dir in crate::text::flatpak_font_dirs(&loaded) {
+        db.load_fonts_dir(dir);
+    }
     let tree = usvg::Tree::from_data(data, &opt).map_err(|e| format!("not a readable SVG: {e}"))?;
     let size = tree.size();
     let mut frame = NodeSpec::frame(name, size.width() as f64, size.height() as f64).at(x, y);

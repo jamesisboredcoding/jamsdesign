@@ -18,8 +18,32 @@ struct Engine {
 }
 
 /// Loading the system's fonts takes a moment, so it happens once.
-static ENGINE: LazyLock<Mutex<Engine>> =
-    LazyLock::new(|| Mutex::new(Engine { fonts: FontSystem::new(), glyphs: SwashCache::new() }));
+static ENGINE: LazyLock<Mutex<Engine>> = LazyLock::new(|| {
+    let mut fonts = FontSystem::new();
+    let db = fonts.db_mut();
+    let loaded: Vec<std::path::PathBuf> = db.faces().filter_map(|f| face_path(&f.source)).collect();
+    for dir in flatpak_font_dirs(&loaded) {
+        db.load_fonts_dir(dir);
+    }
+    Mutex::new(Engine { fonts, glyphs: SwashCache::new() })
+});
+
+fn face_path(source: &cosmic_text::fontdb::Source) -> Option<std::path::PathBuf> {
+    match source {
+        cosmic_text::fontdb::Source::File(p) | cosmic_text::fontdb::Source::SharedFile(p, _) => Some(p.clone()),
+        _ => None,
+    }
+}
+
+/// Inside a Flatpak, the host's fonts are mounted under `/run/host`. The runtime's
+/// fontconfig lists them, but in case that wasn't followed (`loaded`: files already
+/// loaded), these are the folders to load as well.
+pub(crate) fn flatpak_font_dirs(loaded: &[std::path::PathBuf]) -> Vec<&'static std::path::Path> {
+    if std::env::var_os("FLATPAK_ID").is_none() || loaded.iter().any(|p| p.starts_with("/run/host")) {
+        return Vec::new();
+    }
+    ["/run/host/fonts", "/run/host/local-fonts", "/run/host/user-fonts"].into_iter().map(std::path::Path::new).filter(|d| d.is_dir()).collect()
+}
 
 /// Font families installed on this computer, sorted.
 pub fn families() -> Vec<String> {
