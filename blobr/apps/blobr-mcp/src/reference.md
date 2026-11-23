@@ -23,7 +23,10 @@ step). If any op fails, nothing changes and the error names the op. Give created
 
 ## Node types
 
-`frame` (fill white and clips by default), `group` (fits its children; no fill), `section`,
+Nodes start with what the matching drawing tool gives them (100 x 100; frames white and
+clipping, text black); anything you set wins, and `"fills": []` removes a fill.
+
+`frame`, `group` (fits its children; no fill), `section`,
 `rectangle`, `ellipse` (`arc: {start, sweep, inner}` in degrees / ratio), `line` (from (0,0)
 to (width,0); rotate for other angles), `polygon` (`sides`), `star` (`points`, `inner`),
 `vector` (see Paths), `text` (`text: {content, style}`), `component`, `component_set`,

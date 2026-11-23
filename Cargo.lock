@@ -480,15 +480,18 @@ name = "blobr"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "blobr-mcp",
  "iced",
  "iced_runtime",
  "jd-core",
+ "jd-mcp",
  "jd-ui",
  "jd-vector",
  "jd-vector-render",
  "kurbo 0.11.3",
  "resvg",
  "rfd",
+ "serde_json",
  "tiny-skia",
 ]
 
@@ -496,6 +499,7 @@ dependencies = [
 name = "blobr-mcp"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "jd-mcp",
  "jd-vector",
  "jd-vector-render",

@@ -10,6 +10,10 @@ jd-core.workspace = true
 jd-ui.workspace = true
 jd-vector = { path = "../../../crates/jd-vector" }
 jd-vector-render = { path = "../../../crates/jd-vector-render" }
+# The MCP tools, run live on the open document when an agent connects.
+blobr-mcp = { path = "../blobr-mcp" }
+jd-mcp = { path = "../../../crates/jd-mcp" }
+serde_json.workspace = true
 iced.workspace = true
 iced_runtime.workspace = true
 rfd.workspace = true

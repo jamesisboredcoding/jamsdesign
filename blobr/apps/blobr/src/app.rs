@@ -23,6 +23,7 @@ use jd_vector::{
 use jd_vector_render::{CosmicMeasure, RenderOptions, export_svg, render_png, render_region};
 use kurbo::{Affine, Rect, Vec2};
 
+use crate::agent::AgentEvent;
 use crate::clipboard::{self, Pasted};
 use crate::pen::{self, Part, PenPath, VectorEdit};
 use crate::tool::Tool;
@@ -233,6 +234,8 @@ pub enum Field {
 #[derive(Debug, Clone)]
 pub enum Message {
     Chrome(chrome::Event),
+    /// From an AI agent over MCP (see `agent`).
+    Agent(AgentEvent),
     Menu(Box<Message>),
     CloseMenu,
     Noop,
@@ -449,6 +452,8 @@ pub struct Blobr {
     imported: HashMap<(PathBuf, NodeId), NodeId>,
     last_click: Option<(Instant, Point)>,
     fit_pending: bool,
+    /// AI agents connected over MCP (shown in the status bar).
+    pub agents: usize,
 }
 
 const MIN_ZOOM: f64 = 0.02;
@@ -515,6 +520,7 @@ impl Blobr {
             imported: HashMap::new(),
             last_click: None,
             fit_pending: false,
+            agents: 0,
         };
         app.viewport = view::canvas_size(app.chrome.size);
         // Every command-line argument is a file to open (the suite's apps take no flags).
@@ -542,6 +548,7 @@ impl Blobr {
             window::close_requests().map(|_| Message::Quit),
             if self.drag.is_some() { window::frames().map(|_| Message::Frame) } else { Subscription::none() },
             if self.present_animating() { window::frames().map(|_| Message::PresentTick) } else { Subscription::none() },
+            Subscription::run(crate::agent::listen),
         ])
     }
 
@@ -594,6 +601,25 @@ impl Blobr {
                 return self.handle(*m);
             }
             Message::CloseMenu => self.chrome.open_menu = None,
+            Message::Agent(AgentEvent::Connected(on)) => {
+                if on {
+                    self.agents += 1;
+                    self.info("An agent connected".into());
+                } else {
+                    self.agents = self.agents.saturating_sub(1);
+                }
+            }
+            Message::Agent(AgentEvent::Call { name, args, reply }) => {
+                let read_only = blobr_mcp::tools().iter().any(|t| t.name == name && t.read_only);
+                let result = if self.drag.is_some() && !read_only {
+                    Err("the user is dragging on the canvas right now; try again in a moment".into())
+                } else if self.confirm.is_some() && !read_only {
+                    Err("a dialog is open in Blobr; try again once it's closed".into())
+                } else {
+                    blobr_mcp::call(self, &name, args)
+                };
+                let _ = reply.send(result);
+            }
             Message::Noop => {}
             Message::Frame => return self.refresh(),
             Message::CanvasReady(seq, allocation) => {
@@ -1422,6 +1448,16 @@ impl Blobr {
         }
         if self.hover.is_some_and(|h| !doc.contains(h)) {
             self.hover = None;
+        }
+        // An agent (or undo) can remove what these point at.
+        if self.vector_edit.as_ref().is_some_and(|v| !doc.contains(v.id)) {
+            self.vector_edit = None;
+        }
+        if self.renaming.as_ref().is_some_and(|(id, _)| !doc.contains(*id)) {
+            self.renaming = None;
+        }
+        if self.text_edit.as_ref().is_some_and(|(id, _)| !doc.contains(*id)) {
+            self.text_edit = None;
         }
     }
 
@@ -2305,7 +2341,10 @@ impl Blobr {
 
     fn proceed(&mut self, after: After) -> Task<Message> {
         match after {
-            After::Quit => self.chrome.close(),
+            After::Quit => {
+                crate::agent::cleanup();
+                self.chrome.close()
+            }
             After::New => {
                 self.load(Document::new(), None);
                 Task::none()
@@ -2375,6 +2414,12 @@ impl Blobr {
             self.camera = Camera { origin: kurbo::Point::new(-100.0, -100.0), zoom: 1.0 };
             return;
         };
+        self.zoom_to(b, selection);
+    }
+
+    /// Fits a page rectangle in the view (zooming in past 100% only when `closer`).
+    fn zoom_to(&mut self, b: Rect, closer: bool) {
+        let selection = closer;
         let (vw, vh) = (self.viewport.width as f64, self.viewport.height as f64);
         if vw < 10.0 || vh < 10.0 {
             return;
@@ -2958,6 +3003,99 @@ pub fn resize_rect(r: Rect, h: Handle, d: Vec2, keep_ratio: bool) -> Rect {
         out = Rect::from_origin_size((if ax == 0.0 { out.x1 - w } else { out.x0 }, if ay == 0.0 { out.y1 - h } else { out.y0 }), (w, h));
     }
     out
+}
+
+/// The open document, for agents connected over MCP: the same tools as headless mode, with
+/// every change an undo step here and visible at once.
+impl blobr_mcp::Target for Blobr {
+    fn doc(&self) -> &Document {
+        &self.ed.doc
+    }
+
+    fn apply(&mut self, label: &str, ops: &[Op]) -> Result<jd_vector::Applied, String> {
+        if ops.is_empty() {
+            return Ok(jd_vector::Applied::default());
+        }
+        let done = self.ed.apply(label, ops, &CosmicMeasure).map_err(|e| e.to_string())?;
+        self.after_change();
+        self.info(format!("Agent: {label}"));
+        Ok(done)
+    }
+
+    fn undo(&mut self) -> Result<String, String> {
+        let label = self.ed.undo().ok_or("nothing to undo")?;
+        self.after_history(format!("Agent undid {label}"));
+        Ok(label)
+    }
+
+    fn path(&self) -> Option<PathBuf> {
+        self.path.clone()
+    }
+
+    fn dirty(&self) -> bool {
+        self.ed.history.is_dirty()
+    }
+
+    fn new_document(&mut self, _path: Option<PathBuf>) -> Result<(), String> {
+        Err("in the app, start new documents there".into())
+    }
+
+    fn open(&mut self, _path: &std::path::Path) -> Result<(), String> {
+        Err("in the app, open files there".into())
+    }
+
+    fn save(&mut self, path: Option<&std::path::Path>) -> Result<PathBuf, String> {
+        let path = path.map(|p| p.to_path_buf()).or_else(|| self.path.clone()).ok_or("this document hasn't been saved yet: give save_document a path")?;
+        file::save(&self.ed.doc, &path).map_err(|e| format!("{}: {e}", path.display()))?;
+        self.ed.history.mark_saved();
+        self.info(format!("Agent saved {}", path.display()));
+        self.path = Some(path.clone());
+        Ok(path)
+    }
+
+    fn live(&self) -> bool {
+        true
+    }
+
+    fn selection(&self) -> Result<Vec<NodeId>, String> {
+        Ok(self.selection.clone())
+    }
+
+    fn select(&mut self, ids: &[NodeId]) -> Result<(), String> {
+        let doc = &self.ed.doc;
+        if ids.iter().any(|&id| doc.node(id).is_none_or(|n| n.is_page())) {
+            return Err("only layers can be selected (pages can't)".into());
+        }
+        if let Some(page) = ids.first().and_then(|&id| doc.page_of(id)) {
+            self.page = page;
+        }
+        self.selection = ids.to_vec();
+        Ok(())
+    }
+
+    fn focus(&mut self, id: NodeId) -> Result<(), String> {
+        let doc = &self.ed.doc;
+        if doc.node(id).is_some_and(|n| n.is_page()) {
+            self.page = id;
+            self.zoom_fit(false);
+            return Ok(());
+        }
+        let b = doc.world_bounds(id).ok_or("that node has no size")?;
+        self.page = doc.page_of(id).ok_or("that node isn't on a page")?;
+        self.zoom_to(b, true);
+        Ok(())
+    }
+
+    fn view_png(&mut self) -> Result<Vec<u8>, String> {
+        let (w, h) = (self.viewport.width as f64, self.viewport.height as f64);
+        let view = Rect::new(self.camera.origin.x, self.camera.origin.y, self.camera.origin.x + w / self.camera.zoom, self.camera.origin.y + h / self.camera.zoom);
+        let background = match self.doc().node(self.page).map(|n| &n.kind) {
+            Some(NodeKind::Page { background }) => *background,
+            _ => Rgba::from_srgb8(0x1E, 0x1E, 0x1E),
+        };
+        let pm = render_region(self.doc(), self.page, view, RenderOptions { scale: self.camera.zoom, background: Some(background) }).ok_or("the canvas has no size yet")?;
+        pm.encode_png().map_err(|e| e.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -3597,6 +3735,40 @@ mod tests {
 
         let css = jd_vector::inspect::css(app.doc(), btn);
         assert!(css.contains(&"position: absolute;".to_string()) && css.contains(&"left: 150px;".to_string()), "{css:?}");
+    }
+
+    #[test]
+    fn agent_edits_are_live_undo_steps() {
+        let mut app = app();
+        let call = |app: &mut Blobr, name: &str, args: serde_json::Value| {
+            let (reply, answer) = std::sync::mpsc::channel();
+            let _ = app.update(Message::Agent(AgentEvent::Call { name: name.into(), args, reply }));
+            answer.recv().unwrap()
+        };
+        let _ = app.update(Message::Agent(AgentEvent::Connected(true)));
+        assert_eq!(app.agents, 1);
+        let ops = serde_json::json!({ "label": "Add card", "ops": [{ "op": "create", "parent": app.page.0, "key": "c", "node": { "type": "frame", "name": "Card", "x": 900, "y": 900 } }] });
+        assert!(call(&mut app, "apply_ops", ops).is_ok());
+        let card = app.doc().find_by_name("Card").unwrap();
+        assert_eq!(app.ed.history.labels().last(), Some("Add card"));
+        assert!(app.status.text.contains("Add card"));
+        assert!(call(&mut app, "select", serde_json::json!({ "ids": [card.0] })).is_ok());
+        assert_eq!(app.selection, vec![card]);
+        assert!(call(&mut app, "focus_node", serde_json::json!({ "id": card.0 })).is_ok());
+        assert!(app.view_rect().contains(kurbo::Point::new(950.0, 950.0)), "the view moved to it: {:?} {:?}", app.view_rect(), app.doc().world_bounds(card));
+        assert!(matches!(call(&mut app, "render_view", serde_json::json!({})).unwrap()[0], jd_mcp::Content::Png(_)));
+        assert!(call(&mut app, "open_document", serde_json::json!({ "path": "x.jdb" })).is_err(), "files open in the app");
+        // The user undoes it like any edit.
+        let _ = app.update(Message::Undo);
+        assert!(app.doc().find_by_name("Card").is_none());
+        assert!(app.selection.is_empty());
+        // Edits wait while the user drags.
+        app.drag = Some(Drag::Pan { start: Point::ORIGIN, origin: kurbo::Point::ZERO });
+        assert!(call(&mut app, "apply_ops", serde_json::json!({ "ops": [] })).unwrap_err().contains("dragging"));
+        assert!(call(&mut app, "get_tree", serde_json::json!({})).is_ok(), "reading is fine");
+        app.drag = None;
+        let _ = app.update(Message::Agent(AgentEvent::Connected(false)));
+        assert_eq!(app.agents, 0);
     }
 
     #[test]

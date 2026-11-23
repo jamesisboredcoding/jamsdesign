@@ -204,6 +204,7 @@ fn status_bar(app: &Blobr) -> Element<'_, Message> {
             text(selection).size(TEXT_SIZE_SMALL).color(TEXT_SECONDARY),
             space::horizontal(),
             status,
+            agent_chip(app),
             vline(12, BORDER_SUBTLE),
             saved
         ]
@@ -216,6 +217,19 @@ fn status_bar(app: &Blobr) -> Element<'_, Message> {
     .width(Fill)
     .style(style::fill(BG_PANEL_HEADER))
     .into()
+}
+
+/// "Agent" while an AI agent is connected over MCP.
+fn agent_chip(app: &Blobr) -> Element<'_, Message> {
+    if app.agents == 0 {
+        return space::horizontal().width(0).into();
+    }
+    let label = if app.agents == 1 { "Agent connected".to_owned() } else { format!("{} agents connected", app.agents) };
+    let accent = jd_ui::tokens::ACCENT_PRIMARY;
+    container(text(label).size(TEXT_SIZE_SMALL).color(accent))
+        .padding(Padding::from([1, 8]))
+        .style(style::fill(iced::Color { a: 0.15, ..accent }))
+        .into()
 }
 
 /// Icon for a node kind in the Layers panel.

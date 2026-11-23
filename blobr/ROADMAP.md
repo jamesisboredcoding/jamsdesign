@@ -175,25 +175,27 @@ CLI argument as a file to open. Names are provisional until Step 0.
         and `render_rgba` stable, or tell the Photosplash session first
 
 - [ ] Step 8: MCP (`jd-mcp` + `blobr-mcp`), the final touch
-  - Transport: stdio, so it can be added to Claude Code with a single command
-  - Tools: `new_document`, `open_document`, `save_document`, `list_pages`, `get_tree`
-    (depth and field limits), `query` (selector syntax: type, name, attributes,
-    descendants), `get_node` (full properties for given IDs), `apply_ops` (atomic batch,
-    returns IDs), `import_svg` (SVG string to editable vectors, for icons), `render`
-    (node to PNG, scale or max size), `export`, `list_fonts`
-  - Clear errors: which op failed, why, and a note that nothing was applied
-  - Spike: structured JSON ops only, or also an embedded script surface like Figma's
-    `use_figma`. Start with JSON ops; add scripting only if batches prove too clumsy
-  - Spike: Rust MCP SDK crate vs a small hand-written JSON-RPC layer; check what's current
-  - Acceptance: Claude rebuilds the Photosplash main-window mockup in a `.jdb` file over MCP,
-    checking itself with `render`, with no call limit
-  - Live bridge:
-    - A running Blobr listens on a local socket (under `$XDG_RUNTIME_DIR`); `blobr-mcp`
-      connects to it when it's running and falls back to headless file mode when it isn't
-    - Agent edits appear live, land in History as named undo steps, and can be undone
-    - Tools that need the app: `get_selection`, `select`, `focus_node` (scroll the canvas to
-      a node), render exactly what is on screen
-    - A small status bar indicator while an agent is connected
+  - [x] Transport: stdio, hand-written JSON-RPC in `crates/jd-mcp` (no async runtime; the
+        Rust SDK would pull in tokio for one client and one call at a time). Reusable for
+        Photosplash and Cinematica servers
+  - [x] 21 tools: `reference`, `document_info`, `new_document`, `open_document`,
+        `save_document`, `get_tree`, `query` (selectors: types, #id, [name=..] [name*=..]
+        [text*=..], descendant/child, commas), `get_node`, `apply_ops` (atomic, keys to ids),
+        `arrange` (group, frame, align, distribute, order, booleans, flatten), `import_svg`,
+        `render` (node or page to PNG), `export` (png/svg/pdf), `list_fonts`, `get_tokens`,
+        `inspect_code` (css/html/iced/tokens), `undo`, plus live-only `get_selection`,
+        `select`, `focus_node`, `render_view`
+  - [x] Agent-friendly ops: `svg_path` for vectors, plain numbers for `corner`/`padding`,
+        new nodes get the drawing tools' defaults; errors name the op and say nothing was
+        applied. The reference's examples are tested against the real op format
+  - [x] Scripting spike: JSON ops only for now (batches + keys cover building screens)
+  - [x] Live bridge: a running Blobr listens on `$XDG_RUNTIME_DIR/blobr.sock`; `blobr-mcp`
+        uses it while it runs (never switching away from unsaved headless work) and falls
+        back to headless files. Agent edits show at once and are named undo steps; edits
+        wait while the user drags or a dialog is open; "Agent connected" in the status bar
+  - [ ] Acceptance: Claude rebuilds the Photosplash main-window mockup in a `.jdb` over MCP,
+        checking itself with `render` (needs the server registered in Claude Code: see
+        `blobr/apps/blobr-mcp/README.md`)
 
 ## Later
 

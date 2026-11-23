@@ -11,6 +11,7 @@ use jd_vector_render::{CosmicMeasure, RenderOptions};
 use kurbo::Shape;
 use serde_json::{Map, Value, json};
 
+pub mod live;
 pub mod query;
 
 /// The long reference the `reference` tool returns.
@@ -559,6 +560,7 @@ pub fn parse_ops(doc: &Document, raw: Vec<Value>) -> Result<Vec<Op>, String> {
                 "create" => {
                     if let Some(node) = v.get_mut("node") {
                         friendly(node, None).map_err(fail)?;
+                        with_defaults(node).map_err(fail)?;
                     }
                 }
                 "set" => {
@@ -572,6 +574,19 @@ pub fn parse_ops(doc: &Document, raw: Vec<Value>) -> Result<Vec<Op>, String> {
             serde_json::from_value::<Op>(v).map_err(|e| fail(e.to_string()))
         })
         .collect()
+}
+
+/// Fills in what the matching drawing tool would (100 x 100, frames white and clipping,
+/// ...) for every property the agent left out. Plain JSON ops would start from nothing
+/// (0 x 0, no fill).
+fn with_defaults(node: &mut Value) -> Result<(), String> {
+    let given: jd_vector::NodeSpec = serde_json::from_value(node.clone()).map_err(|e| e.to_string())?;
+    let Value::Object(mut full) = serde_json::to_value(jd_vector::NodeSpec::new(&given.name, given.kind)).expect("json") else { return Ok(()) };
+    if let Value::Object(m) = node {
+        full.extend(std::mem::take(m));
+    }
+    *node = Value::Object(full);
+    Ok(())
 }
 
 fn friendly(obj: &mut Value, existing_size: Option<(f64, f64)>) -> Result<(), String> {
@@ -758,6 +773,11 @@ mod tests {
         let play = t.doc().find_by_name("Play").unwrap();
         assert_eq!((t.doc().node(play).unwrap().props.width, t.doc().node(play).unwrap().props.height), (24.0, 24.0), "size from the path");
 
+        let plain = run(&mut t, "apply_ops", json!({ "ops": [{ "op": "create", "parent": 1, "node": { "type": "frame", "name": "Plain" } }] }));
+        assert!(plain.starts_with("Applied."), "{plain}");
+        let p = t.doc().node(t.doc().find_by_name("Plain").unwrap()).unwrap();
+        assert_eq!((p.props.width, p.props.height, p.props.clip, p.props.fills.len()), (100.0, 100.0, true, 1), "the Frame tool's defaults");
+        run(&mut t, "undo", json!({}));
         let tree = run(&mut t, "get_tree", json!({}));
         assert!(tree.contains("frame \"Card\"") && tree.contains("[auto horizontal gap 8]") && tree.contains("text=\"Play\""), "{tree}");
         assert!(run(&mut t, "query", json!({ "selector": "frame[name=Card] > vector" })).contains("\"Play\""));

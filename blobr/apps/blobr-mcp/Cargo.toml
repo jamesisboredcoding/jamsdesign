@@ -11,3 +11,4 @@ jd-vector = { path = "../../../crates/jd-vector" }
 jd-vector-render = { path = "../../../crates/jd-vector-render" }
 serde_json.workspace = true
 kurbo = "0.11"
+base64 = "0.22"
