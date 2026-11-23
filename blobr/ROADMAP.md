@@ -174,7 +174,7 @@ CLI argument as a file to open. Names are provisional until Step 0.
   - [x] Photosplash File > Place uses it (Photosplash's side); keep `place::open`, `frames`
         and `render_rgba` stable, or tell the Photosplash session first
 
-- [ ] Step 8: MCP (`jd-mcp` + `blobr-mcp`), the final touch
+- [x] Step 8: MCP (`jd-mcp` + `blobr-mcp`), the final touch
   - [x] Transport: stdio, hand-written JSON-RPC in `crates/jd-mcp` (no async runtime; the
         Rust SDK would pull in tokio for one client and one call at a time). Reusable for
         Photosplash and Cinematica servers
@@ -193,9 +193,10 @@ CLI argument as a file to open. Names are provisional until Step 0.
         uses it while it runs (never switching away from unsaved headless work) and falls
         back to headless files. Agent edits show at once and are named undo steps; edits
         wait while the user drags or a dialog is open; "Agent connected" in the status bar
-  - [ ] Acceptance: Claude rebuilds the Photosplash main-window mockup in a `.jdb` over MCP,
-        checking itself with `render` (needs the server registered in Claude Code: see
-        `blobr/apps/blobr-mcp/README.md`)
+  - [x] Acceptance (2026-11-23): Claude rebuilt the Photosplash main-window mockup over MCP
+        (headless, 6 batches, about 200 layers, auto layout throughout, checked with `render`),
+        with no call limit. It turned up two fixes: no default outline on filled vectors, and
+        `render`'s `scale` no longer capped by the default size
 
 ## Later
 

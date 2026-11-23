@@ -581,6 +581,14 @@ pub fn parse_ops(doc: &Document, raw: Vec<Value>) -> Result<Vec<Op>, String> {
 /// (0 x 0, no fill).
 fn with_defaults(node: &mut Value) -> Result<(), String> {
     let given: jd_vector::NodeSpec = serde_json::from_value(node.clone()).map_err(|e| e.to_string())?;
+    // A filled shape drawn from path data shouldn't get the Pen's outline too.
+    if let Value::Object(m) = node
+        && m.get("type").and_then(Value::as_str) == Some("vector")
+        && m.contains_key("fills")
+        && !m.contains_key("strokes")
+    {
+        m.insert("strokes".into(), json!([]));
+    }
     let Value::Object(mut full) = serde_json::to_value(jd_vector::NodeSpec::new(&given.name, given.kind)).expect("json") else { return Ok(()) };
     if let Value::Object(m) = node {
         full.extend(std::mem::take(m));
@@ -707,7 +715,8 @@ pub fn render(doc: &Document, id: NodeId, scale: Option<f64>, max_size: Option<u
         doc.world_bounds(id).ok_or("nothing to render")?
     };
     let longest = bounds.width().max(bounds.height()).max(1.0);
-    let max = max_size.unwrap_or(1024).clamp(16, 4096) as f64;
+    // An explicit scale is only capped by the largest size we render.
+    let max = max_size.unwrap_or(if scale.is_some() { 4096 } else { 1024 }).clamp(16, 4096) as f64;
     let scale = scale.unwrap_or(max / longest).min(max / longest);
     match n.kind {
         NodeKind::Page { background: bg } => {
@@ -771,6 +780,7 @@ mod tests {
         let n = t.doc().node(card).unwrap();
         assert_eq!((n.props.corner.top_left, n.props.layout.as_ref().unwrap().padding.left), (12.0, 16.0));
         let play = t.doc().find_by_name("Play").unwrap();
+        assert!(t.doc().node(play).unwrap().props.strokes.is_empty(), "a filled vector gets no default outline");
         assert_eq!((t.doc().node(play).unwrap().props.width, t.doc().node(play).unwrap().props.height), (24.0, 24.0), "size from the path");
 
         let plain = run(&mut t, "apply_ops", json!({ "ops": [{ "op": "create", "parent": 1, "node": { "type": "frame", "name": "Plain" } }] }));

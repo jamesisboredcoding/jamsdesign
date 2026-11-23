@@ -24,7 +24,8 @@ step). If any op fails, nothing changes and the error names the op. Give created
 ## Node types
 
 Nodes start with what the matching drawing tool gives them (100 x 100; frames white and
-clipping, text black); anything you set wins, and `"fills": []` removes a fill.
+clipping, text black, vectors a 1 px black outline unless you give them `fills`); anything
+you set wins, and `"fills": []` / `"strokes": []` remove them.
 
 `frame`, `group` (fits its children; no fill), `section`,
 `rectangle`, `ellipse` (`arc: {start, sweep, inner}` in degrees / ratio), `line` (from (0,0)
