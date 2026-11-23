@@ -550,6 +550,8 @@ pub enum Message {
     /// Make the selected top-level frame a flow's starting point (or stop).
     SetFlow(bool),
     SetOverflow(jd_vector::Overflow),
+    /// Keep the selected layers in place while their frame scrolls (presenting).
+    SetScrollFixed(bool),
     /// Scrolling while presenting.
     PresentScroll(Vector),
     Distribute(bool),
@@ -1562,6 +1564,10 @@ impl Blobr {
                 });
                 let ops: Vec<Op> = self.selection.iter().map(|&id| Op::set(id, Patch { flow: Some(flow.clone()), ..Patch::default() })).collect();
                 self.run(if on { "Add flow" } else { "Remove flow" }, &ops);
+            }
+            Message::SetScrollFixed(on) => {
+                let ops: Vec<Op> = self.selection.iter().map(|&id| Op::set(id, Patch { scroll_fixed: Some(on), ..Patch::default() })).collect();
+                self.run(if on { "Fix position" } else { "Scroll with frame" }, &ops);
             }
             Message::SetOverflow(o) => {
                 let ops: Vec<Op> = self.selection.iter().map(|&id| Op::set(id, Patch { overflow: Some(o), ..Patch::default() })).collect();
@@ -2723,7 +2729,8 @@ impl Blobr {
     fn scrolled_doc(&self, scroll: &HashMap<NodeId, Vec2>) -> Document {
         let mut doc = self.doc().clone();
         for (&f, d) in scroll {
-            for c in self.doc().children(f).to_vec() {
+            // Fixed layers (headers, tab bars) stay where they are.
+            for c in self.doc().children(f).iter().copied().filter(|&c| !self.doc().node(c).is_some_and(|n| n.props.scroll_fixed)).collect::<Vec<_>>() {
                 doc.preview_props(c, |p| {
                     p.x -= d.x;
                     p.y -= d.y;
@@ -2758,7 +2765,7 @@ impl Blobr {
         let content = doc
             .children(target)
             .iter()
-            .filter_map(|&c| doc.node(c).map(|cn| jd_vector::Document::local_transform(cn).transform_rect_bbox(Rect::new(0.0, 0.0, cn.props.width, cn.props.height))))
+            .filter_map(|&c| doc.node(c).filter(|cn| !cn.props.scroll_fixed).map(|cn| jd_vector::Document::local_transform(cn).transform_rect_bbox(Rect::new(0.0, 0.0, cn.props.width, cn.props.height))))
             .reduce(|a, b| a.union(b))
             .unwrap_or_default();
         let max = Vec2::new((content.x1 - n.props.width).max(0.0), (content.y1 - n.props.height).max(0.0));
@@ -3410,15 +3417,7 @@ impl Blobr {
 
     /// The page a node is on.
     pub fn page_of(&self, id: NodeId) -> Option<NodeId> {
-        let doc = self.doc();
-        let mut at = id;
-        loop {
-            let parent = doc.parent(at)?;
-            if matches!(doc.node(parent).map(|n| &n.kind), Some(NodeKind::Page { .. })) {
-                return Some(parent);
-            }
-            at = parent;
-        }
+        self.doc().page_of(id)
     }
 
     /// Opens the Layers panel's rows down to `id`.
@@ -5026,6 +5025,22 @@ mod tests {
         let _ = app.update(Message::PresentScroll(Vector::new(0.0, -10_000.0)));
         assert_eq!(app.present.as_ref().unwrap().scroll[&list], Vec2::new(0.0, 300.0), "clamped to the content");
         assert_eq!(app.doc().node(done.id("item").unwrap()).unwrap().props.y, 0.0, "the document itself doesn't move");
+        // A fixed layer in the list stays put while the rest scrolls, and doesn't count
+        // towards how far the list scrolls.
+        let _ = app.update(Message::StopPresenting);
+        let header = app.run("Add", &[Op::create(list, NodeSpec::rect("Header", 200.0, 900.0))]).unwrap().created[0];
+        app.selection = vec![header];
+        let _ = app.update(Message::SetScrollFixed(true));
+        assert!(app.doc().node(header).unwrap().props.scroll_fixed);
+        let _ = app.update(Message::Present(Some(a)));
+        let _ = app.update(Message::PresentMove(over_list));
+        let _ = app.update(Message::PresentScroll(Vector::new(0.0, -10_000.0)));
+        let scroll = app.present.as_ref().unwrap().scroll.clone();
+        assert_eq!(scroll[&list], Vec2::new(0.0, 300.0), "the 900 px fixed layer isn't content to scroll to");
+        let moved = app.scrolled_doc(&scroll);
+        assert_eq!((moved.node(header).unwrap().props.y, moved.node(done.id("item").unwrap()).unwrap().props.y), (0.0, -300.0));
+        let _ = app.update(Message::StopPresenting);
+        app.run("Remove", &[Op::Delete { id: header.into() }]);
 
         // In a window of its own: the presentation follows that window's size.
         let _ = app.update(Message::PresentInWindow(Some(a)));

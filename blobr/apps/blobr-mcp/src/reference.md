@@ -109,7 +109,9 @@ illustrations) are easier with the `import_svg` tool.
   `document_info` lists them
 - Libraries: `{"op": "set_libraries", "paths": ["/path/to/ui.jdb"]}` replaces the list of `.jdb`
   files whose components this document uses
-- Prototype: `set` + `reactions: [{"trigger": {"type": "click"}, "action": {"type": "navigate", "to": frame}, "transition": "dissolve", "duration": 0.3}]`
+- Prototype: `set` + `reactions: [{"trigger": {"type": "click"}, "action": {"type": "navigate", "to": frame}, "transition": "dissolve", "duration": 0.3}]`;
+  `overflow: "vertical"|"horizontal"|"both"` scrolls a clipping frame while presenting, and
+  `scroll_fixed: true` on one of its children keeps that child in place (a header, a tab bar)
 
 ## Tips
 

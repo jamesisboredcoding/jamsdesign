@@ -168,6 +168,18 @@ pub fn view(app: &Blobr) -> Element<'_, Message> {
             col = col.push(text("Turn on Clip content for this frame so it scrolls.").size(10).color(TEXT_MUTED));
         }
     }
+    // In a frame that scrolls: whether this layer scrolls with it.
+    if app.doc().parent(id).and_then(|p| app.doc().node(p)).is_some_and(|p| p.props.overflow != jd_vector::Overflow::None) {
+        let fixed = n.props.scroll_fixed;
+        col = col.push(
+            row![
+                iced::widget::checkbox(fixed).on_toggle(Message::SetScrollFixed).size(14),
+                text("Fix position when scrolling").size(TEXT_SIZE_SMALL).color(TEXT_PRIMARY),
+            ]
+            .spacing(8)
+            .align_y(Vertical::Center),
+        );
+    }
     col = col.push(hline(BG_PANEL));
     col = col.push(present("Present from here", app.top_frame(id)));
     scrollable(container(col).padding(12)).height(Fill).into()

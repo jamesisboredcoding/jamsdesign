@@ -280,6 +280,9 @@ pub struct Patch {
     pub flow: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overflow: Option<crate::node::Overflow>,
+    /// Stay put while the parent frame scrolls (presenting).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scroll_fixed: Option<bool>,
 }
 
 impl Patch {
@@ -289,7 +292,7 @@ impl Patch {
             ($($f:ident),*) => { $( if other.$f.is_some() { self.$f = other.$f.clone(); } )* };
         }
         take!(name, x, y, width, height, rotation, visible, locked, opacity, blend, fills, strokes, stroke, corner, effects, clip);
-        take!(layout, sizing_h, sizing_v, absolute, constraints, min_width, max_width, min_height, max_height, exports, reactions, flow, overflow, bool_op);
+        take!(layout, sizing_h, sizing_v, absolute, constraints, min_width, max_width, min_height, max_height, exports, reactions, flow, overflow, scroll_fixed, bool_op);
         take!(text, text_style, path, sides, points, inner, arc, background, description, properties, component, refs, styles);
         macro_rules! join {
             ($($f:ident),*) => { $(
@@ -1122,7 +1125,7 @@ pub(crate) fn apply_patch(n: &mut Node, patch: &Patch) -> Result<(), String> {
         ($($f:ident),*) => { $( if let Some(v) = &patch.$f { p.$f = v.clone(); } )* };
     }
     copy!(x, y, rotation, visible, locked, opacity, blend, fills, strokes, stroke, corner, effects, clip);
-    copy!(layout, sizing_h, sizing_v, absolute, constraints, min_width, max_width, min_height, max_height, exports, refs, reactions, flow, overflow);
+    copy!(layout, sizing_h, sizing_v, absolute, constraints, min_width, max_width, min_height, max_height, exports, refs, reactions, flow, overflow, scroll_fixed);
     // Typing a size turns hug/fill into a fixed size, as in the Design panel.
     if let Some(w) = patch.width {
         p.width = w;

@@ -338,6 +338,9 @@ pub struct Props {
     /// Prototype: how a clipping frame scrolls what's inside it while presenting.
     #[serde(skip_serializing_if = "is_default")]
     pub overflow: Overflow,
+    /// Prototype: stays put while its parent frame scrolls (a header, a tab bar).
+    #[serde(skip_serializing_if = "is_default")]
+    pub scroll_fixed: bool,
 }
 
 /// Which way a frame's content scrolls when it doesn't fit (while presenting).
@@ -466,6 +469,7 @@ impl Default for Props {
             reactions: Vec::new(),
             flow: None,
             overflow: Overflow::None,
+            scroll_fixed: false,
         }
     }
 }
