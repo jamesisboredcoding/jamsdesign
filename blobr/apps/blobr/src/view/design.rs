@@ -110,7 +110,7 @@ pub fn view(app: &Blobr) -> Element<'_, Message> {
     }
 }
 
-fn input_style(_: &Theme, status: text_input::Status) -> text_input::Style {
+pub(super) fn input_style(_: &Theme, status: text_input::Status) -> text_input::Style {
     let focused = matches!(status, text_input::Status::Focused { .. });
     text_input::Style {
         background: BG_INPUT.into(),

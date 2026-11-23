@@ -27,6 +27,7 @@ use crate::agent::AgentEvent;
 use crate::clipboard::{self, Pasted};
 use crate::pen::{self, Part, PenPath, VectorEdit};
 use crate::tool::Tool;
+use crate::prefs::Prefs;
 use crate::view::{self, MENU_COUNT};
 
 /// The canvas camera: the page point at the canvas's top-left corner and the zoom.
@@ -183,6 +184,34 @@ fn library_ticks() -> impl iced::futures::Stream<Item = Message> {
     })
 }
 
+/// A tick every `secs` seconds (from a plain thread), for auto-save.
+fn autosave_ticks(secs: &u32) -> impl iced::futures::Stream<Item = Message> + use<> {
+    let secs = *secs;
+    iced::stream::channel(1, async move |mut out: iced::futures::channel::mpsc::Sender<Message>| {
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_secs(secs.into()));
+                match out.try_send(Message::Autosave) {
+                    Err(e) if e.is_disconnected() => return,
+                    _ => {}
+                }
+            }
+        });
+        std::future::pending::<()>().await;
+    })
+}
+
+/// A typed zoom level: "150", "150%" or "1.5x" (as a factor, 1.0 = 100%).
+fn parse_zoom(s: &str) -> Option<f64> {
+    let s = s.trim();
+    let z = if let Some(x) = s.strip_suffix(['x', 'X']) {
+        x.trim().parse::<f64>().ok()?
+    } else {
+        s.trim_end_matches('%').trim().parse::<f64>().ok()? / 100.0
+    };
+    (z.is_finite() && z > 0.0).then(|| z.clamp(MIN_ZOOM, MAX_ZOOM))
+}
+
 /// Ops that make the local copy `local` of a library component look like `src` in `lib`
 /// again, keeping its id (and its variants' ids) so instances here follow. Variants are
 /// matched by name; ones only in the library aren't added.
@@ -313,6 +342,30 @@ pub const RENAME_INPUT: &str = "layer-rename";
 
 /// Id of the comment card's text box.
 pub const COMMENT_INPUT: &str = "comment-input";
+
+/// Id of the title bar's layer search box.
+pub const SEARCH_INPUT: &str = "layer-search";
+
+/// Id of the status bar's zoom box.
+pub const ZOOM_INPUT: &str = "zoom-input";
+
+/// Zoom levels offered in the zoom menu.
+pub const ZOOM_STEPS: &[f64] = &[0.25, 0.5, 1.0, 2.0, 4.0, 8.0];
+
+/// A small dropdown under a title-bar or status-bar control.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dropdown {
+    /// Design, Prototype or Inspect (the right panel's tab).
+    Mode,
+    Zoom,
+}
+
+/// Which side panel's edge is being dragged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Left,
+    Right,
+}
 
 /// Radius of a comment pin on the canvas, in screen pixels.
 pub const PIN_RADIUS: f32 = 11.0;
@@ -545,6 +598,37 @@ pub enum Message {
     SavedAs(Option<PathBuf>),
     Export(ExportFormat),
     Exported(Option<PathBuf>, Vec<u8>),
+    /// Open (or with `None`, close) a dropdown.
+    Dropdown(Option<Dropdown>),
+    /// Show or hide the layer search box.
+    Search(bool),
+    SearchInput(String),
+    /// Select a layer found by search (switching page if needed) and zoom to it.
+    SearchPick(NodeId),
+    /// Select every match on the current page.
+    SearchSubmit,
+    ZoomInput(String),
+    ZoomSubmit,
+    /// Set the zoom (1.0 is 100%), keeping the view's centre.
+    ZoomTo(f64),
+    /// Start dragging a side panel's inner edge.
+    PanelDrag(Side),
+    /// The pointer moved while dragging a panel edge (window x).
+    PanelDragMove(f32),
+    PanelDragEnd,
+    /// Hide or show the toolbar and side panels (Ctrl+\\).
+    TogglePanels,
+    /// Swap the Layers and Design panels' sides.
+    SwapPanels,
+    /// The Preferences dialog.
+    ShowPrefs(bool),
+    /// New preferences from the dialog (saved at once).
+    SetPrefs(Prefs),
+    /// Save files that have a path, if auto-save is on (a timer tick).
+    Autosave,
+    /// The Keyboard Shortcuts dialog.
+    ShowShortcuts(bool),
+    ShowAbout(bool),
 }
 
 /// The status bar's message.
@@ -635,6 +719,17 @@ pub struct Blobr {
     /// What's typed in the comment card.
     pub comment_draft: String,
     pub show_resolved: bool,
+    pub prefs: Prefs,
+    pub prefs_open: bool,
+    pub shortcuts_open: bool,
+    pub about_open: bool,
+    pub dropdown: Option<Dropdown>,
+    /// What's typed in the layer search box (`None`: closed).
+    pub search: Option<String>,
+    /// What's typed in the zoom box (`None`: showing the zoom).
+    pub zoom_draft: Option<String>,
+    /// The side panel whose edge is being dragged.
+    pub panel_drag: Option<Side>,
 }
 
 const MIN_ZOOM: f64 = 0.02;
@@ -722,13 +817,23 @@ impl Blobr {
             comment_open: None,
             comment_draft: String::new(),
             show_resolved: false,
+            prefs: crate::prefs::load(),
+            prefs_open: false,
+            shortcuts_open: false,
+            about_open: false,
+            dropdown: None,
+            search: None,
+            zoom_draft: None,
+            panel_drag: None,
         };
         app.set_recent(crate::recent::load());
-        app.viewport = view::canvas_size(app.chrome.size);
-        // Every command-line argument is a file to open (the suite's apps take no flags).
-        let open = std::env::args().nth(1).map(PathBuf::from);
-        if let Some(path) = open {
-            app.open_path(path);
+        app.viewport = view::canvas_size(&app, app.chrome.size);
+        // Every command-line argument is a file to open, each in a tab (the suite's apps
+        // take no flags).
+        if !cfg!(test) {
+            for path in std::env::args_os().skip(1).map(PathBuf::from) {
+                app.open_path(path);
+            }
         }
         let render = app.refresh();
         (app, Task::batch([task.map(Message::Chrome), render]))
@@ -769,6 +874,7 @@ impl Blobr {
             if self.drag.is_some() { window::frames().map(|_| Message::Frame) } else { Subscription::none() },
             if self.present_animating() { window::frames().map(|_| Message::PresentTick) } else { Subscription::none() },
             if self.libraries.is_empty() { Subscription::none() } else { Subscription::run(library_ticks) },
+            if self.prefs.autosave { Subscription::run_with(self.prefs.autosave_secs, autosave_ticks) } else { Subscription::none() },
             Subscription::run(crate::agent::listen),
         ])
     }
@@ -791,12 +897,19 @@ impl Blobr {
                     | Message::Chrome(_)
                     | Message::Key(_)
                     | Message::Noop
+                    | Message::CheckLibraries
+                    | Message::Autosave
+                    | Message::CanvasRendered(..)
             )
         {
             self.commit_text();
         }
         let before = self.selection.clone();
+        let zoom = self.camera.zoom;
         let task = self.handle(message);
+        if self.camera.zoom != zoom {
+            self.zoom_draft = None;
+        }
         // Half-typed values belong to the layer they were typed for.
         if self.selection != before {
             self.drafts.clear();
@@ -827,6 +940,7 @@ impl Blobr {
             }
             Message::Menu(m) => {
                 self.chrome.open_menu = None;
+                self.dropdown = None;
                 return self.handle(*m);
             }
             Message::CloseMenu => self.chrome.open_menu = None,
@@ -850,6 +964,93 @@ impl Blobr {
                 let _ = reply.send(result);
             }
             Message::Noop => {}
+            Message::Dropdown(d) => {
+                self.dropdown = d;
+                self.chrome.open_menu = None;
+            }
+            Message::Search(open) => {
+                self.dropdown = None;
+                if open {
+                    self.search.get_or_insert_with(String::new);
+                    return operation::focus(SEARCH_INPUT);
+                }
+                self.search = None;
+            }
+            Message::SearchInput(q) => self.search = Some(q),
+            Message::SearchPick(id) => {
+                self.search = None;
+                if let Some(page) = self.page_of(id) {
+                    if page != self.page {
+                        let _ = self.handle(Message::SelectPage(page));
+                    }
+                    self.reveal(id);
+                    self.selection = vec![id];
+                    self.zoom_fit(true);
+                }
+            }
+            Message::SearchSubmit => {
+                let found: Vec<NodeId> = self.search_results(usize::MAX).into_iter().filter(|&id| self.page_of(id) == Some(self.page)).collect();
+                match found.as_slice() {
+                    [] => match self.search_results(1).first() {
+                        Some(&id) => return self.handle(Message::SearchPick(id)),
+                        None => self.info("No layers match".into()),
+                    },
+                    _ => {
+                        self.search = None;
+                        for &id in &found {
+                            self.reveal(id);
+                        }
+                        self.info(format!("{} layer{} found", found.len(), if found.len() == 1 { "" } else { "s" }));
+                        self.selection = found;
+                        self.zoom_fit(true);
+                    }
+                }
+            }
+            Message::ZoomInput(s) => self.zoom_draft = Some(s),
+            Message::ZoomSubmit => {
+                if let Some(s) = self.zoom_draft.take() {
+                    match parse_zoom(&s) {
+                        Some(z) => return self.handle(Message::ZoomTo(z)),
+                        None => self.error(format!("\"{s}\" isn't a zoom level (try 150 or 150%)")),
+                    }
+                }
+            }
+            Message::ZoomTo(z) => {
+                self.dropdown = None;
+                self.zoom_at(z / self.camera.zoom, None);
+            }
+            Message::PanelDrag(side) => self.panel_drag = Some(side),
+            Message::PanelDragMove(x) => {
+                let Some(side) = self.panel_drag else { return Task::none() };
+                let width = view::panel_width_at(self, side, x);
+                // The left panel is Layers unless the sides are swapped.
+                if (side == Side::Left) != self.prefs.swap_panels {
+                    self.prefs.layers_width = width;
+                } else {
+                    self.prefs.design_width = width;
+                }
+            }
+            Message::PanelDragEnd => {
+                if self.panel_drag.take().is_some() {
+                    crate::prefs::save(&self.prefs);
+                }
+            }
+            Message::TogglePanels => {
+                self.prefs.hide_panels = !self.prefs.hide_panels;
+                crate::prefs::save(&self.prefs);
+            }
+            Message::SwapPanels => {
+                self.prefs.swap_panels = !self.prefs.swap_panels;
+                crate::prefs::save(&self.prefs);
+            }
+            Message::ShowPrefs(open) => self.prefs_open = open,
+            Message::ShowShortcuts(open) => self.shortcuts_open = open,
+            Message::ShowAbout(open) => self.about_open = open,
+            Message::SetPrefs(p) => {
+                self.prefs = p;
+                crate::prefs::save(&self.prefs);
+            }
+            Message::Autosave => self.autosave(),
             Message::Frame => return self.refresh(),
             Message::CanvasRendered(seq, camera, size, pixels) => {
                 self.rendering = false;
@@ -1719,13 +1920,19 @@ impl Blobr {
             if self.confirm.take().is_some() || self.renaming.take().is_some() {
                 return Task::none();
             }
+            if self.dropdown.take().is_some() || self.search.take().is_some() {
+                return Task::none();
+            }
+            if std::mem::take(&mut self.prefs_open) || std::mem::take(&mut self.shortcuts_open) || std::mem::take(&mut self.about_open) {
+                return Task::none();
+            }
         }
-        if self.confirm.is_some() {
+        if self.confirm.is_some() || self.prefs_open || self.shortcuts_open || self.about_open {
             return Task::none();
         }
         let (cmd, shift, alt) = (modifiers.command(), modifiers.shift(), modifiers.alt());
         let plain = !cmd && !alt;
-        let nudge = if shift { 10.0 } else { 1.0 };
+        let nudge = if shift { 10.0 * self.prefs.nudge } else { self.prefs.nudge };
         let message = match key.as_ref() {
             Key::Named(Named::Space) if plain => {
                 self.space_held = true;
@@ -1797,6 +2004,10 @@ impl Blobr {
                     ("o", true, false, false) => Some(Message::Open),
                     ("w", true, false, false) => Some(Message::TabClose(self.active)),
                     ("n", true, false, false) => Some(Message::New),
+                    ("f", true, false, false) => Some(Message::Search(true)),
+                    ("\\", true, false, false) => Some(Message::TogglePanels),
+                    (",", true, false, false) => Some(Message::ShowPrefs(true)),
+                    ("?" | "/", true, true, false) => Some(Message::ShowShortcuts(true)),
                     ("e", true, true, false) => Some(Message::Export(ExportFormat::Png)),
                     ("o", true, true, false) => Some(Message::OutlineStroke),
                     ("k", true, false, true) => Some(Message::CreateComponent),
@@ -3154,6 +3365,93 @@ impl Blobr {
         }
     }
 
+    /// Saves every tab that has a file and unsaved changes, when auto-save is on. The
+    /// active tab waits while something is being typed or dragged on it.
+    fn autosave(&mut self) {
+        if !self.prefs.autosave {
+            return;
+        }
+        let busy = self.text_edit.is_some() || self.drag.is_some() || self.pen.is_some() || self.renaming.is_some();
+        let mut saved = 0;
+        if !busy
+            && self.ed.history.is_dirty()
+            && let Some(path) = self.path.clone()
+        {
+            match file::save(&self.ed.doc, &path) {
+                Ok(()) => {
+                    self.ed.history.mark_saved();
+                    saved += 1;
+                }
+                Err(e) => return self.error(format!("Auto-save couldn't save {}: {e}", path.display())),
+            }
+        }
+        for tab in self.tabs.iter_mut().flatten() {
+            if let Some(path) = &tab.path
+                && tab.ed.history.is_dirty()
+            {
+                match file::save(&tab.ed.doc, path) {
+                    Ok(()) => {
+                        tab.ed.history.mark_saved();
+                        saved += 1;
+                    }
+                    Err(e) => {
+                        let msg = format!("Auto-save couldn't save {}: {e}", path.display());
+                        return self.error(msg);
+                    }
+                }
+            }
+        }
+        if saved > 0 {
+            self.info(format!("Auto-saved {saved} file{}", if saved == 1 { "" } else { "s" }));
+        }
+    }
+
+    /// The page a node is on.
+    pub fn page_of(&self, id: NodeId) -> Option<NodeId> {
+        let doc = self.doc();
+        let mut at = id;
+        loop {
+            let parent = doc.parent(at)?;
+            if matches!(doc.node(parent).map(|n| &n.kind), Some(NodeKind::Page { .. })) {
+                return Some(parent);
+            }
+            at = parent;
+        }
+    }
+
+    /// Opens the Layers panel's rows down to `id`.
+    fn reveal(&mut self, id: NodeId) {
+        let mut at = id;
+        while let Some(parent) = self.doc().parent(at) {
+            self.expanded.insert(parent);
+            at = parent;
+        }
+    }
+
+    /// Layers whose name contains what's typed in search (any case), the current page's
+    /// first, at most `limit`.
+    pub fn search_results(&self, limit: usize) -> Vec<NodeId> {
+        let Some(q) = self.search.as_deref().map(str::trim).filter(|q| !q.is_empty()) else { return Vec::new() };
+        let q = q.to_lowercase();
+        let doc = self.doc();
+        let mut pages = doc.pages().to_vec();
+        pages.sort_by_key(|&p| p != self.page);
+        let mut out = Vec::new();
+        for page in pages {
+            let mut stack: Vec<NodeId> = doc.children(page).iter().rev().copied().collect();
+            while let Some(id) = stack.pop() {
+                if out.len() >= limit {
+                    return out;
+                }
+                if doc.node(id).is_some_and(|n| n.name.to_lowercase().contains(&q)) {
+                    out.push(id);
+                }
+                stack.extend(doc.children(id).iter().rev().copied());
+            }
+        }
+        out
+    }
+
     // ----- Camera -----------------------------------------------------------------------
 
     fn zoom_at(&mut self, factor: f64, at: Option<Point>) {
@@ -3187,7 +3485,7 @@ impl Blobr {
     }
 
     fn scroll(&mut self, delta: Vector, at: Point) {
-        if self.modifiers.command() {
+        if self.modifiers.command() != self.prefs.scroll_zooms {
             self.zoom_at((delta.y as f64 / 300.0).exp(), Some(at));
         } else {
             let (dx, dy) = if self.modifiers.shift() { (delta.y, delta.x) } else { (delta.x, delta.y) };
@@ -4244,6 +4542,99 @@ mod tests {
         app.camera = Camera { origin: kurbo::Point::new(100.0, 50.0), zoom: 2.0 };
         let r = crate::view::canvas::picture_bounds(&app);
         assert_eq!((r.x, r.y, r.width, r.height), (-200.0, -100.0, 2000.0, 1200.0));
+    }
+
+    #[test]
+    fn search_finds_layers_on_any_page_and_picks_them() {
+        let mut app = app();
+        let ids = three_rects(&mut app);
+        let _ = app.update(Message::AddPage);
+        let second = app.page;
+        assert_ne!(second, app.doc().pages()[0]);
+        let _ = app.update(Message::Search(true));
+        let _ = app.update(Message::SearchInput("b".into()));
+        assert_eq!(app.search_results(10), vec![ids[1]]);
+        let _ = app.update(Message::SearchPick(ids[1]));
+        assert_eq!((app.page, app.selection.clone(), app.search.clone()), (app.doc().pages()[0], vec![ids[1]], None));
+        // Enter selects every match on the page.
+        let _ = app.update(Message::Search(true));
+        let _ = app.update(Message::SearchInput("  ".into()));
+        assert!(app.search_results(10).is_empty());
+        let _ = app.update(Message::SearchInput("A".into()));
+        let _ = app.update(Message::SearchSubmit);
+        assert_eq!(app.selection, vec![ids[0]]);
+    }
+
+    #[test]
+    fn typed_zoom_levels() {
+        assert_eq!(parse_zoom("150"), Some(1.5));
+        assert_eq!(parse_zoom(" 50 % "), Some(0.5));
+        assert_eq!(parse_zoom("2x"), Some(2.0));
+        assert_eq!(parse_zoom("abc"), None);
+        assert_eq!(parse_zoom("-5"), None);
+        let mut app = app();
+        let _ = app.update(Message::ZoomInput("200%".into()));
+        let _ = app.update(Message::ZoomSubmit);
+        assert!((app.camera.zoom - 2.0).abs() < 1e-9);
+        assert!(app.zoom_draft.is_none());
+        let _ = app.update(Message::Menu(Box::new(Message::ZoomTo(0.25))));
+        assert!((app.camera.zoom - 0.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn dragging_panel_edges_resizes_and_swapping_follows() {
+        let mut app = app();
+        app.chrome.size = Size::new(1600.0, 900.0);
+        let left = view::canvas_left(&app);
+        let _ = app.update(Message::PanelDrag(Side::Left));
+        let _ = app.update(Message::PanelDragMove(left - view::HANDLE / 2.0 + 52.0));
+        let _ = app.update(Message::PanelDragEnd);
+        assert!((app.prefs.layers_width - 300.0).abs() < 1.0, "{}", app.prefs.layers_width);
+        assert!(app.panel_drag.is_none());
+        // Far past the limits: clamped.
+        let _ = app.update(Message::PanelDrag(Side::Right));
+        let _ = app.update(Message::PanelDragMove(0.0));
+        assert_eq!(app.prefs.design_width, crate::prefs::PANEL_MAX);
+        // Swapped, the left edge belongs to Design.
+        let _ = app.update(Message::PanelDragEnd);
+        let _ = app.update(Message::SwapPanels);
+        let _ = app.update(Message::PanelDrag(Side::Left));
+        let _ = app.update(Message::PanelDragMove(0.0));
+        assert_eq!(app.prefs.design_width, crate::prefs::PANEL_MIN);
+        assert!((app.prefs.layers_width - 300.0).abs() < 1.0);
+        // Hidden panels leave the whole width to the canvas.
+        let _ = app.update(Message::TogglePanels);
+        assert_eq!(view::canvas_left(&app), view::GUTTER);
+        assert_eq!(view::canvas_size(&app, app.chrome.size).width, 1600.0 - 2.0 * view::GUTTER);
+    }
+
+    #[test]
+    fn autosave_saves_files_with_a_path_but_not_mid_edit() {
+        let dir = std::env::temp_dir().join(format!("blobr-autosave-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.jdb");
+        let mut app = app();
+        three_rects(&mut app);
+        app.save_to(path.clone());
+        let ids = three_rects(&mut app);
+        assert!(app.ed.history.is_dirty());
+        // Off: nothing happens.
+        let _ = app.update(Message::Autosave);
+        assert!(app.ed.history.is_dirty());
+        app.prefs.autosave = true;
+        app.text_edit = Some((ids[0], text_editor::Content::new()));
+        let _ = app.update(Message::Autosave);
+        assert!(app.ed.history.is_dirty(), "waits while typing");
+        assert!(app.text_edit.is_some(), "the tick doesn't end typing");
+        app.text_edit = None;
+        // A new untitled tab with changes is left alone; the parked file is saved.
+        let _ = app.update(Message::New);
+        three_rects(&mut app);
+        let _ = app.update(Message::Autosave);
+        assert!(app.ed.history.is_dirty());
+        assert!(app.tabs[0].as_ref().is_some_and(|t| !t.ed.history.is_dirty()));
+        assert_eq!(file::load(&path).unwrap().children(file::load(&path).unwrap().pages()[0]).len(), 6);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

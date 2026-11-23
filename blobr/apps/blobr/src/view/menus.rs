@@ -13,7 +13,7 @@ use crate::app::{Blobr, Message};
 pub const MENUS: &[&str] = &["File", "Edit", "View", "Object", "Text", "Arrange", "Plugins", "Window", "Help"];
 pub const MENU_COUNT: usize = MENUS.len();
 
-const WIDTH: f32 = 260.0;
+const WIDTH: f32 = 300.0;
 
 pub fn popup(app: &Blobr) -> Option<Element<'_, Message>> {
     let (i, at) = app.chrome.menu_anchor()?;
@@ -72,6 +72,9 @@ fn entries(app: &Blobr, menu: usize) -> Vec<MenuEntry<'_, Message>> {
             Separator,
             item("Select All", "Ctrl+A", Some(Message::SelectAll)),
             item("Select None", "Ctrl+Shift+A", on(sel, Message::Deselect)),
+            item("Find Layers...", "Ctrl+F", Some(Message::Search(true))),
+            Separator,
+            item("Preferences...", "Ctrl+,", Some(Message::ShowPrefs(true))),
         ],
         "View" => vec![
             item("Zoom In", "Ctrl++", Some(Message::ZoomIn)),
@@ -139,8 +142,11 @@ fn entries(app: &Blobr, menu: usize) -> Vec<MenuEntry<'_, Message>> {
             item("Layers", "Alt+L", Some(Message::LeftTab(0))),
             item("Assets", "Alt+I", Some(Message::LeftTab(1))),
             item("Local Variables...", "", Some(Message::ShowVariables(true))),
+            Separator,
+            item(if app.prefs.hide_panels { "Show Panels" } else { "Hide Panels" }, "Ctrl+\\", Some(Message::TogglePanels)),
+            item("Swap Panel Sides", "", Some(Message::SwapPanels)),
         ],
-        "Help" => vec![todo("Keyboard Shortcuts", "Ctrl+Shift+?"), todo("About Blobr", "")],
+        "Help" => vec![item("Keyboard Shortcuts", "Ctrl+Shift+?", Some(Message::ShowShortcuts(true))), item("About Blobr", "", Some(Message::ShowAbout(true)))],
         _ => Vec::new(),
     }
 }

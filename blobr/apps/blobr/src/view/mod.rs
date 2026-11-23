@@ -5,6 +5,7 @@ mod assets;
 pub(crate) mod canvas;
 mod comments;
 mod design;
+mod dialogs;
 mod inspect;
 mod layers;
 mod menus;
@@ -13,7 +14,7 @@ mod prototype;
 mod variables;
 
 use iced::alignment::Vertical;
-use iced::widget::{button, column, container, mouse_area, row, space, stack, text};
+use iced::widget::{button, column, container, mouse_area, row, space, stack, text, text_input};
 use iced::{Element, Fill, Padding, Size};
 use jd_ui::chrome::{self, TITLE_BAR_HEIGHT, title_bar};
 use jd_ui::widget::{bold, field_box, hline, tool_button, value, vline};
@@ -21,7 +22,7 @@ use jd_ui::{Icon, icon, style, tokens::*};
 use jd_vector::ExportFormat;
 
 use crate::APP_NAME;
-use crate::app::{After, Blobr, Message};
+use crate::app::{After, Blobr, Dropdown, Message, SEARCH_INPUT, Side, ZOOM_INPUT, ZOOM_STEPS};
 use crate::tool::Tool;
 
 pub use layers::ROW as LAYER_ROW;
@@ -30,16 +31,49 @@ pub use menus::MENU_COUNT;
 /// Gap between panels.
 pub const GUTTER: f32 = 3.0;
 pub const TOOLBAR_WIDTH: f32 = 44.0;
-pub const LAYERS_WIDTH: f32 = 248.0;
-pub const DESIGN_WIDTH: f32 = 272.0;
+/// The gaps either side of the canvas, which can be dragged to resize the panels.
+pub const HANDLE: f32 = 5.0;
 pub const TABS_HEIGHT: f32 = 28.0;
 pub const STATUS_HEIGHT: f32 = 24.0;
 
-/// The canvas size for a window size (the panels are fixed width).
-pub fn canvas_size(window: Size) -> Size {
-    let w = window.width - 5.0 * GUTTER - TOOLBAR_WIDTH - LAYERS_WIDTH - DESIGN_WIDTH;
+/// The widths of the left and right side panels (Layers and Design, unless swapped).
+pub fn side_widths(app: &Blobr) -> (f32, f32) {
+    let p = &app.prefs;
+    if p.swap_panels { (p.design_width, p.layers_width) } else { (p.layers_width, p.design_width) }
+}
+
+/// Where the canvas starts, from the window's left edge.
+pub fn canvas_left(app: &Blobr) -> f32 {
+    if app.prefs.hide_panels {
+        return GUTTER;
+    }
+    GUTTER + TOOLBAR_WIDTH + GUTTER + side_widths(app).0 + HANDLE
+}
+
+/// The canvas size for a window size (until the canvas reports its own).
+pub fn canvas_size(app: &Blobr, window: Size) -> Size {
+    let (l, r) = side_widths(app);
+    let panels = if app.prefs.hide_panels { 0.0 } else { TOOLBAR_WIDTH + GUTTER + l + r + 2.0 * HANDLE };
+    let w = window.width - 2.0 * GUTTER - panels;
     let h = window.height - TITLE_BAR_HEIGHT - 1.0 - 2.0 * GUTTER - TABS_HEIGHT - STATUS_HEIGHT;
     Size::new(w.max(1.0), h.max(1.0))
+}
+
+/// The width a side panel gets when its inner edge is dragged to window x.
+pub fn panel_width_at(app: &Blobr, side: Side, x: f32) -> f32 {
+    let w = match side {
+        Side::Left => x - (GUTTER + TOOLBAR_WIDTH + GUTTER) - HANDLE / 2.0,
+        Side::Right => app.chrome.size.width - GUTTER - x - HANDLE / 2.0,
+    };
+    w.clamp(crate::prefs::PANEL_MIN, crate::prefs::PANEL_MAX)
+}
+
+/// The gap between two panels: a plain gutter, or a handle that resizes `side`'s panel.
+fn gap<'a>(side: Option<Side>) -> Element<'a, Message> {
+    match side {
+        None => space().width(GUTTER).height(Fill).into(),
+        Some(side) => mouse_area(space().width(HANDLE).height(Fill)).on_press(Message::PanelDrag(side)).interaction(iced::mouse::Interaction::ResizingHorizontally).into(),
+    }
 }
 
 /// What a window shows: the presentation in its own window, or the main window.
@@ -52,22 +86,30 @@ pub fn view(app: &Blobr, window: iced::window::Id) -> Element<'_, Message> {
 
 fn main(app: &Blobr) -> Element<'_, Message> {
     let center = column![doc_tabs(app), canvas::view(app), status_bar(app)].width(Fill).height(Fill);
-    let workspace = container(
-        row![
-            panel(toolbar(app), Some(TOOLBAR_WIDTH)),
-            panel(layers::view(app), Some(LAYERS_WIDTH)),
-            panel(center, None),
-            panel(design::view(app), Some(DESIGN_WIDTH)),
-        ]
-        .spacing(GUTTER),
-    )
+    let mut panels = row![];
+    if app.prefs.hide_panels {
+        panels = panels.push(panel(center, None));
+    } else {
+        let (lw, rw) = side_widths(app);
+        let (left, right): (Element<'_, Message>, Element<'_, Message>) =
+            if app.prefs.swap_panels { (design::view(app), layers::view(app)) } else { (layers::view(app), design::view(app)) };
+        panels = panels
+            .push(panel(toolbar(app), Some(TOOLBAR_WIDTH)))
+            .push(gap(None))
+            .push(panel(left, Some(lw)))
+            .push(gap(Some(Side::Left)))
+            .push(panel(center, None))
+            .push(gap(Some(Side::Right)))
+            .push(panel(right, Some(rw)));
+    }
+    let workspace = container(panels)
     .padding(GUTTER)
     .width(Fill)
     .height(Fill)
     .style(style::fill(BORDER_DEFAULT));
 
     let content = container(column![
-        title_bar(&app.chrome, crate::LOGO_SVG, menus::MENUS, format!("{} - {APP_NAME}", app.file_name()), title_actions(), Message::Quit, Message::Chrome),
+        title_bar(&app.chrome, crate::LOGO_SVG, menus::MENUS, format!("{} - {APP_NAME}", app.file_name()), title_actions(app), Message::Quit, Message::Chrome),
         hline(BORDER_DEFAULT),
         workspace,
     ])
@@ -82,7 +124,19 @@ fn main(app: &Blobr) -> Element<'_, Message> {
     if let Some(popup) = menus::popup(app) {
         layers = layers.push(popup);
     }
-    let canvas_at = iced::Point::new(3.0 * GUTTER + TOOLBAR_WIDTH + LAYERS_WIDTH, TITLE_BAR_HEIGHT + 1.0 + GUTTER + TABS_HEIGHT);
+    if let Some(popup) = dropdown(app) {
+        layers = layers.push(popup);
+    }
+    if app.panel_drag.is_some() {
+        // Follows the pointer anywhere in the window until the button is let go.
+        layers = layers.push(
+            mouse_area(space().width(Fill).height(Fill))
+                .on_move(|p| Message::PanelDragMove(p.x))
+                .on_release(Message::PanelDragEnd)
+                .interaction(iced::mouse::Interaction::ResizingHorizontally),
+        );
+    }
+    let canvas_at = iced::Point::new(canvas_left(app), TITLE_BAR_HEIGHT + 1.0 + GUTTER + TABS_HEIGHT);
     if let Some(card) = comments::view(app, canvas_at) {
         layers = layers.push(card);
     }
@@ -94,6 +148,15 @@ fn main(app: &Blobr) -> Element<'_, Message> {
     {
         // Presenting covers the whole window (unless it has one of its own).
         return p;
+    }
+    if app.prefs_open {
+        layers = layers.push(dialogs::prefs(app));
+    }
+    if app.shortcuts_open {
+        layers = layers.push(dialogs::shortcuts(app));
+    }
+    if app.about_open {
+        layers = layers.push(dialogs::about(app));
     }
     if let Some(after) = app.confirm {
         layers = layers.push(confirm(app, after));
@@ -155,8 +218,31 @@ fn confirm(app: &Blobr, after: After) -> Element<'_, Message> {
     )
 }
 
-fn title_actions<'a>() -> Element<'a, Message> {
-    let workspace = field_box(row![value("Design"), icon(Icon::Chevron, 12.0, TEXT_SECONDARY)].spacing(6).align_y(Vertical::Center));
+/// The right panel's tabs, as named in the title bar's switcher.
+pub const MODES: [&str; 3] = ["Design", "Prototype", "Inspect"];
+
+fn title_actions(app: &Blobr) -> Element<'_, Message> {
+    let search: Element<'_, Message> = match &app.search {
+        Some(q) => text_input("Find layers", q)
+            .id(SEARCH_INPUT)
+            .on_input(Message::SearchInput)
+            .on_submit(Message::SearchSubmit)
+            .size(TEXT_SIZE_SMALL)
+            .padding(Padding::from([3, 6]))
+            .width(220)
+            .style(design::input_style)
+            .into(),
+        None => jd_ui::widget::hover_tip(
+            button(icon(Icon::Zoom, 14.0, ICON)).padding(4).style(style::ghost(false)).on_press(Message::Search(true)),
+            "Find layers (Ctrl+F)",
+            iced::widget::tooltip::Position::Bottom,
+        ),
+    };
+    let mode = MODES.get(app.right_tab).copied().unwrap_or(MODES[0]);
+    let workspace = button(field_box(row![value(mode), icon(Icon::Chevron, 12.0, TEXT_SECONDARY)].spacing(6).align_y(Vertical::Center)))
+        .padding(0)
+        .style(style::ghost(false))
+        .on_press(Message::Dropdown(if app.dropdown == Some(Dropdown::Mode) { None } else { Some(Dropdown::Mode) }));
     let export = button(
         row![icon(Icon::Share, 12.0, TEXT_PRIMARY), text("Export").size(TEXT_SIZE_SMALL).font(bold())]
             .spacing(6)
@@ -170,7 +256,56 @@ fn title_actions<'a>() -> Element<'a, Message> {
         "Present (Ctrl+Alt+Enter)",
         iced::widget::tooltip::Position::Bottom,
     );
-    row![icon(Icon::Zoom, 14.0, ICON), workspace, play, export].spacing(12).align_y(Vertical::Center).into()
+    row![search, workspace, play, export].spacing(12).align_y(Vertical::Center).into()
+}
+
+/// The open dropdown, or search's results under the search box.
+fn dropdown(app: &Blobr) -> Option<Element<'_, Message>> {
+    use jd_ui::widget::MenuEntry;
+    let size = app.chrome.size;
+    let pick = |m: Message| Some(Message::Menu(Box::new(m)));
+    if app.search.is_some() {
+        let found = app.search_results(14);
+        if found.is_empty() {
+            return None;
+        }
+        let doc = app.doc();
+        let entries = found
+            .into_iter()
+            .filter_map(|id| {
+                let n = doc.node(id)?;
+                let page = app.page_of(id).and_then(|p| doc.node(p)).map_or("", |p| p.name.as_str());
+                Some(MenuEntry::IconItem(kind_icon(&n.kind), n.name.as_str(), page, Some(Message::SearchPick(id))))
+            })
+            .collect();
+        return Some(chrome::popup(entries, 320.0, iced::Point::new(size.width, TITLE_BAR_HEIGHT), size, true, Message::Search(false), None, |_| Message::Noop));
+    }
+    match app.dropdown? {
+        Dropdown::Mode => {
+            let icons = [Icon::Adjust, Icon::Play, Icon::Info];
+            let entries = MODES
+                .iter()
+                .enumerate()
+                .map(|(i, m)| MenuEntry::IconItem(icons[i], *m, if i == app.right_tab { "Open" } else { "" }, pick(Message::RightTab(i))))
+                .collect();
+            Some(chrome::popup(entries, 200.0, iced::Point::new(size.width, TITLE_BAR_HEIGHT), size, true, Message::Dropdown(None), None, |_| Message::Noop))
+        }
+        Dropdown::Zoom => {
+            let sel = !app.selection.is_empty();
+            let mut entries = vec![
+                MenuEntry::Item("Zoom In", "Ctrl++", pick(Message::ZoomIn)),
+                MenuEntry::Item("Zoom Out", "Ctrl+-", pick(Message::ZoomOut)),
+                MenuEntry::Item("Zoom to Fit", "Shift+1", pick(Message::ZoomFit)),
+                MenuEntry::Item("Zoom to Selection", "Shift+2", if sel { pick(Message::ZoomSelection) } else { None }),
+                MenuEntry::Separator,
+            ];
+            for (z, label) in ZOOM_STEPS.iter().zip(["25%", "50%", "100%", "200%", "400%", "800%"]) {
+                entries.push(MenuEntry::Item(label, if *z == 1.0 { "Shift+0" } else { "" }, pick(Message::ZoomTo(*z))));
+            }
+            let at = iced::Point::new(canvas_left(app), size.height - GUTTER - STATUS_HEIGHT);
+            Some(chrome::popup(entries, 220.0, at, size, false, Message::Dropdown(None), None, |_| Message::Noop))
+        }
+    }
 }
 
 fn toolbar(app: &Blobr) -> Element<'_, Message> {
@@ -208,7 +343,24 @@ fn doc_tabs(app: &Blobr) -> Element<'_, Message> {
 
 fn status_bar(app: &Blobr) -> Element<'_, Message> {
     let doc = app.doc();
-    let zoom = field_box(value(format!("{:.0}%", app.camera.zoom * 100.0)));
+    // Type a zoom (Enter applies), or pick one from the menu.
+    let shown = app.zoom_draft.clone().unwrap_or_else(|| format!("{:.0}%", app.camera.zoom * 100.0));
+    let zoom = row![
+        text_input("", &shown)
+            .id(ZOOM_INPUT)
+            .on_input(Message::ZoomInput)
+            .on_submit(Message::ZoomSubmit)
+            .size(TEXT_SIZE_SMALL)
+            .padding(Padding::from([1, 4]))
+            .width(52)
+            .style(design::input_style),
+        button(icon(Icon::Chevron, 10.0, TEXT_SECONDARY))
+            .padding(3)
+            .style(style::ghost(false))
+            .on_press(Message::Dropdown(if app.dropdown == Some(Dropdown::Zoom) { None } else { Some(Dropdown::Zoom) })),
+    ]
+    .spacing(2)
+    .align_y(Vertical::Center);
     let page = doc.node(app.page).map_or(String::new(), |n| n.name.clone());
     let selection = match app.selection.as_slice() {
         [] => String::new(),
