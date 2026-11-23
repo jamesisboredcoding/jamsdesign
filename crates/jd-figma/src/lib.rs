@@ -209,6 +209,11 @@ impl Ctx<'_> {
         let (x, y, w, h, rot) = placement(v, origin);
         // How far left a widened text box moves to keep its text in place.
         let mut widened: Option<f64> = None;
+        // A boolean with its parts comes in live (editable, like Figma's); one without (an
+        // export that left them out) comes in as its result shape.
+        let live_bool = t == "BOOLEAN_OPERATION" && !arr(v, "children").is_empty();
+        // Groups and live booleans place their children in their own parent's space.
+        let groupish = t == "GROUP" || live_bool;
         let mut spec = match t {
             "FRAME" | "COMPONENT" | "INSTANCE" | "COMPONENT_SET" => {
                 if t == "INSTANCE" {
@@ -221,6 +226,16 @@ impl Ctx<'_> {
             }
             "SECTION" => NodeSpec::new(&name, NodeKind::Section).size(w, h),
             "GROUP" => NodeSpec::group(&name),
+            "BOOLEAN_OPERATION" if live_bool => {
+                use jd_vector::boolean::BoolOp;
+                let op = match str_of(v, "booleanOperation") {
+                    Some("SUBTRACT") => BoolOp::Subtract,
+                    Some("INTERSECT") => BoolOp::Intersect,
+                    Some("EXCLUDE") => BoolOp::Exclude,
+                    _ => BoolOp::Union,
+                };
+                NodeSpec::new(&name, NodeKind::Boolean { op, path: VectorPath::empty() })
+            }
             "RECTANGLE" => NodeSpec::rect(&name, w, h),
             "ELLIPSE" => NodeSpec::ellipse(&name, w, h),
             "LINE" => NodeSpec::new(&name, NodeKind::Line).size(w, 0.0),
@@ -322,7 +337,7 @@ impl Ctx<'_> {
         };
         // A group's children are placed in the group's parent's space: the group starts at
         // the origin and then fits around them.
-        if t == "GROUP" {
+        if groupish {
             spec = spec.at(0.0, 0.0);
         } else {
             spec = spec.at(x - widened.unwrap_or(0.0), y);
@@ -432,11 +447,11 @@ impl Ctx<'_> {
         if t == "COMPONENT" {
             self.ops.push(Op::MakeComponent { id: key.as_str().into() });
         }
-        if matches!(t, "VECTOR" | "BOOLEAN_OPERATION" | "STAR" | "REGULAR_POLYGON") {
+        if matches!(t, "VECTOR" | "STAR" | "REGULAR_POLYGON") || (t == "BOOLEAN_OPERATION" && arr(v, "children").is_empty()) {
             return;
         }
         // Children of groups place themselves relative to the group's parent.
-        let child_origin = if t == "GROUP" {
+        let child_origin = if t == "GROUP" || t == "BOOLEAN_OPERATION" {
             origin
         } else {
             v.get("absoluteBoundingBox").map_or(origin, |b| (f(b, "x").unwrap_or(0.0), f(b, "y").unwrap_or(0.0)))
@@ -478,7 +493,15 @@ mod tests {
           { "id": "2:1", "type": "GROUP", "name": "Pair", "absoluteBoundingBox": {"x": 400, "y": 400, "width": 60, "height": 20}, "children": [
             { "id": "2:2", "type": "RECTANGLE", "name": "A", "absoluteBoundingBox": {"x": 400, "y": 400, "width": 20, "height": 20}, "fills": [{"type":"IMAGE","imageRef":"abc","scaleMode":"FILL"}] },
             { "id": "2:3", "type": "ELLIPSE", "name": "B", "absoluteBoundingBox": {"x": 440, "y": 400, "width": 20, "height": 20}, "fills": [] }
-          ] }
+          ] },
+          { "id": "3:1", "type": "BOOLEAN_OPERATION", "name": "Ring", "booleanOperation": "SUBTRACT",
+            "absoluteBoundingBox": {"x": 600, "y": 100, "width": 40, "height": 40},
+            "fills": [{"type":"SOLID","color":{"r":1,"g":0,"b":0,"a":1}}],
+            "fillGeometry": [{"path": "M0 0L40 0L40 40L0 40Z", "windingRule": "EVENODD"}],
+            "children": [
+              { "id": "3:2", "type": "ELLIPSE", "name": "Outer", "absoluteBoundingBox": {"x": 600, "y": 100, "width": 40, "height": 40}, "fills": [] },
+              { "id": "3:3", "type": "ELLIPSE", "name": "Inner", "absoluteBoundingBox": {"x": 610, "y": 110, "width": 20, "height": 20}, "fills": [] }
+            ] }
         ] }
       ] }
     }"#;
@@ -488,7 +511,7 @@ mod tests {
         let png = tiny_png();
         let (doc, report) = import(FILE, &[("abc".to_owned(), png)].into()).unwrap();
         assert_eq!(report.pages, 1);
-        assert_eq!(report.layers, 6);
+        assert_eq!(report.layers, 9);
         let page = doc.pages()[0];
         assert_eq!(doc.node(page).unwrap().name, "Screens");
         let top = doc.children(page);
@@ -511,6 +534,15 @@ mod tests {
         let a = doc.node(doc.children(pair)[0]).unwrap();
         assert!(matches!(&a.props.fills[0].kind, PaintKind::Image { image, .. } if doc.image(image).is_some()));
         assert!(report.notes.is_empty(), "{:?}", report.notes);
+
+        // Booleans come in live, with their parts where Figma had them.
+        let ring = top[2];
+        let n = doc.node(ring).unwrap();
+        assert!(matches!(&n.kind, NodeKind::Boolean { op: jd_vector::boolean::BoolOp::Subtract, path } if !path.subpaths.is_empty()), "{:?}", n.kind);
+        assert_eq!(doc.children(ring).len(), 2);
+        let b = doc.world_bounds(ring).unwrap();
+        assert_eq!((b.x0, b.y0, b.width()), (600.0, 100.0, 40.0));
+        assert!(matches!(&n.props.fills[0].kind, PaintKind::Solid { color } if color.r > 0.9));
     }
 
     fn tiny_png() -> Vec<u8> {
