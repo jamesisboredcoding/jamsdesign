@@ -732,6 +732,8 @@ pub struct Blobr {
     pub panel_drag: Option<Side>,
 }
 
+/// Screen pixels rendered past each edge of the canvas.
+const RENDER_MARGIN: f32 = 160.0;
 const MIN_ZOOM: f64 = 0.02;
 /// Screen pixels the pointer must travel before a press becomes a drag.
 const DRAG_THRESHOLD: f64 = 3.0;
@@ -3502,6 +3504,18 @@ impl Blobr {
         }
     }
 
+    /// What a render covers: the view plus a margin past each edge (so panning and zooming
+    /// out uncover page that's already drawn while the next picture renders), as a page
+    /// rectangle, the camera that puts its top-left corner at the picture's, and its size.
+    fn render_area(&self) -> (Rect, Camera, Size) {
+        let z = self.camera.zoom;
+        let m = RENDER_MARGIN as f64;
+        let size = Size::new(self.viewport.width + 2.0 * RENDER_MARGIN, self.viewport.height + 2.0 * RENDER_MARGIN);
+        let origin = kurbo::Point::new(self.camera.origin.x - m / z, self.camera.origin.y - m / z);
+        let view = Rect::new(origin.x, origin.y, origin.x + size.width as f64 / z, origin.y + size.height as f64 / z);
+        (view, Camera { origin, zoom: z }, size)
+    }
+
     /// Re-renders the canvas image if anything it shows changed.
     fn refresh(&mut self) -> Task<Message> {
         let key = (self.version, self.camera, self.viewport, self.scale_factor, self.page);
@@ -3512,13 +3526,12 @@ impl Blobr {
         if w < 1.0 || h < 1.0 {
             return Task::none();
         }
-        let view = Rect::new(self.camera.origin.x, self.camera.origin.y, self.camera.origin.x + w / self.camera.zoom, self.camera.origin.y + h / self.camera.zoom);
+        let (view, camera, size) = self.render_area();
         let opts = RenderOptions { scale: self.camera.zoom * self.scale_factor as f64, background: Some(self.page_background()) };
         self.rendered = Some(key);
         self.render_seq += 1;
         self.rendering = true;
         let seq = self.render_seq;
-        let (camera, size) = (self.camera, self.viewport);
         // Off the UI thread, on a snapshot (cheap: nodes are shared), so input never waits.
         let (doc, page) = (self.ed.doc.clone(), self.page);
         Task::perform(
@@ -4635,6 +4648,21 @@ mod tests {
         assert!(app.tabs[0].as_ref().is_some_and(|t| !t.ed.history.is_dirty()));
         assert_eq!(file::load(&path).unwrap().children(file::load(&path).unwrap().pages()[0]).len(), 6);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn renders_reach_past_the_view_edges() {
+        let mut app = app();
+        app.camera = Camera { origin: kurbo::Point::new(100.0, 50.0), zoom: 2.0 };
+        let (view, cam, size) = app.render_area();
+        let m = RENDER_MARGIN as f64;
+        assert_eq!(size, Size::new(800.0 + 2.0 * RENDER_MARGIN, 600.0 + 2.0 * RENDER_MARGIN));
+        assert_eq!(view, Rect::new(100.0 - m / 2.0, 50.0 - m / 2.0, 100.0 + (800.0 + m) / 2.0, 50.0 + (600.0 + m) / 2.0));
+        // Shown for the current camera, the picture starts the margin up and left of the canvas.
+        app.canvas_camera = cam;
+        app.canvas_size = size;
+        let r = crate::view::canvas::picture_bounds(&app);
+        assert_eq!((r.x, r.y, r.width), (-RENDER_MARGIN, -RENDER_MARGIN, size.width));
     }
 
     #[test]
