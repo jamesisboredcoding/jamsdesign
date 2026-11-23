@@ -132,6 +132,12 @@ pub struct Library {
     pub name: String,
     pub doc: Document,
     pub thumbnails: HashMap<NodeId, image::Handle>,
+    /// The file's modification time when read, to notice when it changes.
+    pub modified: Option<std::time::SystemTime>,
+}
+
+fn modified(path: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 /// A frame rendered for presenting: picture, scale it was drawn at, size on the page.
@@ -155,6 +161,67 @@ pub struct Presentation {
     pub delay_done: bool,
     pub cursor: Point,
     pub hovered: Option<NodeId>,
+}
+
+/// A tick every two seconds (from a plain thread), to notice library files changing.
+fn library_ticks() -> impl iced::futures::Stream<Item = Message> {
+    iced::stream::channel(1, async |mut out: iced::futures::channel::mpsc::Sender<Message>| {
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_secs(2));
+                match out.try_send(Message::CheckLibraries) {
+                    Err(e) if e.is_disconnected() => return,
+                    _ => {}
+                }
+            }
+        });
+        std::future::pending::<()>().await;
+    })
+}
+
+/// Ops that make the local copy `local` of a library component look like `src` in `lib`
+/// again, keeping its id (and its variants' ids) so instances here follow. Variants are
+/// matched by name; ones only in the library aren't added.
+fn refresh_copy(doc: &Document, local: NodeId, lib: &Document, src: NodeId) -> Vec<Op> {
+    let (Some(l), Some(s)) = (doc.node(local), lib.node(src)) else { return Vec::new() };
+    if let (NodeKind::ComponentSet { .. }, NodeKind::ComponentSet { .. }) = (&l.kind, &s.kind) {
+        return doc
+            .children(local)
+            .iter()
+            .filter_map(|&v| {
+                let name = &doc.node(v)?.name;
+                let sv = lib.children(src).iter().copied().find(|&c| lib.node(c).is_some_and(|n| &n.name == name))?;
+                Some(refresh_copy(doc, v, lib, sv))
+            })
+            .flatten()
+            .collect();
+    }
+    let NodeKind::Component { properties, .. } = &s.kind else { return Vec::new() };
+    let p = &s.props;
+    let mut ops: Vec<Op> = doc.children(local).iter().map(|&c| Op::Delete { id: c.into() }).collect();
+    if let Some(clip) = Clip::copy(lib, lib.children(src)) {
+        ops.push(Op::Paste { parent: local.into(), clip, index: None, key: None, offset: [0.0, 0.0] });
+    }
+    ops.push(Op::set(
+        local,
+        Patch {
+            width: Some(p.width),
+            height: Some(p.height),
+            fills: Some(p.fills.clone()),
+            strokes: Some(p.strokes.clone()),
+            stroke: Some(p.stroke.clone()),
+            corner: Some(p.corner),
+            effects: Some(p.effects.clone()),
+            clip: Some(p.clip),
+            layout: Some(p.layout.clone()),
+            sizing_h: Some(p.sizing_h),
+            sizing_v: Some(p.sizing_v),
+            opacity: Some(p.opacity),
+            properties: Some(properties.clone()),
+            ..Patch::default()
+        },
+    ));
+    ops
 }
 
 /// Name of the page that holds components copied in from libraries.
@@ -379,6 +446,8 @@ pub enum Message {
     RemoveLibrary(usize),
     /// Place an instance of a library's component (copied into this file once).
     InsertLibraryComponent(usize, NodeId),
+    /// See whether any library file changed (every couple of seconds while there are some).
+    CheckLibraries,
     /// Use a paint style for the fills, or a text style (None detaches).
     UseFillStyle(Option<NodeId>),
     UseTextStyle(Option<NodeId>),
@@ -658,6 +727,7 @@ impl Blobr {
             window::close_requests().map(|_| Message::Quit),
             if self.drag.is_some() { window::frames().map(|_| Message::Frame) } else { Subscription::none() },
             if self.present_animating() { window::frames().map(|_| Message::PresentTick) } else { Subscription::none() },
+            if self.libraries.is_empty() { Subscription::none() } else { Subscription::run(library_ticks) },
             Subscription::run(crate::agent::listen),
         ])
     }
@@ -1039,13 +1109,25 @@ impl Blobr {
                     |f| Message::LibraryPicked(f.map(|f| f.path().to_path_buf())),
                 );
             }
-            Message::LibraryPicked(Some(path)) => self.add_library(path),
+            Message::LibraryPicked(Some(path)) => {
+                // Kept in the document, so it comes back when the file is opened again.
+                let p = path.display().to_string();
+                if !self.doc().libraries().contains(&p) {
+                    let mut list = self.doc().libraries().to_vec();
+                    list.push(p);
+                    self.run("Add library", &[Op::SetLibraries { paths: list }]);
+                }
+                self.add_library(path);
+            }
             Message::LibraryPicked(None) => {}
             Message::RemoveLibrary(i) => {
                 if i < self.libraries.len() {
-                    self.libraries.remove(i);
+                    let gone = self.libraries.remove(i).path.display().to_string();
+                    let list: Vec<String> = self.doc().libraries().iter().filter(|p| **p != gone).cloned().collect();
+                    self.run("Remove library", &[Op::SetLibraries { paths: list }]);
                 }
             }
+            Message::CheckLibraries => self.check_libraries(),
             Message::InsertLibraryComponent(i, id) => self.insert_library_component(i, id),
             Message::UseFillStyle(style) => self.per_node("Fill style", |n| {
                 let mut refs = n.props.styles.clone();
@@ -1685,6 +1767,9 @@ impl Blobr {
 
     fn after_history(&mut self, msg: String) {
         self.after_change();
+        if self.libraries.len() != self.doc().libraries().len() {
+            self.sync_libraries();
+        }
         self.drafts.clear();
         self.info(msg);
     }
@@ -2376,11 +2461,75 @@ impl Blobr {
                 let count = placeable_components(&doc).len();
                 let thumbnails = thumbnails_of(&doc, self.scale_factor);
                 self.info(format!("Added library {name} ({count} components)"));
-                self.libraries.push(Library { path, name, doc, thumbnails });
+                let modified = modified(&path);
+                self.libraries.push(Library { path, name, doc, thumbnails, modified });
                 self.left_tab = 1;
             }
             Err(e) => self.error(format!("Couldn't open {}: {e}", path.display())),
         }
+    }
+
+    /// Loads the libraries the document lists (and lets go of ones it no longer does), after
+    /// opening it or undoing a change to the list.
+    fn sync_libraries(&mut self) {
+        let listed: Vec<PathBuf> = self.doc().libraries().iter().map(PathBuf::from).collect();
+        self.libraries.retain(|l| listed.contains(&l.path));
+        let tab = self.left_tab;
+        for p in listed {
+            if !self.libraries.iter().any(|l| l.path == p) {
+                if p.exists() {
+                    self.add_library(p);
+                } else {
+                    self.error(format!("Library {} is missing", p.display()));
+                }
+            }
+        }
+        self.left_tab = tab;
+    }
+
+    /// Reloads libraries whose files changed and brings the components copied from them up
+    /// to date (one undo step per library).
+    fn check_libraries(&mut self) {
+        for i in 0..self.libraries.len() {
+            let path = self.libraries[i].path.clone();
+            let now = modified(&path);
+            if now.is_none() || now == self.libraries[i].modified {
+                continue;
+            }
+            let Ok(mut doc) = file::load(&path) else { continue };
+            jd_vector::layout::run(&mut doc, &CosmicMeasure);
+            let thumbnails = thumbnails_of(&doc, self.scale_factor);
+            let l = &mut self.libraries[i];
+            (l.doc, l.thumbnails, l.modified) = (doc, thumbnails, now);
+            let name = l.name.clone();
+            let mut ops = Vec::new();
+            for (src, local) in self.copies_of(i) {
+                ops.extend(refresh_copy(self.doc(), local, &self.libraries[i].doc, src));
+            }
+            if ops.is_empty() {
+                self.info(format!("Library {name} changed"));
+            } else if self.run(&format!("Update from {name}"), &ops).is_some() {
+                self.info(format!("Updated components from {name}"));
+            }
+        }
+    }
+
+    /// Components copied into this file from library `i`: (library id, local id). Found from
+    /// this session's imports, or by name on the library page (for files opened again).
+    fn copies_of(&self, i: usize) -> Vec<(NodeId, NodeId)> {
+        let l = &self.libraries[i];
+        let doc = self.doc();
+        let page = doc.pages().iter().copied().find(|&p| doc.node(p).is_some_and(|n| n.name == LIBRARY_PAGE));
+        placeable_components(&l.doc)
+            .into_iter()
+            .filter_map(|(src, _)| {
+                let local = self.imported.get(&(l.path.clone(), src)).copied().filter(|&id| doc.contains(id)).or_else(|| {
+                    let name = &l.doc.node(src)?.name;
+                    page.and_then(|p| doc.children(p).iter().copied().find(|&c| doc.node(c).is_some_and(|n| &n.name == name)))
+                })?;
+                Some((src, local))
+            })
+            .collect()
     }
 
     /// Copies a library component into this file (once, onto the library page) and places
@@ -2388,9 +2537,7 @@ impl Blobr {
     fn insert_library_component(&mut self, lib: usize, id: NodeId) {
         let Some(l) = self.libraries.get(lib) else { return };
         let key = (l.path.clone(), id);
-        if let Some(&local) = self.imported.get(&key)
-            && self.doc().contains(local)
-        {
+        if let Some(local) = self.copies_of(lib).into_iter().find(|(src, _)| *src == id).map(|(_, local)| local) {
             return self.insert_component(local);
         }
         let Some(clip) = Clip::copy(&l.doc, &[id]) else { return };
@@ -2722,6 +2869,9 @@ impl Blobr {
         self.expanded.clear();
         self.drafts.clear();
         self.view_changed();
+        self.libraries.clear();
+        self.imported.clear();
+        self.sync_libraries();
         self.fit_pending = true;
         self.zoom_fit(false);
         self.info(match &self.path {
@@ -4089,6 +4239,50 @@ mod tests {
         let _ = app.update(Message::FramePreset(0));
         let f = app.doc().node(app.selection[0]).unwrap();
         assert_eq!((f.name.as_str(), f.props.width, f.props.height), (FRAME_PRESETS[0].0, FRAME_PRESETS[0].1, FRAME_PRESETS[0].2));
+    }
+
+    #[test]
+    fn libraries_are_remembered_and_follow_their_file() {
+        let dir = std::env::temp_dir().join(format!("blobr-libsync-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (lib_path, doc_path) = (dir.join("ui.jdb"), dir.join("app.jdb"));
+        let mut lib = Document::new();
+        let lp = lib.pages()[0];
+        let done = lib
+            .apply(
+                &[
+                    Op::create_as("b", lp, NodeSpec::frame("Badge", 30.0, 30.0).fill(jd_vector::Paint::hex("#FF0000"))),
+                    Op::create_as("dot", "b", NodeSpec::ellipse("Dot", 10.0, 10.0)),
+                    Op::MakeComponent { id: "b".into() },
+                ],
+                &jd_vector::ApproxMeasure,
+            )
+            .unwrap();
+        let badge = done.id("b").unwrap();
+        file::save(&lib, &lib_path).unwrap();
+
+        let mut app = app();
+        let _ = app.update(Message::LibraryPicked(Some(lib_path.clone())));
+        assert_eq!(app.doc().libraries(), [lib_path.display().to_string()], "kept in the document");
+        let _ = app.update(Message::InsertLibraryComponent(0, badge));
+        let instance = app.selection[0];
+        let _ = app.update(Message::SavedAs(Some(doc_path.clone())));
+
+        // Opened again (in a fresh window), the library comes back with it.
+        let mut again = self::app();
+        let _ = again.update(Message::Opened(Some(doc_path.clone())));
+        assert_eq!(again.libraries.len(), 1);
+
+        // The library changes on disk: the copy here, and its instances, follow.
+        let fill = |doc: &Document, id| doc.node(id).unwrap().props.fills.clone();
+        lib.apply(&[Op::set(badge, Patch { fills: Some(vec![jd_vector::Paint::hex("#0000FF")]), ..Patch::default() })], &jd_vector::ApproxMeasure).unwrap();
+        file::save(&lib, &lib_path).unwrap();
+        again.libraries[0].modified = Some(std::time::UNIX_EPOCH);
+        let _ = again.update(Message::CheckLibraries);
+        assert_eq!(fill(again.doc(), instance), vec![jd_vector::Paint::hex("#0000FF")]);
+        assert_eq!(again.doc().children(instance).len(), 1, "the layers inside came across too");
+        assert_eq!(again.ed.history.labels().last(), Some("Update from ui"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

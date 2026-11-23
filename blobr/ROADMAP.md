@@ -144,7 +144,7 @@ CLI argument as a file to open. Names are provisional until Step 0.
   - Editable Design panel (every value box typed into, like Photosplash's)
   - Copy/paste within Blobr and to/from other apps as SVG/PNG; Comment tool with local pins
   - Boolean operations (union, subtract, intersect, exclude), flatten, outline stroke
-- [ ] Step 5: components and assets in the app
+- [x] Step 5: components and assets in the app
   - [x] Create component, instances, detach, reset overrides, variant switching from the
         Design panel; combine as variants (plain names become `Property 1=...`), swap an
         instance's component
@@ -160,7 +160,9 @@ CLI argument as a file to open. Names are provisional until Step 0.
         instance-swap properties
   - [x] Libraries: add another .jdb, place its components (copied in once, onto a
         "Library components" page). Libraries are remembered for the session only
-  - [ ] Libraries that update when their file changes; remembered per document
+  - [x] Libraries remembered per document (in the `.jdb`, so they load with it) and updated
+        when their file changes: the components copied in (and their variants, by name) are
+        rebuilt in place, so instances follow, as one undo step
 - [x] Step 6: prototype and inspect
   - [x] Prototype tab: interactions (on click, while hovering, after a delay) that navigate,
         open an overlay, go back or open a link; instant, dissolve and slide transitions;
