@@ -803,6 +803,14 @@ impl Blobr {
         }
         // While dragging, mouse moves can outpace the screen: render once per frame instead.
         self.refresh_thumbnails();
+        // Presenting stopped (another tab or file came up): its own window goes too.
+        let task = match self.present_window.filter(|_| self.present.is_none()) {
+            Some((id, _)) => {
+                self.present_window = None;
+                Task::batch([task, window::close(id)])
+            }
+            None => task,
+        };
         if self.drag.is_none() { Task::batch([task, self.refresh()]) } else { task }
     }
 
@@ -4589,6 +4597,11 @@ mod tests {
         assert_eq!(app.chrome.size, Size::new(1000.0, 800.0), "the main window keeps its own");
         let _ = app.update(Message::CloseRequested(w));
         assert!(app.present.is_none() && app.present_window.is_none());
+        // Switching documents while presenting in a window closes that window too.
+        let _ = app.update(Message::PresentInWindow(Some(a)));
+        let _ = app.update(Message::New);
+        assert!(app.present.is_none() && app.present_window.is_none(), "no empty window left behind");
+        let _ = app.update(Message::TabSelect(0));
 
         // Smart animate: Card grows from Home's to Details' over in-between pictures.
         app.selection = vec![card];
