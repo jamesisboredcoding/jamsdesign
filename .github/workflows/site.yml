@@ -40,7 +40,7 @@ jobs:
       TAG: ${{ inputs.tag || github.ref_name }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref }}
       - name: Install flatpak-builder and the SDK
@@ -84,7 +84,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: main
       - name: Assemble the site
@@ -94,8 +94,8 @@ jobs:
           if [ -n "$latest" ] && gh release download --pattern flatpak-repo.tar.gz --dir . "$latest"; then
             tar -xzf flatpak-repo.tar.gz -C site/flatpak
           fi
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: site
       - id: deploy
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
