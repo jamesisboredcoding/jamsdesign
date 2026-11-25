@@ -68,6 +68,10 @@ More apps will join the suite later.
 
 ![Photosplash editing a photo of a fox in the snow](docs/img/photosplash-screenshot.jpg)
 
+### Blobr
+
+![Blobr designing a code editor mockup](docs/img/blobr_screenshot.jpg)
+
 ## Highlights
 
 - **Native and fast.** Pure Rust with a wgpu renderer; pixel work is tiled, copy-on-write and parallel.
