@@ -7,7 +7,7 @@ the same tools agents use over MCP. Every change it makes is an undo step.
 ## Where plugins go
 
 `~/.local/share/jamsdesign/blobr/plugins/`, or for the Flatpak,
-`~/.var/app/io.github.jamesisboredcoding.Blobr/data/jamsdesign/blobr/plugins/`.
+`~/.var/app/io.github.jamesisboredcoding.jamsdesign.Blobr/data/jamsdesign/blobr/plugins/`.
 
 **Plugins > Open Plugins Folder...** creates the folder and opens it. The file has to be executable
 (`chmod +x`). The menu shows its name without the extension, with `-` and `_` as spaces, and

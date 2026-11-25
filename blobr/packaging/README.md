@@ -1,16 +1,16 @@
 # Packaging Blobr
 
-Blobr is packaged as a Flatpak with the id `dev.jamsdesign.Blobr`. The Flatpak includes both
+Blobr is packaged as a Flatpak with the id `io.github.jamesisboredcoding.jamsdesign.Blobr`. The Flatpak includes both
 the app and `blobr-mcp`.
 
 | File | What it is |
 | --- | --- |
-| `dev.jamsdesign.Blobr.yml` | The Flatpak manifest (freedesktop 26.08 runtime, Rust from the SDK extension) |
+| `io.github.jamesisboredcoding.jamsdesign.Blobr.yml` | The Flatpak manifest (freedesktop 26.08 runtime, Rust from the SDK extension) |
 | `cargo-sources.json` | Every crate in `Cargo.lock`, so the build runs offline. Generated |
 | `cargo-sources.py` | Regenerates `cargo-sources.json`. Run it whenever `Cargo.lock` changes |
-| `dev.jamsdesign.Blobr.desktop` | The launcher. It opens `.jdb` files |
-| `dev.jamsdesign.Blobr.metainfo.xml` | AppStream data for software centres |
-| `dev.jamsdesign.Blobr.mime.xml` | The `.jdb` file type (`application/vnd.jamsdesign.blobr`) |
+| `io.github.jamesisboredcoding.jamsdesign.Blobr.desktop` | The launcher. It opens `.jdb` files |
+| `io.github.jamesisboredcoding.jamsdesign.Blobr.metainfo.xml` | AppStream data for software centres |
+| `io.github.jamesisboredcoding.jamsdesign.Blobr.mime.xml` | The `.jdb` file type (`application/vnd.jamsdesign.blobr`) |
 
 The icon is the suite's `img/blobr.svg`.
 
@@ -29,8 +29,8 @@ Then, from the repository root:
 ```sh
 python3 blobr/packaging/cargo-sources.py      # only if Cargo.lock changed
 flatpak run org.flatpak.Builder --user --install --force-clean \
-    --state-dir ~/.cache/blobr-flatpak build-dir blobr/packaging/dev.jamsdesign.Blobr.yml
-flatpak run dev.jamsdesign.Blobr
+    --state-dir ~/.cache/blobr-flatpak build-dir blobr/packaging/io.github.jamesisboredcoding.jamsdesign.Blobr.yml
+flatpak run io.github.jamesisboredcoding.jamsdesign.Blobr
 ```
 
 The manifest builds the working tree as it is. For a release, swap the `dir` source for a
@@ -41,10 +41,10 @@ The manifest builds the working tree as it is. For a release, swap the `dir` sou
 To use the Flatpak's `blobr-mcp` in every Claude Code session:
 
 ```sh
-claude mcp add --scope user blobr -- flatpak run --command=blobr-mcp dev.jamsdesign.Blobr
+claude mcp add --scope user blobr -- flatpak run --command=blobr-mcp io.github.jamesisboredcoding.jamsdesign.Blobr
 ```
 
-A running Blobr listens on `$XDG_RUNTIME_DIR/app/dev.jamsdesign.Blobr/blobr.sock`. Flatpak
+A running Blobr listens on `$XDG_RUNTIME_DIR/app/io.github.jamesisboredcoding.jamsdesign.Blobr/blobr.sock`. Flatpak
 shares that folder with the host, so a `blobr-mcp` inside or outside the sandbox reaches the
 app either way.
 
@@ -57,7 +57,7 @@ app either way.
   through `/run/host/fonts`.
 - **No network.**
 
-Preferences and recent files live in `~/.var/app/dev.jamsdesign.Blobr/config/jamsdesign/`.
+Preferences and recent files live in `~/.var/app/io.github.jamesisboredcoding.jamsdesign.Blobr/config/jamsdesign/`.
 
 ## Before publishing on Flathub
 

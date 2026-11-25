@@ -13,9 +13,9 @@ use jd_mcp::{Content, ToolResult};
 use serde_json::{Value, json};
 
 /// Blobr's app id (also its Flatpak id).
-pub const APP_ID: &str = "dev.jamsdesign.Blobr";
+pub const APP_ID: &str = "io.github.jamesisboredcoding.jamsdesign.Blobr";
 
-/// Where a running Blobr listens: `$XDG_RUNTIME_DIR/app/dev.jamsdesign.Blobr/blobr.sock`.
+/// Where a running Blobr listens: `$XDG_RUNTIME_DIR/app/io.github.jamesisboredcoding.jamsdesign.Blobr/blobr.sock`.
 /// That folder is the one a Flatpak'd Blobr shares with the host, so `blobr-mcp` finds the
 /// app whether either of them is sandboxed or not. Only under `$XDG_RUNTIME_DIR` (private to
 /// the user); with no runtime dir there's no live mode.

@@ -100,7 +100,7 @@ Otherwise they work on files of their own. Details: [apps/blobr-mcp/README.md](a
 
 ## Flatpak
 
-Blobr is packaged as a Flatpak, `dev.jamsdesign.Blobr`. Building and installing it, sandbox
+Blobr is packaged as a Flatpak, `io.github.jamesisboredcoding.jamsdesign.Blobr`. Building and installing it, sandbox
 permissions, and MCP setup are in [packaging/README.md](packaging/README.md).
 
 ## Status

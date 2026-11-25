@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>dev.jamsdesign.Blobr</id>
+  <id>io.github.jamesisboredcoding.jamsdesign.Blobr</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <name>Blobr</name>
   <summary>Design interfaces and vector graphics</summary>
-  <developer id="dev.jamsdesign">
+  <developer id="io.github.jamesisboredcoding">
     <name>jamsdesign</name>
   </developer>
   <description>
@@ -20,12 +20,14 @@
       <li>Prototypes with smart animate, scrolling and flows</li>
       <li>Comments, developer handoff (CSS, HTML, iced) and PNG, SVG and PDF export</li>
       <li>AI agents can read and edit designs through Blobr's MCP server, live in the app</li>
+      <li>Plugins in any language, using the same tools as agents</li>
     </ul>
     <p>Designs are .jdb files on your own disk.</p>
   </description>
-  <url type="homepage">https://github.com/jamesisboredcoding/jamsdesign</url>
+  <url type="homepage">https://jamesisboredcoding.github.io/jamsdesign</url>
+  <url type="bugtracker">https://github.com/jamesisboredcoding/jamsdesign/issues</url>
   <url type="vcs-browser">https://github.com/jamesisboredcoding/jamsdesign</url>
-  <launchable type="desktop-id">dev.jamsdesign.Blobr.desktop</launchable>
+  <launchable type="desktop-id">io.github.jamesisboredcoding.jamsdesign.Blobr.desktop</launchable>
   <provides>
     <binary>blobr</binary>
     <binary>blobr-mcp</binary>
@@ -44,7 +46,7 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
-    <release version="0.1.0" date="2026-11-23">
+    <release version="0.1.0" date="2026-11-25">
       <description>
         <p>First release.</p>
       </description>

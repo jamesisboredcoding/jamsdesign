@@ -53,7 +53,7 @@ pub fn present_window() -> iced::window::Settings {
 }
 
 /// Wayland app id; also the name of the .desktop file and the installed icon.
-pub const APP_ID: &str = "dev.jamsdesign.Blobr";
+pub const APP_ID: &str = "io.github.jamesisboredcoding.jamsdesign.Blobr";
 
 /// The Blobr logo (the suite's shared artwork in the repo root `img/`).
 pub const LOGO_SVG: &[u8] = include_bytes!("../../../../img/blobr.svg");
