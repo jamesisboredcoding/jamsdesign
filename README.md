@@ -8,6 +8,8 @@
 
 Native apps for photo, video and interface design work, with the shortcuts and workflows you already know.
 
+**[jamesisboredcoding.github.io/jamsdesign](https://jamesisboredcoding.github.io/jamsdesign)**
+
 ![Rust](https://img.shields.io/badge/Rust-2024-B7410E?logo=rust&logoColor=white)
 ![iced](https://img.shields.io/badge/UI-iced%200.14-3D3846)
 ![wgpu](https://img.shields.io/badge/GPU-wgpu-1C71D8)
