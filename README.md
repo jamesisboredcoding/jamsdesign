@@ -82,7 +82,13 @@ More apps will join the suite later.
 
 ## Getting started
 
-You need a recent stable Rust toolchain (edition 2024) and a Linux desktop with a Vulkan-capable GPU.
+Blobr is available as a Flatpak with automatic updates:
+
+```sh
+flatpak install --user https://jamesisboredcoding.github.io/jamsdesign/flatpak/blobr.flatpakref
+```
+
+To build from source, you need a recent stable Rust toolchain (edition 2024) and a Linux desktop with a Vulkan-capable GPU.
 Cinematica also needs the system FFmpeg development libraries.
 
 Everything is one Cargo workspace, so run it all from the repository root:

@@ -59,7 +59,18 @@ app either way.
 
 Preferences and recent files live in `~/.var/app/io.github.jamesisboredcoding.jamsdesign.Blobr/config/jamsdesign/`.
 
-## Before publishing on Flathub
+## Publishing
 
-- Add screenshots to the metainfo.
-- Point the manifest at a tagged git release instead of the working tree.
+Blobr is published from its own Flatpak repo on the project's GitHub Pages site, not Flathub.
+Flathub doesn't accept AI-written manifests or AI-opened submissions.
+
+- Users install with `docs/flatpak/blobr.flatpakref`, which adds the `jamsdesign` remote (the
+  same remote `docs/flatpak/jamsdesign.flatpakrepo` adds). Updates then come through
+  `flatpak update` and the software centre.
+- To release, bump the version and add a `<release>` to the metainfo, commit, then tag and push:
+  `git tag -a blobr-v0.2.0 -m "Blobr 0.2.0" && git push origin main blobr-v0.2.0`.
+  `.github/workflows/site.yml` builds the tag, signs it into the repo, attaches the repo and a
+  `.flatpak` bundle to the release, and publishes the site.
+- The repo is signed with the key in `blobr/packaging/jamsdesign-flatpak.asc`. Its private half
+  is the `FLATPAK_GPG_KEY` Actions secret, with a copy in `~/.config/jamsdesign/flatpak-signing`.
+  Keep a backup: losing it means every user has to re-add the remote.

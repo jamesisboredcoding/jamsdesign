@@ -1,0 +1,101 @@
+# The website and the Flatpak repo, both on GitHub Pages.
+#
+# Pushing a blobr-v* tag builds Blobr's Flatpak, signs it into the repo, attaches the repo and a
+# .flatpak bundle to that tag's GitHub release, and publishes. Changes to docs/ republish the
+# site with the latest release's repo, without rebuilding anything.
+#
+# Needs the FLATPAK_GPG_KEY secret (the repo's private signing key, ASCII-armoured; its public
+# half is blobr/packaging/jamsdesign-flatpak.asc).
+name: Site and Flatpak repo
+
+on:
+  push:
+    branches: [main]
+    tags: ['blobr-v*']
+    paths: ['docs/**', '.github/workflows/site.yml']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Build and publish this blobr-v* tag (empty just republishes the site)
+        required: false
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  APP_ID: io.github.jamesisboredcoding.jamsdesign.Blobr
+  MANIFEST: blobr/packaging/io.github.jamesisboredcoding.jamsdesign.Blobr.yml
+
+jobs:
+  flatpak:
+    if: startsWith(github.ref, 'refs/tags/blobr-v') || inputs.tag != ''
+    runs-on: ubuntu-24.04
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Install flatpak-builder and the SDK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y --noninteractive flathub \
+            org.freedesktop.Platform//26.08 org.freedesktop.Sdk//26.08 org.freedesktop.Sdk.Extension.rust-stable//26.08
+      - name: Import the signing key
+        env:
+          KEY: ${{ secrets.FLATPAK_GPG_KEY }}
+        run: |
+          echo "$KEY" | gpg --batch --import
+          echo "KEY_ID=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/{print $10; exit}')" >> "$GITHUB_ENV"
+      - name: Start from the published repo
+        run: |
+          # Keeps the earlier commits, so updates can use deltas.
+          if gh release download --pattern flatpak-repo.tar.gz --dir . "$(gh release list --json tagName --jq '[.[] | select(.tagName | startswith("blobr-v"))][0].tagName')" 2>/dev/null; then
+            tar -xzf flatpak-repo.tar.gz
+          fi
+      - name: Build
+        run: |
+          flatpak-builder --user --disable-rofiles-fuse --default-branch=stable --gpg-sign="$KEY_ID" \
+            --repo=repo --force-clean build-dir "$MANIFEST"
+          flatpak build-update-repo --gpg-sign="$KEY_ID" --title=jamsdesign --generate-static-deltas --prune --prune-depth=5 repo
+          flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo repo Blobr.flatpak "$APP_ID" stable
+          tar -czf flatpak-repo.tar.gz repo
+      - name: Attach to the release
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Blobr ${TAG#blobr-v}" --notes "Install from https://jamesisboredcoding.github.io/jamsdesign/#install"
+          gh release upload "$TAG" Blobr.flatpak flatpak-repo.tar.gz --clobber
+
+  pages:
+    needs: flatpak
+    if: ${{ !cancelled() && (needs.flatpak.result == 'success' || needs.flatpak.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Assemble the site
+        run: |
+          cp -r docs site
+          latest=$(gh release list --json tagName --jq '[.[] | select(.tagName | startswith("blobr-v"))][0].tagName')
+          if [ -n "$latest" ] && gh release download --pattern flatpak-repo.tar.gz --dir . "$latest"; then
+            tar -xzf flatpak-repo.tar.gz -C site/flatpak
+          fi
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4
