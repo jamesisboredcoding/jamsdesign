@@ -3,6 +3,7 @@ name = "jd-vector-render"
 description = "Draws jd-vector documents without a window: CPU raster (tiny-skia), PNG and SVG export, text shaping. No iced."
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dependencies]

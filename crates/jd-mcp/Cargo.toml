@@ -3,6 +3,7 @@ name = "jd-mcp"
 description = "A small Model Context Protocol server (stdio, JSON-RPC) for the jamsdesign apps. No async runtime."
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dependencies]

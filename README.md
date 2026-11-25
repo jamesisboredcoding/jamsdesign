@@ -131,3 +131,8 @@ jamsdesign/
 The suite's mockups live in [`blobr/mockups/suite.jdb`](blobr/mockups/README.md) and are edited
 in Blobr; they were imported from Figma once. The app icons follow the GNOME / Adwaita style so
 they sit naturally on a Linux desktop.
+
+## Licence
+
+jamsdesign is free software under the [GNU General Public License v3.0 or later](LICENSE).
+`vendor/iced_winit` is a patched copy of iced's winit shell, under its own MIT licence.

@@ -3,6 +3,7 @@ name = "jd-figma"
 description = "One-time import of Figma files (REST API JSON) into Blobr documents. No iced."
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dependencies]

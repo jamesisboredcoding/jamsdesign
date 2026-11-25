@@ -3,6 +3,7 @@ name = "jd-media"
 description = "Video and audio media for the jamsdesign suite: probing, frame-accurate decoding, playback, thumbnails (FFmpeg)."
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dependencies]

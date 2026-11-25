@@ -61,7 +61,5 @@ Preferences and recent files live in `~/.var/app/dev.jamsdesign.Blobr/config/jam
 
 ## Before publishing on Flathub
 
-- Add a licence. The repository doesn't have one yet; once it does, add `<project_license>`
-  to the metainfo.
 - Add screenshots to the metainfo.
 - Point the manifest at a tagged git release instead of the working tree.

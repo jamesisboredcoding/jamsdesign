@@ -3,6 +3,7 @@ name = "jd-ai"
 description = "On-device AI helpers for jamsdesign apps (background removal), no iced."
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dependencies]

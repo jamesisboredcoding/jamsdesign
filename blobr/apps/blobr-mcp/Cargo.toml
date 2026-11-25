@@ -3,6 +3,7 @@ name = "blobr-mcp"
 description = "Blobr's MCP server: lets AI agents read and edit Blobr documents, headless or live in the app."
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dependencies]

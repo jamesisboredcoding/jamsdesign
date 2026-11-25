@@ -3,6 +3,7 @@ name = "jd-vector"
 description = "Vector design document model for Blobr: scene graph, auto layout, ops, undo, .jdb files. No iced."
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dependencies]
