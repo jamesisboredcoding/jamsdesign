@@ -3,6 +3,7 @@ name = "tablet-spike"
 description = "Throwaway test: does pen pressure/tilt reach us on this Linux setup?"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [dependencies]
