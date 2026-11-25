@@ -85,7 +85,14 @@ impl WindowChrome {
 
     pub fn update(&mut self, event: Event) -> Task<Event> {
         match event {
-            Event::Opened(id) => self.window = id,
+            Event::Opened(id) => {
+                self.window = id;
+                // The window manager may have opened it at another size (maximised, tiled), and
+                // no resize event follows that, so ask.
+                if let Some(id) = id {
+                    return window::size(id).map(move |s| Event::Resized(id, s));
+                }
+            }
             Event::TitlePressed => {
                 self.title_pressed = true;
                 self.open_menu = None;

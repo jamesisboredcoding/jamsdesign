@@ -59,6 +59,12 @@ pub fn canvas_size(app: &Blobr, window: Size) -> Size {
     Size::new(w.max(1.0), h.max(1.0))
 }
 
+/// A side panel's tab strip; its menu icon opens that panel's menu.
+pub fn panel_header<'a>(app: &Blobr, tabs: &[&'a str], active: usize, on_tab: impl Fn(usize) -> Message, layers: bool) -> Element<'a, Message> {
+    let open = Dropdown::Panel { layers };
+    jd_ui::widget::panel_header_menu(tabs, active, on_tab, Message::Dropdown((app.dropdown != Some(open)).then_some(open)))
+}
+
 /// The width a side panel gets when its inner edge is dragged to window x.
 pub fn panel_width_at(app: &Blobr, side: Side, x: f32) -> f32 {
     let w = match side {
@@ -243,6 +249,7 @@ fn title_actions(app: &Blobr) -> Element<'_, Message> {
         .padding(0)
         .style(style::ghost(false))
         .on_press(Message::Dropdown(if app.dropdown == Some(Dropdown::Mode) { None } else { Some(Dropdown::Mode) }));
+    let workspace = mouse_area(workspace).on_move(|p| Message::ModePointer(p.x));
     let export = button(
         row![icon(Icon::Share, 12.0, TEXT_PRIMARY), text("Export").size(TEXT_SIZE_SMALL).font(bold())]
             .spacing(6)
@@ -278,7 +285,8 @@ fn dropdown(app: &Blobr) -> Option<Element<'_, Message>> {
                 Some(MenuEntry::IconItem(kind_icon(&n.kind), n.name.as_str(), page, Some(Message::SearchPick(id))))
             })
             .collect();
-        return Some(chrome::popup(entries, 320.0, iced::Point::new(size.width, TITLE_BAR_HEIGHT), size, true, Message::Search(false), None, |_| Message::Noop));
+        let x = app.mode_left.map_or(size.width, |x| x - 12.0 - 220.0);
+        return Some(chrome::popup(entries, 320.0, iced::Point::new(x, TITLE_BAR_HEIGHT), size, true, Message::Search(false), None, |_| Message::Noop));
     }
     match app.dropdown? {
         Dropdown::Mode => {
@@ -288,7 +296,8 @@ fn dropdown(app: &Blobr) -> Option<Element<'_, Message>> {
                 .enumerate()
                 .map(|(i, m)| MenuEntry::IconItem(icons[i], *m, if i == app.right_tab { "Open" } else { "" }, pick(Message::RightTab(i))))
                 .collect();
-            Some(chrome::popup(entries, 200.0, iced::Point::new(size.width, TITLE_BAR_HEIGHT), size, true, Message::Dropdown(None), None, |_| Message::Noop))
+            let x = app.mode_left.unwrap_or(size.width);
+            Some(chrome::popup(entries, 200.0, iced::Point::new(x, TITLE_BAR_HEIGHT), size, true, Message::Dropdown(None), None, |_| Message::Noop))
         }
         Dropdown::Zoom => {
             let sel = !app.selection.is_empty();
@@ -304,6 +313,16 @@ fn dropdown(app: &Blobr) -> Option<Element<'_, Message>> {
             }
             let at = iced::Point::new(canvas_left(app), size.height - GUTTER - STATUS_HEIGHT);
             Some(chrome::popup(entries, 220.0, at, size, false, Message::Dropdown(None), None, |_| Message::Noop))
+        }
+        Dropdown::Panel { layers } => {
+            let entries = vec![
+                MenuEntry::Item("Swap Panel Sides", "", pick(Message::SwapPanels)),
+                MenuEntry::Item("Hide Panels", "Ctrl+\\", pick(Message::TogglePanels)),
+            ];
+            // Under the menu icon, at the panel's right edge.
+            let right = if layers != app.prefs.swap_panels { canvas_left(app) - HANDLE } else { size.width - GUTTER };
+            let at = iced::Point::new(right - 200.0, TITLE_BAR_HEIGHT + 1.0 + GUTTER + 30.0);
+            Some(chrome::popup(entries, 200.0, at, size, false, Message::Dropdown(None), None, |_| Message::Noop))
         }
     }
 }

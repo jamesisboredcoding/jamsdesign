@@ -3,7 +3,7 @@
 use iced::alignment::Vertical;
 use iced::widget::{button, checkbox, column, container, pick_list, row, scrollable, space, text, text_input};
 use iced::{Border, Color, Element, Fill, Padding, Theme};
-use jd_ui::widget::{hline, panel_header};
+use jd_ui::widget::hline;
 use jd_ui::{Icon, icon, style, tokens::*};
 use jd_vector::component::parse_variant;
 use jd_vector::{Direction, ExportFormat, Node, NodeKind, Paint, PaintKind, PropDef, PropValue, Sizing};
@@ -102,7 +102,7 @@ pub fn view(app: &Blobr) -> Element<'_, Message> {
             None => space().into(),
         },
     };
-    let header = panel_header(&["Design", "Prototype", "Inspect"], app.right_tab, Message::RightTab);
+    let header = super::panel_header(app, &["Design", "Prototype", "Inspect"], app.right_tab, Message::RightTab, false);
     match app.right_tab {
         1 => column![header, super::prototype::view(app)].into(),
         2 => column![header, super::inspect::view(app)].into(),

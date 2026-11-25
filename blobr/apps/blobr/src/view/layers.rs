@@ -3,7 +3,7 @@
 use iced::alignment::Vertical;
 use iced::widget::{button, column, container, mouse_area, row, scrollable, space, stack, svg, text, text_input};
 use iced::{Border, Color, Element, Fill, Padding};
-use jd_ui::widget::{hline, panel_header};
+use jd_ui::widget::hline;
 use jd_ui::{Icon, icon, style, tokens::*};
 use jd_vector::{NodeId, NodeKind};
 
@@ -41,7 +41,7 @@ pub fn view(app: &Blobr) -> Element<'_, Message> {
     let tree = iced::widget::Column::with_children(tree);
 
     column![
-        panel_header(&["Layers", "Assets"], 0, Message::LeftTab),
+        super::panel_header(app, &["Layers", "Assets"], 0, Message::LeftTab, true),
         section("Pages", Some(Message::AddPage)),
         container(pages).padding(Padding::from([0, 6])),
         container(hline(BG_PANEL)).padding(Padding::from([6, 0])),

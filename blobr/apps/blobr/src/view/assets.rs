@@ -4,7 +4,6 @@
 use iced::alignment::Vertical;
 use iced::widget::{button, column, container, image, row, scrollable, space, text, text_input};
 use iced::{Element, Fill, Padding};
-use jd_ui::widget::panel_header;
 use jd_ui::{Icon, icon, style, tokens::*};
 use jd_vector::NodeKind;
 
@@ -82,7 +81,7 @@ pub fn view(app: &Blobr) -> Element<'_, Message> {
         scrollable(container(list).padding(Padding::from([0, 6]))).height(Fill).into()
     };
     column![
-        panel_header(&["Layers", "Assets"], 1, Message::LeftTab),
+        super::panel_header(app, &["Layers", "Assets"], 1, Message::LeftTab, true),
         container(
             text_input("Search assets", &app.asset_filter)
                 .on_input(Message::AssetFilter)

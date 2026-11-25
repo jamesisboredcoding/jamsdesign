@@ -135,6 +135,26 @@ pub fn panel_header<'a, M: Clone + 'a>(
     active: usize,
     on_tab: impl Fn(usize) -> M,
 ) -> Element<'a, M> {
+    tab_strip(tabs, active, on_tab, container(icon(Icon::Menu, 14.0, TEXT_SECONDARY)).padding(Padding::from([0, 8])).into())
+}
+
+/// [`panel_header`] whose menu icon is a button.
+pub fn panel_header_menu<'a, M: Clone + 'a>(
+    tabs: &[&'a str],
+    active: usize,
+    on_tab: impl Fn(usize) -> M,
+    on_menu: M,
+) -> Element<'a, M> {
+    let menu = button(icon(Icon::Menu, 14.0, TEXT_SECONDARY)).padding(Padding::from([4, 8])).style(style::ghost(false)).on_press(on_menu);
+    tab_strip(tabs, active, on_tab, menu.into())
+}
+
+fn tab_strip<'a, M: Clone + 'a>(
+    tabs: &[&'a str],
+    active: usize,
+    on_tab: impl Fn(usize) -> M,
+    menu: Element<'a, M>,
+) -> Element<'a, M> {
     let mut header = row![].align_y(Vertical::Center);
     for (i, name) in tabs.iter().enumerate() {
         let is_active = i == active;
@@ -152,9 +172,7 @@ pub fn panel_header<'a, M: Clone + 'a>(
             tab
         ].width(Length::Shrink));
     }
-    header = header
-        .push(space::horizontal())
-        .push(container(icon(Icon::Menu, 14.0, TEXT_SECONDARY)).padding(Padding::from([0, 8])));
+    header = header.push(space::horizontal()).push(menu);
 
     container(header)
         .width(Fill)

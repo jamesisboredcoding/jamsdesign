@@ -378,6 +378,8 @@ pub enum Dropdown {
     /// Design, Prototype or Inspect (the right panel's tab).
     Mode,
     Zoom,
+    /// A side panel's menu (its header's menu icon): the Layers panel's, or the Design one's.
+    Panel { layers: bool },
 }
 
 /// Which side panel's edge is being dragged.
@@ -622,6 +624,8 @@ pub enum Message {
     Exported(Option<PathBuf>, Vec<u8>),
     /// Open (or with `None`, close) a dropdown.
     Dropdown(Option<Dropdown>),
+    /// The pointer moved over the mode button, this far into it.
+    ModePointer(f32),
     /// Show or hide the layer search box.
     Search(bool),
     SearchInput(String),
@@ -748,6 +752,10 @@ pub struct Blobr {
     pub shortcuts_open: bool,
     pub about_open: bool,
     pub dropdown: Option<Dropdown>,
+    /// The mode button's left edge in the window (learnt from the pointer, as the title-bar
+    /// menus do), and the pointer's x inside it since the last move.
+    pub mode_left: Option<f32>,
+    mode_pointer: Option<f32>,
     /// What's typed in the layer search box (`None`: closed).
     pub search: Option<String>,
     /// What's typed in the zoom box (`None`: showing the zoom).
@@ -850,6 +858,8 @@ impl Blobr {
             shortcuts_open: false,
             about_open: false,
             dropdown: None,
+            mode_left: None,
+            mode_pointer: None,
             search: None,
             zoom_draft: None,
             panel_drag: None,
@@ -926,6 +936,7 @@ impl Blobr {
                     | Message::Chrome(_)
                     | Message::Key(_)
                     | Message::Noop
+                    | Message::ModePointer(_)
                     | Message::CheckLibraries
                     | Message::Autosave
                     | Message::Autosaved(_)
@@ -965,6 +976,9 @@ impl Blobr {
                 return Task::batch([task, scale]);
             }
             Message::Chrome(e) => {
+                if let (chrome::Event::TitleMoved(p), Some(x)) = (&e, self.mode_pointer.take()) {
+                    self.mode_left = Some(p.x - x);
+                }
                 // The canvas overlay reports its real size (Message::Viewport).
                 return self.chrome.update(e).map(Message::Chrome);
             }
@@ -994,6 +1008,7 @@ impl Blobr {
                 let _ = reply.send(result);
             }
             Message::Noop => {}
+            Message::ModePointer(x) => self.mode_pointer = Some(x),
             Message::Dropdown(d) => {
                 self.dropdown = d;
                 self.chrome.open_menu = None;
@@ -4630,6 +4645,22 @@ mod tests {
         let _ = app.update(Message::SearchInput("A".into()));
         let _ = app.update(Message::SearchSubmit);
         assert_eq!(app.selection, vec![ids[0]]);
+    }
+
+    #[test]
+    fn the_mode_menu_opens_under_its_button() {
+        let mut app = app();
+        // 30px into the button while the title bar sees the pointer at x=900.
+        let _ = app.update(Message::ModePointer(30.0));
+        let _ = app.update(Message::Chrome(chrome::Event::TitleMoved(iced::Point::new(900.0, 12.0))));
+        assert_eq!(app.mode_left, Some(870.0));
+        // Moving over the title bar elsewhere doesn't move it.
+        let _ = app.update(Message::Chrome(chrome::Event::TitleMoved(iced::Point::new(400.0, 12.0))));
+        assert_eq!(app.mode_left, Some(870.0));
+        let _ = app.update(Message::Dropdown(Some(Dropdown::Panel { layers: true })));
+        let _ = app.update(Message::Menu(Box::new(Message::SwapPanels)));
+        assert!(app.prefs.swap_panels);
+        assert_eq!(app.dropdown, None);
     }
 
     #[test]
