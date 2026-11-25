@@ -1,116 +1,12 @@
-//! Undo/redo by whole-document snapshots, like `jd-raster`'s history.
+//! Undo/redo by whole-document snapshots (the shared `jd_core::History`), and [`Editor`].
 //!
 //! Snapshots are cheap: a `Document` clone shares every node (`Arc`), so a step only costs the
 //! node map plus the nodes the edit replaced.
 
 use crate::Document;
 
-const DEFAULT_LIMIT: usize = 200;
-
-#[derive(Debug, Clone)]
-struct Step {
-    label: String,
-    /// The document before this step.
-    before: Document,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct History {
-    undo: Vec<Step>,
-    redo: Vec<Step>,
-    /// Edits sharing this key (one drag, one slider) collapse into a single step.
-    gesture: Option<String>,
-    /// `undo.len()` when last saved; `None` if that state can't be reached any more.
-    saved_at: Option<usize>,
-    limit: usize,
-}
-
-impl History {
-    /// History for a document just opened or saved (counts as saved).
-    pub fn new_saved() -> Self {
-        Self { saved_at: Some(0), ..Self::default() }
-    }
-
-    /// Call before changing `doc`. Consecutive calls with the same `gesture` make one step
-    /// (until [`end_gesture`](Self::end_gesture)).
-    pub fn record(&mut self, label: &str, doc: &Document, gesture: Option<&str>) {
-        if let Some(key) = gesture
-            && self.gesture.as_deref() == Some(key)
-        {
-            return;
-        }
-        self.gesture = gesture.map(str::to_owned);
-        if self.saved_at.is_some_and(|s| s > self.undo.len()) {
-            self.saved_at = None;
-        }
-        self.redo.clear();
-        self.undo.push(Step { label: label.to_owned(), before: doc.clone() });
-        let limit = if self.limit == 0 { DEFAULT_LIMIT } else { self.limit };
-        if self.undo.len() > limit {
-            let drop = self.undo.len() - limit;
-            self.undo.drain(..drop);
-            self.saved_at = self.saved_at.and_then(|s| s.checked_sub(drop));
-        }
-    }
-
-    pub fn end_gesture(&mut self) {
-        self.gesture = None;
-    }
-
-    /// Restores the state before the last step. Returns its label.
-    pub fn undo(&mut self, doc: &mut Document) -> Option<String> {
-        self.gesture = None;
-        let step = self.undo.pop()?;
-        let after = std::mem::replace(doc, step.before);
-        self.redo.push(Step { label: step.label.clone(), before: after });
-        Some(step.label)
-    }
-
-    pub fn redo(&mut self, doc: &mut Document) -> Option<String> {
-        self.gesture = None;
-        let step = self.redo.pop()?;
-        let before = std::mem::replace(doc, step.before);
-        self.undo.push(Step { label: step.label.clone(), before });
-        Some(step.label)
-    }
-
-    /// Folds the last step into the one before it (two batches that are one action for the
-    /// user, like creating a style and then using it).
-    pub fn merge_last(&mut self) {
-        if self.undo.len() >= 2 {
-            self.undo.pop();
-            self.gesture = None;
-            if self.saved_at.is_some_and(|s| s > self.undo.len()) {
-                self.saved_at = None;
-            }
-        }
-    }
-
-    pub fn can_undo(&self) -> bool {
-        !self.undo.is_empty()
-    }
-
-    pub fn can_redo(&self) -> bool {
-        !self.redo.is_empty()
-    }
-
-    /// Labels of the undoable steps, oldest first.
-    pub fn labels(&self) -> impl Iterator<Item = &str> {
-        self.undo.iter().map(|s| s.label.as_str())
-    }
-
-    pub fn mark_saved(&mut self) {
-        self.saved_at = Some(self.undo.len());
-    }
-
-    pub fn is_dirty(&self) -> bool {
-        self.saved_at != Some(self.undo.len())
-    }
-
-    pub fn set_limit(&mut self, limit: usize) {
-        self.limit = limit.max(1);
-    }
-}
+/// Undo/redo for vector documents.
+pub type History = jd_core::History<Document>;
 
 /// A document with its history: apply a labelled batch of ops as one undoable step.
 #[derive(Debug, Clone, Default)]

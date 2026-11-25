@@ -501,6 +501,7 @@ name = "blobr-mcp"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "jd-core",
  "jd-mcp",
  "jd-vector",
  "jd-vector-render",
@@ -2063,6 +2064,7 @@ checksum = "3bd1574e617a9a6c1f8f8181bd7e841e1f20e4277607ef28945765188d6284d4"
 name = "jd-ai"
 version = "0.1.0"
 dependencies = [
+ "jd-core",
  "ort",
  "ureq",
 ]
@@ -2097,6 +2099,7 @@ version = "0.1.0"
 dependencies = [
  "flate2",
  "image",
+ "jd-core",
  "jd-raster",
  "psd",
  "rayon",
@@ -2142,6 +2145,9 @@ dependencies = [
 [[package]]
 name = "jd-timeline"
 version = "0.1.0"
+dependencies = [
+ "jd-core",
+]
 
 [[package]]
 name = "jd-ui"

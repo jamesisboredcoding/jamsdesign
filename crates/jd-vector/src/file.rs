@@ -208,19 +208,10 @@ pub fn read<R: Read + Seek>(input: R) -> Result<Document, FileError> {
     Ok(doc)
 }
 
-/// Saves through a temporary file next to `path`, so a failed save never damages the old one.
+/// Saves through a synced temporary file next to `path`, so a failed save never damages the
+/// old one.
 pub fn save(doc: &Document, path: &Path) -> Result<(), FileError> {
-    let tmp = path.with_extension(format!("{EXTENSION}.saving"));
-    let result = (|| {
-        let file = std::fs::File::create(&tmp)?;
-        write(doc, std::io::BufWriter::new(file))?.flush()?;
-        std::fs::rename(&tmp, path)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    result
+    jd_core::fs::write_atomic(path, |w| write(doc, w))
 }
 
 pub fn load(path: &Path) -> Result<Document, FileError> {
@@ -302,6 +293,19 @@ mod tests {
             {"id":1,"name":"P","type":"page","x":0,"y":0,"width":0,"height":0,"children":[
               {"id":1,"name":"R","type":"rectangle","x":0,"y":0,"width":1,"height":1}]}]}"#;
         assert!(from_json(dup).unwrap_err().to_string().contains("used twice"));
+    }
+
+    #[test]
+    fn a_variable_without_its_collection_is_an_error_not_a_crash() {
+        let json = r#"{"format":"blobr","version":1,"next_id":9,"pages":[{"id":1,"name":"P","type":"page"}],
+            "tokens":{"collections":{"3":{"name":"Empty","modes":[]}},
+                      "variables":{"5":{"name":"orphan","collection":7,"values":{}},
+                                   "6":{"name":"no mode","collection":3,"values":{}}}}}"#;
+        let mut doc = from_json(json).unwrap();
+        for id in [5, 6] {
+            let op = crate::Op::SetVariable { id: NodeId(id).into(), name: None, mode: None, value: Some(crate::VarValue::Number(1.0)) };
+            assert!(doc.apply(&[op], &crate::ApproxMeasure).is_err());
+        }
     }
 
     #[test]

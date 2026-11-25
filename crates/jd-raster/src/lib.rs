@@ -14,7 +14,6 @@ pub mod text;
 pub mod image_ops;
 pub mod mask;
 pub mod render;
-mod history;
 pub mod paint;
 pub mod path;
 pub mod selection;
@@ -23,7 +22,8 @@ mod tile;
 
 pub use blend::BlendMode;
 pub use composite::BlendSpace;
-pub use history::History;
+/// Undo/redo by whole-document snapshots (a clone shares every tile, so a step costs only the tiles an edit replaced).
+pub type History = jd_core::History<Document>;
 pub use tile::{TILE_SIZE, Tile, TileGrid, TileId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

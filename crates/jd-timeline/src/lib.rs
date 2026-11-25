@@ -3,13 +3,12 @@
 //! ripple, slip), with snapshot undo in [`History`]. Times are exact [`time::Time`] flicks.
 //! Never depends on iced or FFmpeg.
 
-pub mod history;
 pub mod sequence;
 pub mod time;
 
 #[cfg(test)]
 mod tests;
 
-pub use history::History;
+pub use jd_core::History;
 pub use sequence::{Clip, ClipId, ClipSource, Edge, EditError, LinkId, MediaId, Sequence, Track, TrackKind, TrackRef};
 pub use time::{FrameRate, SECOND, Time, from_seconds, to_seconds};

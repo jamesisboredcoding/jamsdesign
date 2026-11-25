@@ -6,6 +6,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+jd-core.workspace = true
 jd-mcp = { path = "../../../crates/jd-mcp" }
 jd-vector = { path = "../../../crates/jd-vector" }
 jd-vector-render = { path = "../../../crates/jd-vector-render" }

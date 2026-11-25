@@ -419,7 +419,7 @@ pub fn call(target: &mut dyn Target, name: &str, args: Value) -> ToolResult {
             if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
                 std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
             }
-            std::fs::write(&path, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+            jd_core::fs::write_atomic(&path, |mut w| std::io::Write::write_all(&mut w, &bytes).map(|()| w)).map_err(|e| format!("{}: {e}", path.display()))?;
             text(format!("Wrote {} ({} bytes)", path.display(), bytes.len()))
         }
         "list_fonts" => {

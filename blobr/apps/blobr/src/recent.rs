@@ -7,10 +7,7 @@ use std::path::{Path, PathBuf};
 pub const MAX: usize = 10;
 
 fn file() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    let base = jd_core::fs::user_dir("XDG_CONFIG_HOME", ".config")?;
     Some(base.join("jamsdesign").join("blobr-recent.json"))
 }
 
@@ -39,13 +36,6 @@ pub fn save(list: &[PathBuf]) {
     }
 }
 
-/// Puts `path` first in `list` (once), dropping the oldest past [`MAX`].
-pub fn remember(list: &mut Vec<PathBuf>, path: &Path) {
-    list.retain(|p| p != path);
-    list.insert(0, path.to_path_buf());
-    list.truncate(MAX);
-}
-
 /// The menu's label for a file: its name, and its folder (with `~` for home).
 pub fn label(path: &Path) -> (String, String) {
     let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
@@ -57,21 +47,4 @@ pub fn label(path: &Path) -> (String, String) {
     // Long folders keep their end, which says the most.
     let dir = if dir.chars().count() > 28 { format!("...{}", dir.chars().rev().take(25).collect::<Vec<_>>().into_iter().rev().collect::<String>()) } else { dir };
     (name, dir)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn newest_first_once_and_capped() {
-        let mut list = Vec::new();
-        for i in 0..(MAX + 3) {
-            remember(&mut list, Path::new(&format!("/d/{i}.jdb")));
-        }
-        remember(&mut list, Path::new("/d/5.jdb"));
-        assert_eq!(list.len(), MAX);
-        assert_eq!(list[0], Path::new("/d/5.jdb"));
-        assert_eq!(list.iter().filter(|p| p.ends_with("5.jdb")).count(), 1);
-    }
 }

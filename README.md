@@ -104,7 +104,7 @@ jamsdesign/
 
 | Crate              | Purpose                                                                      |
 | ------------------ | ---------------------------------------------------------------------------- |
-| `jd-core`          | Colour maths (linear RGBA, sRGB, HSV) and geometry. No UI dependencies.      |
+| `jd-core`          | Colour maths (linear RGBA, sRGB, HSV), undo history, safe file writes.       |
 | `jd-raster`        | Raster documents: layers, tiles, undo history, blend modes, brush engine.    |
 | `jd-io`            | Image import and export, `.jdp` documents.                                   |
 | `jd-gpu`           | wgpu renderer for compositing and blending.                                  |

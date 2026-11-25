@@ -137,6 +137,26 @@ pub struct Library {
     pub modified: Option<std::time::SystemTime>,
 }
 
+/// A document to auto-save: its file, a snapshot, and its history version then.
+type SaveJob = (PathBuf, Document, u64);
+/// An auto-save written to a temporary file (or why not), waiting to be put in place.
+pub type Written = (PathBuf, u64, Result<PathBuf, String>);
+
+/// Writes each job to a temporary file next to its target (slow: run it off the UI thread).
+fn write_temps(jobs: Vec<SaveJob>) -> Vec<Written> {
+    jobs.into_iter()
+        .map(|(path, doc, version)| {
+            let tmp = jd_core::fs::write_temp(&path, |w| file::write(&doc, w)).map_err(|e| e.to_string());
+            (path, version, tmp)
+        })
+        .collect()
+}
+
+/// Writes an exported file without ever leaving a half-written one in its place.
+fn write_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    jd_core::fs::write_atomic(path, |mut w| std::io::Write::write_all(&mut w, bytes).map(|()| w))
+}
+
 fn modified(path: &std::path::Path) -> Option<std::time::SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
@@ -628,6 +648,8 @@ pub enum Message {
     SetPrefs(Prefs),
     /// Save files that have a path, if auto-save is on (a timer tick).
     Autosave,
+    /// Auto-saves written to temporary files, to put in place if nothing changed meanwhile.
+    Autosaved(Vec<Written>),
     /// The Keyboard Shortcuts dialog.
     ShowShortcuts(bool),
     ShowAbout(bool),
@@ -732,6 +754,8 @@ pub struct Blobr {
     pub zoom_draft: Option<String>,
     /// The side panel whose edge is being dragged.
     pub panel_drag: Option<Side>,
+    /// An auto-save is being written (in the background).
+    pub autosaving: bool,
 }
 
 /// Screen pixels rendered past each edge of the canvas.
@@ -829,6 +853,7 @@ impl Blobr {
             search: None,
             zoom_draft: None,
             panel_drag: None,
+            autosaving: false,
         };
         app.set_recent(crate::recent::load());
         app.viewport = view::canvas_size(&app, app.chrome.size);
@@ -903,6 +928,7 @@ impl Blobr {
                     | Message::Noop
                     | Message::CheckLibraries
                     | Message::Autosave
+                    | Message::Autosaved(_)
                     | Message::CanvasRendered(..)
             )
         {
@@ -1054,7 +1080,8 @@ impl Blobr {
                 self.prefs = p;
                 crate::prefs::save(&self.prefs);
             }
-            Message::Autosave => self.autosave(),
+            Message::Autosave => return self.autosave(),
+            Message::Autosaved(written) => self.autosaved(written),
             Message::Frame => return self.refresh(),
             Message::CanvasRendered(seq, camera, size, pixels) => {
                 self.rendering = false;
@@ -1843,7 +1870,7 @@ impl Blobr {
                     Message::Exported(f.map(|f| f.path().to_path_buf()), bytes)
                 });
             }
-            Message::Exported(Some(path), bytes) => match std::fs::write(&path, bytes) {
+            Message::Exported(Some(path), bytes) => match write_file(&path, &bytes) {
                 Ok(()) => self.info(format!("Exported {}", path.display())),
                 Err(e) => self.error(format!("Couldn't export {}: {e}", path.display())),
             },
@@ -3315,7 +3342,7 @@ impl Blobr {
 
     fn remember(&mut self, path: &std::path::Path) {
         let mut list = std::mem::take(&mut self.recent);
-        crate::recent::remember(&mut list, path);
+        jd_core::fs::remember(&mut list, path, crate::recent::MAX);
         crate::recent::save(&list);
         self.set_recent(list);
     }
@@ -3363,54 +3390,84 @@ impl Blobr {
     }
 
     fn save_to(&mut self, path: PathBuf) {
-        match file::save(&self.ed.doc, &path) {
-            Ok(()) => {
-                self.ed.history.mark_saved();
-                self.info(format!("Saved {}", path.display()));
-                self.remember(&path);
-                self.path = Some(path);
-            }
-            Err(e) => self.error(format!("Couldn't save {}: {e}", path.display())),
+        match self.save_doc(&path) {
+            Ok(()) => self.info(format!("Saved {}", path.display())),
+            Err(e) => self.error(e),
         }
     }
 
-    /// Saves every tab that has a file and unsaved changes, when auto-save is on. The
-    /// active tab waits while something is being typed or dragged on it.
-    fn autosave(&mut self) {
-        if !self.prefs.autosave {
-            return;
-        }
+    /// Saves the open document to `path`, which becomes its file (Save, Save As, agents).
+    fn save_doc(&mut self, path: &std::path::Path) -> Result<(), String> {
+        file::save(&self.ed.doc, path).map_err(|e| format!("Couldn't save {}: {e}", path.display()))?;
+        self.ed.history.mark_saved();
+        self.remember(path);
+        self.path = Some(path.to_path_buf());
+        Ok(())
+    }
+
+    /// Every tab with a file and unsaved changes, as a snapshot to write. The active tab
+    /// waits while something is being typed or dragged on it.
+    fn autosave_jobs(&self) -> Vec<SaveJob> {
         let busy = self.text_edit.is_some() || self.drag.is_some() || self.pen.is_some() || self.renaming.is_some();
-        let mut saved = 0;
-        if !busy
-            && self.ed.history.is_dirty()
-            && let Some(path) = self.path.clone()
-        {
-            match file::save(&self.ed.doc, &path) {
-                Ok(()) => {
-                    self.ed.history.mark_saved();
-                    saved += 1;
+        let active = (!busy).then_some((&self.path, &self.ed));
+        active
+            .into_iter()
+            .chain(self.tabs.iter().flatten().map(|t| (&t.path, &t.ed)))
+            .filter(|(_, ed)| ed.history.is_dirty())
+            .filter_map(|(path, ed)| Some((path.clone()?, ed.doc.clone(), ed.history.version())))
+            .collect()
+    }
+
+    /// Starts auto-saving (a timer tick): files are written off the UI thread, then
+    /// [`autosaved`](Self::autosaved) puts them in place.
+    fn autosave(&mut self) -> Task<Message> {
+        if !self.prefs.autosave || self.autosaving {
+            return Task::none();
+        }
+        let jobs = self.autosave_jobs();
+        if jobs.is_empty() {
+            return Task::none();
+        }
+        self.autosaving = true;
+        Task::perform(
+            async move {
+                let (tx, rx) = iced::futures::channel::oneshot::channel();
+                std::thread::spawn(move || {
+                    let _ = tx.send(write_temps(jobs));
+                });
+                rx.await.unwrap_or_default()
+            },
+            Message::Autosaved,
+        )
+    }
+
+    /// Puts written auto-saves in place, unless their document changed or was saved since
+    /// (that copy is out of date; the next tick tries again).
+    fn autosaved(&mut self, written: Vec<Written>) {
+        self.autosaving = false;
+        let (mut saved, mut failed) = (0, None);
+        for (path, version, tmp) in written {
+            let history = if self.path.as_ref() == Some(&path) {
+                Some(&mut self.ed.history)
+            } else {
+                self.tabs.iter_mut().flatten().find(|t| t.path.as_ref() == Some(&path)).map(|t| &mut t.ed.history)
+            };
+            let result = match (tmp, history) {
+                (Ok(tmp), Some(h)) if h.version() == version && h.is_dirty() => jd_core::fs::commit(&tmp, &path).map(|()| h.mark_saved()).map_err(|e| e.to_string()),
+                (Ok(tmp), _) => {
+                    let _ = std::fs::remove_file(tmp);
+                    continue;
                 }
-                Err(e) => return self.error(format!("Auto-save couldn't save {}: {e}", path.display())),
+                (Err(e), _) => Err(e),
+            };
+            match result {
+                Ok(()) => saved += 1,
+                Err(e) => failed = Some(format!("Auto-save couldn't save {}: {e}", path.display())),
             }
         }
-        for tab in self.tabs.iter_mut().flatten() {
-            if let Some(path) = &tab.path
-                && tab.ed.history.is_dirty()
-            {
-                match file::save(&tab.ed.doc, path) {
-                    Ok(()) => {
-                        tab.ed.history.mark_saved();
-                        saved += 1;
-                    }
-                    Err(e) => {
-                        let msg = format!("Auto-save couldn't save {}: {e}", path.display());
-                        return self.error(msg);
-                    }
-                }
-            }
-        }
-        if saved > 0 {
+        if let Some(e) = failed {
+            self.error(e);
+        } else if saved > 0 {
             self.info(format!("Auto-saved {saved} file{}", if saved == 1 { "" } else { "s" }));
         }
     }
@@ -4228,10 +4285,8 @@ impl blobr_mcp::Target for Blobr {
 
     fn save(&mut self, path: Option<&std::path::Path>) -> Result<PathBuf, String> {
         let path = path.map(|p| p.to_path_buf()).or_else(|| self.path.clone()).ok_or("this document hasn't been saved yet: give save_document a path")?;
-        file::save(&self.ed.doc, &path).map_err(|e| format!("{}: {e}", path.display()))?;
-        self.ed.history.mark_saved();
+        self.save_doc(&path)?;
         self.info(format!("Agent saved {}", path.display()));
-        self.path = Some(path.clone());
         Ok(path)
     }
 
@@ -4386,12 +4441,12 @@ mod tests {
         assert!(app.drafts.is_empty(), "a draft for one layer must not show on the next");
 
         // A click with a pixel of jitter selects without moving or adding an undo step.
-        let steps = app.ed.history.labels().count();
+        let steps = app.ed.history.labels().0.len();
         let _ = app.update(Message::CanvasPress { at: Point::new(120.0, 120.0), button: mouse::Button::Left });
         let _ = app.update(Message::CanvasMove(Point::new(121.0, 120.0)));
         let _ = app.update(Message::CanvasRelease(Point::new(121.0, 120.0)));
         assert_eq!(app.doc().node(r).unwrap().props.x, 100.0);
-        assert_eq!(app.ed.history.labels().count(), steps);
+        assert_eq!(app.ed.history.labels().0.len(), steps);
         assert_eq!(app.selection, vec![r]);
     }
 
@@ -4620,6 +4675,15 @@ mod tests {
         assert_eq!(view::canvas_size(&app, app.chrome.size).width, 1600.0 - 2.0 * view::GUTTER);
     }
 
+    /// One auto-save tick, with the background write run here.
+    fn autosave_now(app: &mut Blobr) {
+        let _ = app.update(Message::Autosave);
+        if app.autosaving {
+            let written = write_temps(app.autosave_jobs());
+            let _ = app.update(Message::Autosaved(written));
+        }
+    }
+
     #[test]
     fn autosave_saves_files_with_a_path_but_not_mid_edit() {
         let dir = std::env::temp_dir().join(format!("blobr-autosave-{}", std::process::id()));
@@ -4631,21 +4695,44 @@ mod tests {
         let ids = three_rects(&mut app);
         assert!(app.ed.history.is_dirty());
         // Off: nothing happens.
-        let _ = app.update(Message::Autosave);
+        autosave_now(&mut app);
         assert!(app.ed.history.is_dirty());
         app.prefs.autosave = true;
         app.text_edit = Some((ids[0], text_editor::Content::new()));
-        let _ = app.update(Message::Autosave);
+        autosave_now(&mut app);
         assert!(app.ed.history.is_dirty(), "waits while typing");
         assert!(app.text_edit.is_some(), "the tick doesn't end typing");
         app.text_edit = None;
         // A new untitled tab with changes is left alone; the parked file is saved.
         let _ = app.update(Message::New);
         three_rects(&mut app);
-        let _ = app.update(Message::Autosave);
+        autosave_now(&mut app);
         assert!(app.ed.history.is_dirty());
         assert!(app.tabs[0].as_ref().is_some_and(|t| !t.ed.history.is_dirty()));
         assert_eq!(file::load(&path).unwrap().children(file::load(&path).unwrap().pages()[0]).len(), 6);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "no temporary files left");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_autosave_overtaken_by_an_edit_is_thrown_away() {
+        let dir = std::env::temp_dir().join(format!("blobr-autosave-race-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("b.jdb");
+        let mut app = app();
+        app.save_to(path.clone());
+        app.prefs.autosave = true;
+        three_rects(&mut app);
+        let _ = app.update(Message::Autosave);
+        assert!(app.autosaving);
+        let written = write_temps(app.autosave_jobs());
+        // An edit lands while the file is being written.
+        three_rects(&mut app);
+        let _ = app.update(Message::Autosaved(written));
+        assert!(!app.autosaving);
+        assert!(app.ed.history.is_dirty(), "the newest edits aren't on disk");
+        assert_eq!(file::load(&path).unwrap().children(file::load(&path).unwrap().pages()[0]).len(), 0);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "the stale copy was removed");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -4749,7 +4836,7 @@ mod tests {
         let _ = app.update(Message::FieldInput(Field::Fill(0), "#FF0000".into()));
         let _ = app.update(Message::FieldSubmit(Field::Fill(0)));
         assert!(ids.iter().all(|&id| app.doc().node(id).unwrap().props.fills == vec![Paint::hex("#FF0000")]));
-        assert_eq!(app.ed.history.labels().count(), 4, "add, align, resize, fill: one step each");
+        assert_eq!(app.ed.history.labels().0.len(), 4, "add, align, resize, fill: one step each");
     }
 
     #[test]
@@ -4980,7 +5067,7 @@ mod tests {
         let _ = again.update(Message::CheckLibraries);
         assert_eq!(fill(again.doc(), instance), vec![jd_vector::Paint::hex("#0000FF")]);
         assert_eq!(again.doc().children(instance).len(), 1, "the layers inside came across too");
-        assert_eq!(again.ed.history.labels().last(), Some("Update from ui"));
+        assert_eq!(again.ed.history.labels().0.last().copied(), Some("Update from ui"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -5190,9 +5277,9 @@ mod tests {
         // A style made from a fill, in one undo step; renaming it.
         app.select(r, false);
         let _ = app.update(Message::BindFill(0, None));
-        let steps = app.ed.history.labels().count();
+        let steps = app.ed.history.labels().0.len();
         let _ = app.update(Message::CreateFillStyle);
-        assert_eq!(app.ed.history.labels().count(), steps + 1);
+        assert_eq!(app.ed.history.labels().0.len(), steps + 1);
         let sid = app.doc().node(r).unwrap().props.styles.fill.expect("uses the new style");
         app.selection.clear();
         let _ = app.update(Message::FieldInput(Field::StyleName(sid), "Brand/Dark".into()));
@@ -5336,7 +5423,7 @@ mod tests {
         let ops = serde_json::json!({ "label": "Add card", "ops": [{ "op": "create", "parent": app.page.0, "key": "c", "node": { "type": "frame", "name": "Card", "x": 900, "y": 900 } }] });
         assert!(call(&mut app, "apply_ops", ops).is_ok());
         let card = app.doc().find_by_name("Card").unwrap();
-        assert_eq!(app.ed.history.labels().last(), Some("Add card"));
+        assert_eq!(app.ed.history.labels().0.last().copied(), Some("Add card"));
         assert!(app.status.text.contains("Add card"));
         assert!(call(&mut app, "select", serde_json::json!({ "ids": [card.0] })).is_ok());
         assert_eq!(app.selection, vec![card]);

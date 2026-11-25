@@ -13,18 +13,8 @@ pub const MAX: usize = 24;
 /// Thumbnail size (longest side, px).
 const THUMB: u32 = 320;
 
-/// Puts `path` first in `list` (once), dropping the oldest past [`MAX`].
-pub fn remember(list: &mut Vec<PathBuf>, path: &Path) {
-    list.retain(|p| p != path);
-    list.insert(0, path.to_path_buf());
-    list.truncate(MAX);
-}
-
 fn cache_dir() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?;
+    let base = jd_core::fs::user_dir("XDG_CACHE_HOME", ".cache")?;
     Some(base.join("jamsdesign").join("photosplash-thumbs"))
 }
 
@@ -111,17 +101,7 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn remembers_newest_first_without_repeats() {
-        let mut l = Vec::new();
-        for i in 0..30 {
-            remember(&mut l, Path::new(&format!("/f{i}")));
-        }
-        remember(&mut l, Path::new("/f10"));
-        assert_eq!(l.len(), MAX);
-        assert_eq!(l[0], Path::new("/f10"));
-        assert_eq!(l[1], Path::new("/f29"));
-        assert_eq!(l.iter().filter(|p| *p == Path::new("/f10")).count(), 1);
-
+    fn ages_read_naturally() {
         let now = SystemTime::now();
         assert_eq!(ago(now - Duration::from_secs(90), now), "1 minute ago");
         assert_eq!(ago(now - Duration::from_secs(100_000), now), "yesterday");

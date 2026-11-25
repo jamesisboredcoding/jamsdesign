@@ -85,9 +85,7 @@ pub const BUILTIN_BRUSHES: [(&str, f32, f32); 6] = [
 ];
 
 fn presets_path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    let base = jd_core::fs::user_dir("XDG_CONFIG_HOME", ".config")?;
     Some(base.join("jamsdesign").join("photosplash-tool-presets.json"))
 }
 
@@ -663,7 +661,7 @@ pub enum Message {
     Save,
     SaveAs,
     SaveTo(u64, Option<PathBuf>),
-    Saved { doc: u64, path: PathBuf, depth: usize, result: Result<(), String> },
+    Saved { doc: u64, path: PathBuf, version: u64, result: Result<(), String> },
     Export,
     ExportTo(Option<PathBuf>),
     Exported(PathBuf, Result<(), String>),
@@ -1790,8 +1788,10 @@ impl Photo {
                     copy.name = format!("{stem} copy");
                     self.push_doc(copy, None);
                     // Never saved: closing it should ask.
+                    let limit = self.prefs.history_states.clamp(5, 1000) as usize;
                     if let Some(d) = self.doc_mut() {
                         d.history = History::default();
+                        d.history.set_limit(limit);
                     }
                 }
             }
@@ -2126,13 +2126,13 @@ impl Photo {
                 // Dialog cancelled: a pending close/quit is cancelled too.
                 None => self.confirm = None,
             },
-            Message::Saved { doc, path, depth, result } => {
+            Message::Saved { doc, path, version, result } => {
                 let Some(i) = self.doc_index(doc) else { return Task::none() };
                 self.docs[i].saving = false;
                 match result {
                     Ok(()) => {
                         let d = &mut self.docs[i];
-                        d.history.mark_saved_at(depth);
+                        d.history.mark_saved_if(version);
                         d.doc.name = file_name(&path);
                         d.path = Some(path.clone());
                         self.info(format!("Saved {}", file_name(&path)));
@@ -2236,8 +2236,8 @@ impl Photo {
                     let name = d.doc.name.clone();
                     d.last_paint = None;
                     let changed = match message {
-                        Message::Undo => d.history.undo(&mut d.doc),
-                        Message::Redo => d.history.redo(&mut d.doc),
+                        Message::Undo => d.history.undo(&mut d.doc).is_some(),
+                        Message::Redo => d.history.redo(&mut d.doc).is_some(),
                         Message::JumpHistory(n) => {
                             d.history.jump_to(n, &mut d.doc);
                             true
@@ -3420,7 +3420,7 @@ impl Photo {
     /// Puts a file just opened or saved at the top of the recent files, and caches its
     /// thumbnail (then shows the list again with it).
     fn remember_recent(&mut self, path: &Path, doc: &Document) -> Task<Message> {
-        crate::recent::remember(&mut self.prefs.recent, path);
+        jd_core::fs::remember(&mut self.prefs.recent, path, crate::recent::MAX);
         let _ = self.prefs.save();
         Task::perform(crate::recent::store_thumb(path.to_path_buf(), doc.clone()), |_| Message::RefreshRecent)
     }
@@ -3500,14 +3500,14 @@ impl Photo {
         }
         d.history.end_gesture();
         d.saving = true;
-        let depth = d.history.depth();
+        let version = d.history.version();
         let doc = d.doc.clone();
         Task::perform(
             {
                 let path = path.clone();
                 async move { jd_io::jdp::save(&doc, &path).map_err(|e| e.to_string()) }
             },
-            move |result| Message::Saved { doc: id, path: path.clone(), depth, result },
+            move |result| Message::Saved { doc: id, path: path.clone(), version, result },
         )
     }
 
@@ -4937,7 +4937,8 @@ mod tests {
         let mut app = app_with_doc(10, 10);
         let _ = app.update(Message::AddLayer);
         let id = app.doc().unwrap().id;
-        let _ = app.update(Message::Saved { doc: id, path: "/tmp/x.jdp".into(), depth: 1, result: Ok(()) });
+        let version = app.doc().unwrap().history.version();
+        let _ = app.update(Message::Saved { doc: id, path: "/tmp/x.jdp".into(), version, result: Ok(()) });
         assert_eq!(app.document().unwrap().name, "x.jdp");
         let _ = app.update(Message::Undo);
         assert_eq!(app.document().unwrap().name, "x.jdp");
@@ -4950,13 +4951,14 @@ mod tests {
         let _ = app.update(Message::AddLayer);
         let id = app.doc().unwrap().id;
         let _ = app.update(Message::RequestCloseDoc(0));
+        let version = app.doc().unwrap().history.version();
         let _ = app.save(id, "/tmp/y.jdp".into());
         assert!(app.doc().unwrap().saving);
         // A second save request while the first runs does nothing.
         let _ = app.save(id, "/tmp/y.jdp".into());
         // An edit lands during the save, so finishing it must not close the tab.
         let _ = app.update(Message::DuplicateLayer);
-        let _ = app.update(Message::Saved { doc: id, path: "/tmp/y.jdp".into(), depth: 1, result: Ok(()) });
+        let _ = app.update(Message::Saved { doc: id, path: "/tmp/y.jdp".into(), version, result: Ok(()) });
         assert_eq!(app.docs.len(), 1);
         assert!(app.confirm.is_some());
     }

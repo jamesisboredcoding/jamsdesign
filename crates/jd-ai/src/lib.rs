@@ -48,11 +48,7 @@ pub const SILUETA: Model = Model {
 
 /// Where models live: `$XDG_DATA_HOME/jamsdesign/models` (or `~/.local/share/...`).
 pub fn models_dir() -> PathBuf {
-    let base = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
-        .unwrap_or_else(|| PathBuf::from("."));
+    let base = jd_core::fs::user_dir("XDG_DATA_HOME", ".local/share").unwrap_or_else(|| PathBuf::from("."));
     base.join("jamsdesign/models")
 }
 

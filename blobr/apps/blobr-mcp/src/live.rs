@@ -23,11 +23,6 @@ pub fn socket_path() -> Option<PathBuf> {
     Some(runtime_dir()?.join("app").join(APP_ID).join("blobr.sock"))
 }
 
-/// Where Blobr listened before it moved to [`socket_path`] (still tried, for older builds).
-fn legacy_socket_path() -> Option<PathBuf> {
-    Some(runtime_dir()?.join("blobr.sock"))
-}
-
 fn runtime_dir() -> Option<PathBuf> {
     std::env::var_os("XDG_RUNTIME_DIR").filter(|d| !d.is_empty()).map(PathBuf::from)
 }
@@ -89,7 +84,7 @@ pub struct Client {
 impl Client {
     /// Connects if Blobr is running.
     pub fn connect() -> Option<Self> {
-        let stream = [socket_path(), legacy_socket_path()].into_iter().flatten().find_map(|p| UnixStream::connect(p).ok())?;
+        let stream = UnixStream::connect(socket_path()?).ok()?;
         // Renders of big pages, or the app being busy, can take a while.
         stream.set_read_timeout(Some(Duration::from_secs(120))).ok()?;
         let writer = stream.try_clone().ok()?;

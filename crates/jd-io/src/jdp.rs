@@ -42,6 +42,8 @@ use crate::{LoadError, SaveError};
 pub const EXTENSION: &str = "jdp";
 pub const MIME: &str = "application/x-jamsdesign-photo";
 const VERSION: u32 = 1;
+/// Largest width or height we open (Photoshop's limit too).
+const MAX_SIDE: u32 = 300_000;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Manifest {
@@ -444,6 +446,9 @@ pub fn read<R: Read + Seek>(name: impl Into<String>, input: R) -> Result<Documen
     if manifest.width == 0 || manifest.height == 0 {
         return Err(LoadError::Format("document has zero size".into()));
     }
+    if manifest.width > MAX_SIDE || manifest.height > MAX_SIDE {
+        return Err(LoadError::Format(format!("{}x{} is bigger than the largest document ({MAX_SIDE} px a side)", manifest.width, manifest.height)));
+    }
 
     if manifest.tile_encoding != TILE_ENCODING {
         return Err(LoadError::Format(format!("unknown tile encoding {:?}", manifest.tile_encoding)));
@@ -465,7 +470,9 @@ pub fn read<R: Read + Seek>(name: impl Into<String>, input: R) -> Result<Documen
         .into_par_iter()
         .map(|(i, is_mask, x, y, bytes)| {
             let mut data = Vec::with_capacity(expected);
-            DeflateDecoder::new(bytes.as_slice()).read_to_end(&mut data)?;
+            // One byte past a tile is enough to know it's the wrong size (and stops a tiny entry
+            // from inflating to gigabytes).
+            DeflateDecoder::new(bytes.as_slice()).take(expected as u64 + 1).read_to_end(&mut data)?;
             if data.len() != expected {
                 return Err(LoadError::Format(format!("tile {i}/{x}_{y} has the wrong size")));
             }
@@ -549,24 +556,10 @@ pub fn read<R: Read + Seek>(name: impl Into<String>, input: R) -> Result<Documen
     Ok(doc)
 }
 
-/// Writes `doc` to `path` safely: into a temporary file next to it, synced, then renamed over
-/// the target. A crash mid-save leaves the old file intact.
+/// Writes `doc` to `path` safely (see [`jd_core::fs::write_atomic`]): a crash mid-save leaves
+/// the old file intact.
 pub fn save(doc: &Document, path: &Path) -> Result<(), SaveError> {
-    let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let tmp = dir.join(format!(".{file_name}.saving-{}", std::process::id()));
-    let result = (|| {
-        let file = std::fs::File::create(&tmp)?;
-        let file = write(doc, std::io::BufWriter::new(file))?;
-        let file = file.into_inner().map_err(|e| e.into_error())?;
-        file.sync_all()?;
-        std::fs::rename(&tmp, path)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        std::fs::remove_file(&tmp).ok();
-    }
-    result
+    jd_core::fs::write_atomic(path, |w| write(doc, w))
 }
 
 #[cfg(test)]
@@ -586,6 +579,45 @@ mod tests {
         let bg = doc.layers()[0].id;
         doc.set_active(bg);
         doc
+    }
+
+    #[test]
+    fn oversized_documents_and_tiles_are_refused() {
+        let doc = Document::blank("t", 10, 10);
+        let bytes = write(&doc, std::io::Cursor::new(Vec::new())).unwrap().into_inner();
+        // Rewrite the manifest with an absurd size.
+        let mut zip = ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut json = String::new();
+        zip.by_name("document.json").unwrap().read_to_string(&mut json).unwrap();
+        let json = json.replace("\"width\": 10", "\"width\": 4000000000");
+        let mut out = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        out.start_file("document.json", SimpleFileOptions::default()).unwrap();
+        out.write_all(json.as_bytes()).unwrap();
+        let huge = out.finish().unwrap().into_inner();
+        assert!(matches!(read("t", std::io::Cursor::new(huge)), Err(LoadError::Format(e)) if e.contains("bigger")));
+
+        // A tile entry that inflates past a tile's size.
+        let mut doc = Document::blank("t", 10, 10);
+        let id = doc.add_layer("L");
+        doc.layer_mut(id).unwrap().pixels = TileGrid::from_rgba8(10, 10, &[9; 400]);
+        let bytes = write(&doc, std::io::Cursor::new(Vec::new())).unwrap().into_inner();
+        let mut zip = ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut out = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for i in 0..zip.len() {
+            let mut e = zip.by_index(i).unwrap();
+            let name = e.name().unwrap().to_string();
+            let mut data = Vec::new();
+            e.read_to_end(&mut data).unwrap();
+            if name.starts_with("layers/") {
+                let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
+                enc.write_all(&vec![0u8; 50 * 1024 * 1024]).unwrap();
+                data = enc.finish().unwrap();
+            }
+            out.start_file(name, SimpleFileOptions::default().compression_method(CompressionMethod::Stored)).unwrap();
+            out.write_all(&data).unwrap();
+        }
+        let bomb = out.finish().unwrap().into_inner();
+        assert!(matches!(read("t", std::io::Cursor::new(bomb)), Err(LoadError::Format(e)) if e.contains("wrong size")));
     }
 
     #[test]

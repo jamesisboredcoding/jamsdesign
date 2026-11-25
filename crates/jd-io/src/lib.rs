@@ -9,7 +9,7 @@ pub mod jdp;
 pub mod psd;
 
 use std::fmt;
-use std::io::{BufReader, Read, Write};
+use std::io::{BufReader, Read};
 use std::path::Path;
 
 use image::{DynamicImage, ImageDecoder, ImageReader};
@@ -141,14 +141,15 @@ pub fn export(doc: &Document, path: &Path) -> Result<(), SaveError> {
         }
         _ => DynamicImage::ImageRgba8(rgba),
     };
-    let mut out = std::io::BufWriter::new(std::fs::File::create(path)?);
-    if format == image::ImageFormat::Jpeg {
-        image.write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 92))?;
-    } else {
-        image.write_to(&mut out, format)?;
-    }
-    out.flush()?;
-    Ok(())
+    // Often over the photo that was opened, so a failed export must leave it whole.
+    jd_core::fs::write_atomic(path, |mut out| {
+        if format == image::ImageFormat::Jpeg {
+            image.write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 92))?;
+        } else {
+            image.write_to(&mut out, format)?;
+        }
+        Ok(out)
+    })
 }
 
 fn decode(path: &Path) -> Result<DynamicImage, LoadError> {

@@ -918,8 +918,12 @@ impl Batch {
             Op::SetVariable { id, name, mode, value } => {
                 let id = self.resolve_token(doc, id)?;
                 let v = doc.tokens.variables.get(&id).ok_or("that isn't a variable")?;
-                let c = doc.tokens.collections.get(&v.collection).expect("variables live in collections").clone();
-                let mode = mode.clone().unwrap_or_else(|| c.modes[0].clone());
+                // Files can be damaged, so a missing collection or mode is an error, not a crash.
+                let c = doc.tokens.collections.get(&v.collection).ok_or("that variable's collection is missing")?.clone();
+                let mode = match mode {
+                    Some(m) => m.clone(),
+                    None => c.modes.first().ok_or("that variable's collection has no modes")?.clone(),
+                };
                 if let Some(value) = value {
                     let one: BTreeMap<String, VarValue> = [(mode.clone(), value.clone())].into();
                     check_values(doc, &c, &one, Some(id))?;

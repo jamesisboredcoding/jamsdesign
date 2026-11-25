@@ -94,10 +94,7 @@ pub const HISTORY_RANGE: std::ops::RangeInclusive<f32> = 5.0..=1000.0;
 /// The app used to be called Gallerion: moves its settings, tool presets and thumbnail cache
 /// to the new names, once (only when nothing exists under the new name yet).
 pub fn migrate_old_names() {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let dir = |var: &str, fallback: &str| {
-        std::env::var_os(var).map(PathBuf::from).filter(|p| p.is_absolute()).or_else(|| home.as_ref().map(|h| h.join(fallback)))
-    };
+    let dir = jd_core::fs::user_dir;
     let moves = [
         (dir("XDG_CONFIG_HOME", ".config"), "gallerion.json", "photosplash.json"),
         (dir("XDG_CONFIG_HOME", ".config"), "gallerion-tool-presets.json", "photosplash-tool-presets.json"),
@@ -113,9 +110,7 @@ pub fn migrate_old_names() {
 }
 
 fn path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    let base = jd_core::fs::user_dir("XDG_CONFIG_HOME", ".config")?;
     Some(base.join("jamsdesign").join("photosplash.json"))
 }
 

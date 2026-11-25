@@ -71,10 +71,14 @@ pub fn render_png(doc: &Document, id: NodeId, opts: RenderOptions) -> Result<Vec
     pm.encode_png().map_err(|e| e.to_string())
 }
 
+/// Longest side of any picture we render, in pixels.
+const MAX_SIDE: f64 = 16384.0;
+
 fn canvas(rect: Rect, opts: RenderOptions) -> Option<(sk::Pixmap, Affine)> {
-    let s = opts.scale.max(1e-6);
-    let w = (rect.width() * s).ceil().clamp(1.0, 16384.0) as u32;
-    let h = (rect.height() * s).ceil().clamp(1.0, 16384.0) as u32;
+    // Past the largest picture we make, draw smaller rather than cut the right or bottom off.
+    let s = opts.scale.max(1e-6).min(MAX_SIDE / rect.width().max(1e-6)).min(MAX_SIDE / rect.height().max(1e-6));
+    let w = (rect.width() * s).ceil().clamp(1.0, MAX_SIDE) as u32;
+    let h = (rect.height() * s).ceil().clamp(1.0, MAX_SIDE) as u32;
     let mut pm = sk::Pixmap::new(w, h)?;
     if let Some(bg) = opts.background {
         pm.fill(color(bg, 1.0));
@@ -770,6 +774,17 @@ mod tests {
         all.extend(ops);
         let done = doc.apply(&all, &ApproxMeasure).unwrap();
         (doc, done.id("f").unwrap())
+    }
+
+    #[test]
+    fn too_big_renders_shrink_instead_of_cropping() {
+        let mut doc = Document::new();
+        let p = doc.pages()[0];
+        let red = Paint::hex("#ff0000");
+        let done = doc.apply(&[Op::create_as("f", p, NodeSpec::frame("Wide", 20000.0, 100.0).fill(red))], &ApproxMeasure).unwrap();
+        let pm = render_node(&doc, done.id("f").unwrap(), RenderOptions { scale: 2.0, background: None }).unwrap();
+        assert_eq!((pm.width(), pm.height()), (16384, 82));
+        assert_eq!(px(&pm, 16383, 40), [255, 0, 0, 255], "the right edge is still there");
     }
 
     #[test]

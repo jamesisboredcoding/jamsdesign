@@ -6,3 +6,4 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+jd-core.workspace = true
