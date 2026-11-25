@@ -60,6 +60,12 @@ Native apps for photo, video and interface design work, with the shortcuts and w
 
 More apps will join the suite later.
 
+## Screenshots
+
+### Photosplash
+
+![Photosplash editing a photo of a fox in the snow](docs/img/photosplash-screenshot.jpg)
+
 ## Highlights
 
 - **Native and fast.** Pure Rust with a wgpu renderer; pixel work is tiled, copy-on-write and parallel.
