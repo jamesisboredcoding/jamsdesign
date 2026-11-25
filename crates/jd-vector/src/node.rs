@@ -804,6 +804,8 @@ pub struct TextStyle {
     pub letter_spacing: f32,
     pub align: TextAlign,
     pub valign: TextVAlign,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub underline: bool,
 }
 
 impl Default for TextStyle {
@@ -816,6 +818,7 @@ impl Default for TextStyle {
             letter_spacing: 0.0,
             align: TextAlign::Left,
             valign: TextVAlign::Top,
+            underline: false,
         }
     }
 }

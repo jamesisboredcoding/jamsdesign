@@ -69,6 +69,11 @@ pub fn listen() -> impl Stream<Item = Message> {
     })
 }
 
+/// Whether this Blobr has the live socket (the first one running does).
+pub fn listening() -> bool {
+    LISTENING.load(Ordering::SeqCst)
+}
+
 /// Removes the socket when the app closes, so agents fall back to headless at once.
 pub fn cleanup() {
     if LISTENING.swap(false, Ordering::SeqCst)

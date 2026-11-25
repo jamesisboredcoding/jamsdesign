@@ -241,6 +241,9 @@ pub fn css(doc: &Document, id: NodeId) -> Vec<String> {
             LineHeight::Px(v) => push("line-height", px(v as f64)),
             LineHeight::Percent(v) => push("line-height", format!("{}%", v)),
         }
+        if st.underline {
+            push("text-decoration", "underline".into());
+        }
         if st.letter_spacing != 0.0 {
             push("letter-spacing", px(st.letter_spacing as f64));
         }

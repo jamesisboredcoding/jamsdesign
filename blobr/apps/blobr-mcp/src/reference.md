@@ -57,7 +57,7 @@ to (width,0); rotate for other angles), `polygon` (`sides`), `star` (`points`, `
   - `absolute: true` keeps a child out of the flow at its `x`/`y`
   - `min_width`, `max_width`, `min_height`, `max_height`
 - `constraints` (children of frames without auto layout): `{"horizontal": "start"|"end"|"both"|"center"|"scale", "vertical": ...}`
-- Text: `text: {"content": "...", "style": {"family": "Inter", "style": "Regular", "size": 14, "line_height": "auto" | {"px": 20} | {"percent": 140}, "letter_spacing": 0, "align": "left"|"center"|"right"|"justified", "valign": "top"|"center"|"bottom"}}`.
+- Text: `text: {"content": "...", "style": {"family": "Inter", "style": "Regular", "size": 14, "line_height": "auto" | {"px": 20} | {"percent": 140}, "letter_spacing": 0, "align": "left"|"center"|"right"|"justified", "valign": "top"|"center"|"bottom", "underline": false}}`.
   The text colour is its `fills`. A text box with `sizing_h: "hug"` grows to fit; with a
   fixed width and `sizing_v: "hug"` it wraps. Use `list_fonts` to see installed families;
   `style` is the face name (`Regular`, `Medium`, `SemiBold`, `Bold`, `Italic`, ...).

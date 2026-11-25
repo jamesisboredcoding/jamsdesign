@@ -1,5 +1,5 @@
-//! Title-bar dropdowns. Items that aren't implemented yet are listed (disabled) with Figma's
-//! shortcuts, so the menus double as a map of what's coming.
+//! Title-bar dropdowns, with Figma's shortcuts. Items that can't be used right now (nothing
+//! selected, no plugins yet) are shown disabled.
 
 use iced::Element;
 use jd_ui::chrome;
@@ -8,7 +8,7 @@ use jd_vector::ExportFormat;
 use jd_vector::arrange::{Align, Order};
 use jd_vector::boolean::BoolOp;
 
-use crate::app::{Blobr, Message};
+use crate::app::{Blobr, Message, TextFlag};
 
 pub const MENUS: &[&str] = &["File", "Edit", "View", "Object", "Text", "Arrange", "Plugins", "Window", "Help"];
 pub const MENU_COUNT: usize = MENUS.len();
@@ -24,7 +24,7 @@ fn item<'a>(label: &'a str, shortcut: &'a str, m: Option<Message>) -> MenuEntry<
     MenuEntry::Item(label, shortcut, m.map(|m| Message::Menu(Box::new(m))))
 }
 
-/// Not implemented yet: shown disabled.
+/// Shown disabled.
 fn todo<'a>(label: &'a str, shortcut: &'a str) -> MenuEntry<'a, Message> {
     item(label, shortcut, None)
 }
@@ -83,8 +83,8 @@ fn entries(app: &Blobr, menu: usize) -> Vec<MenuEntry<'_, Message>> {
             item("Zoom to Fit", "Shift+1", Some(Message::ZoomFit)),
             item("Zoom to Selection", "Shift+2", on(sel, Message::ZoomSelection)),
             Separator,
-            todo("Rulers", "Shift+R"),
-            todo("Pixel Grid", "Shift+'"),
+            item(if app.prefs.rulers { "Hide Rulers" } else { "Show Rulers" }, "Shift+R", Some(Message::ToggleRulers)),
+            item(if app.prefs.pixel_grid { "Hide Pixel Grid" } else { "Show Pixel Grid" }, "Shift+'", Some(Message::TogglePixelGrid)),
             Separator,
             item(
                 if app.show_resolved { "Hide Resolved Comments" } else { "Show Resolved Comments" },
@@ -120,7 +120,16 @@ fn entries(app: &Blobr, menu: usize) -> Vec<MenuEntry<'_, Message>> {
             item("Flatten Selection", "Ctrl+E", on(sel, Message::Flatten)),
             item("Outline Stroke", "Ctrl+Shift+O", on(app.selection.len() == 1, Message::OutlineStroke)),
         ],
-        "Text" => vec![todo("Bold", "Ctrl+B"), todo("Italic", "Ctrl+I"), todo("Underline", "Ctrl+U"), Separator, todo("Text Styles...", "")],
+        "Text" => {
+            let text = app.selection.iter().any(|&id| matches!(app.doc().node(id).map(|n| &n.kind), Some(jd_vector::NodeKind::Text { .. })));
+            vec![
+                item("Bold", "Ctrl+B", on(text, Message::ToggleText(TextFlag::Bold))),
+                item("Italic", "Ctrl+I", on(text, Message::ToggleText(TextFlag::Italic))),
+                item("Underline", "Ctrl+U", on(text, Message::ToggleText(TextFlag::Underline))),
+                Separator,
+                item("Text Styles...", "", Some(Message::ShowTextStyles(true))),
+            ]
+        }
         "Arrange" => vec![
             item("Bring to Front", "Ctrl+]", on(sel, Message::Reorder(Order::Front))),
             item("Bring Forward", "Ctrl+Shift+]", on(sel, Message::Reorder(Order::Forward))),
@@ -137,7 +146,15 @@ fn entries(app: &Blobr, menu: usize) -> Vec<MenuEntry<'_, Message>> {
             item("Distribute Horizontal Spacing", "Alt+Shift+H", on(app.selection.len() >= 3, Message::Distribute(true))),
             item("Distribute Vertical Spacing", "Alt+Shift+V", on(app.selection.len() >= 3, Message::Distribute(false))),
         ],
-        "Plugins" => vec![todo("Manage Plugins...", "")],
+        "Plugins" => {
+            let mut v: Vec<_> = app.plugins.iter().map(|(path, name)| item(name, "", Some(Message::RunPlugin(path.clone())))).collect();
+            if v.is_empty() {
+                v.push(todo("No plugins yet", ""));
+            }
+            v.push(Separator);
+            v.push(item("Open Plugins Folder...", "", Some(Message::OpenPluginsFolder)));
+            v
+        }
         "Window" => vec![
             item("Layers", "Alt+L", Some(Message::LeftTab(0))),
             item("Assets", "Alt+I", Some(Message::LeftTab(1))),

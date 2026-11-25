@@ -139,6 +139,8 @@ pub const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ("Shift+2", "Zoom to selection"),
             ("Ctrl+F", "Find layers"),
             ("Ctrl+\\", "Hide or show panels"),
+            ("Shift+R", "Rulers"),
+            ("Shift+'", "Pixel grid"),
             ("F11", "Full screen"),
             ("Ctrl+Alt+Enter", "Present"),
             ("Ctrl+Alt+Shift+Enter", "Present in a new window"),
@@ -172,6 +174,7 @@ pub const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ("Alt+A, H, D", "Align left, centre, right"),
             ("Alt+W, V, S", "Align top, middle, bottom"),
             ("Alt+Shift+H, V", "Distribute"),
+            ("Ctrl+B, Ctrl+I, Ctrl+U", "Bold, italic, underline"),
         ],
     ),
     (
@@ -207,7 +210,34 @@ pub fn about(_: &Blobr) -> Element<'_, Message> {
         text(format!("{} {}", crate::APP_NAME, env!("CARGO_PKG_VERSION"))).size(TEXT_SIZE).color(TEXT_PRIMARY),
         note("The jamsdesign suite's interface and vector design app."),
         note("Files are .jdb documents; agents can edit them over MCP (blobr-mcp)."),
+        note("Free software under the GNU GPL, version 3 or later."),
     ]
     .spacing(8);
     dialog("About Blobr", Message::ShowAbout(false), body.into(), 380.0)
+}
+
+/// The document's text styles: click one to use it on the selected text layers.
+pub fn text_styles(app: &Blobr) -> Element<'_, Message> {
+    let doc = app.doc();
+    let has_text = app.selection.iter().any(|&id| matches!(doc.node(id).map(|n| &n.kind), Some(jd_vector::NodeKind::Text { .. })));
+    let mut list = column![].spacing(2);
+    for (&id, st) in &doc.tokens().styles {
+        let jd_vector::StyleKind::Text { text: t } = &st.kind else { continue };
+        let line = row![
+            text(st.name.as_str()).size(TEXT_SIZE_SMALL).color(TEXT_PRIMARY),
+            space::horizontal(),
+            text(format!("{} {} {}", t.family, t.style, t.size)).size(TEXT_SIZE_SMALL).color(TEXT_SECONDARY),
+        ]
+        .spacing(8);
+        list = list.push(button(line).padding(Padding::from([4, 8])).width(Fill).style(style::ghost(false)).on_press_maybe(has_text.then_some(Message::UseTextStyle(Some(id)))));
+    }
+    let empty = doc.tokens().styles.values().all(|s| !matches!(s.kind, jd_vector::StyleKind::Text { .. }));
+    let hint = match (empty, has_text) {
+        (true, _) => "No text styles yet. Select a text layer and create one from it.",
+        (false, true) => "Click a style to use it on the selected text.",
+        (false, false) => "Select text layers to use a style on them.",
+    };
+    let create = button(text("Create from Selection").size(TEXT_SIZE_SMALL)).padding(Padding::from([4, 10])).style(style::ghost(false)).on_press_maybe(has_text.then_some(Message::CreateTextStyle));
+    let body = column![note(hint), scrollable(list).height(iced::Length::Shrink), create].spacing(10);
+    dialog("Text Styles", Message::ShowTextStyles(false), body.into(), 440.0)
 }

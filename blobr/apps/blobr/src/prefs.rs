@@ -30,6 +30,10 @@ pub struct Prefs {
     pub scroll_zooms: bool,
     /// Arrow keys move by this many pixels (Shift: ten times as far).
     pub nudge: f64,
+    /// Rulers along the canvas's top and left edges (Shift+R).
+    pub rulers: bool,
+    /// Lines between pixels when zoomed in far (Shift+').
+    pub pixel_grid: bool,
 }
 
 impl Default for Prefs {
@@ -43,6 +47,8 @@ impl Default for Prefs {
             autosave_secs: 60,
             scroll_zooms: false,
             nudge: 1.0,
+            rulers: false,
+            pixel_grid: true,
         }
     }
 }

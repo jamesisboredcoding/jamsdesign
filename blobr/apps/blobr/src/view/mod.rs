@@ -164,6 +164,9 @@ fn main(app: &Blobr) -> Element<'_, Message> {
     if app.about_open {
         layers = layers.push(dialogs::about(app));
     }
+    if app.text_styles_open {
+        layers = layers.push(dialogs::text_styles(app));
+    }
     if let Some(after) = app.confirm {
         layers = layers.push(confirm(app, after));
     }

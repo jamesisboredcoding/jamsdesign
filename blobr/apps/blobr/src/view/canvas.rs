@@ -140,6 +140,7 @@ impl canvas::Program<Message> for Overlay<'_> {
         let app = self.app;
         let doc = app.doc();
         let mut frame = Frame::new(renderer, bounds.size());
+        pixel_grid(&mut frame, app, bounds.size());
 
         // Names above top-level frames, like Figma.
         for &c in doc.children(app.page) {
@@ -352,6 +353,7 @@ impl canvas::Program<Message> for Overlay<'_> {
         if let Some(p) = app.comment_new {
             pin(&mut frame, app.camera.to_screen(p), "+".into(), true, false);
         }
+        rulers(&mut frame, app, bounds.size());
         vec![frame.into_geometry()]
     }
 
@@ -421,5 +423,127 @@ fn handles(frame: &mut Frame, at: Point, hin: Option<Point>, hout: Option<Point>
         let c = Path::circle(h, 3.5);
         frame.fill(&c, Color::WHITE);
         frame.stroke(&c, Stroke::default().with_width(1.0).with_color(ACCENT_PRIMARY));
+    }
+}
+
+/// Zoom from which the pixel grid shows.
+pub const PIXEL_GRID_ZOOM: f64 = 4.0;
+/// How thick the rulers are.
+pub const RULER: f32 = 18.0;
+
+/// A line between page pixels, when zoomed in far enough to see them.
+fn pixel_grid(frame: &mut Frame, app: &Blobr, size: Size) {
+    let (z, o) = (app.camera.zoom, app.camera.origin);
+    if !app.prefs.pixel_grid || z < PIXEL_GRID_ZOOM {
+        return;
+    }
+    let lines = Path::new(|b| {
+        let mut x = o.x.floor();
+        while (x - o.x) * z <= size.width as f64 {
+            let sx = ((x - o.x) * z) as f32;
+            b.move_to(Point::new(sx, 0.0));
+            b.line_to(Point::new(sx, size.height));
+            x += 1.0;
+        }
+        let mut y = o.y.floor();
+        while (y - o.y) * z <= size.height as f64 {
+            let sy = ((y - o.y) * z) as f32;
+            b.move_to(Point::new(0.0, sy));
+            b.line_to(Point::new(size.width, sy));
+            y += 1.0;
+        }
+    });
+    frame.stroke(&lines, Stroke::default().with_width(1.0).with_color(Color::from_rgba(0.5, 0.5, 0.5, 0.25)));
+}
+
+/// The ruler step (page pixels between numbers): the smallest "nice" one at least 60 screen
+/// pixels apart.
+pub fn ruler_step(zoom: f64) -> f64 {
+    let mut step = 1.0;
+    while step * zoom < 60.0 {
+        step *= if (step / 10f64.powf(step.log10().floor()) - 2.0).abs() < 1e-9 { 2.5 } else { 2.0 };
+    }
+    step
+}
+
+/// Rulers along the top and left, in page pixels, with the selection's extent marked.
+fn rulers(frame: &mut Frame, app: &Blobr, size: Size) {
+    if !app.prefs.rulers {
+        return;
+    }
+    let (z, o) = (app.camera.zoom, app.camera.origin);
+    frame.fill_rectangle(Point::ORIGIN, Size::new(size.width, RULER), BG_PANEL);
+    frame.fill_rectangle(Point::ORIGIN, Size::new(RULER, size.height), BG_PANEL);
+    // The selection's extent, in the accent.
+    let sel = app.selection.iter().filter_map(|&id| app.screen_bounds(id)).reduce(|a, b| a.union(&b));
+    if let Some(r) = sel {
+        let band = Color { a: 0.3, ..ACCENT_PRIMARY };
+        frame.fill_rectangle(Point::new(r.x.max(RULER), 0.0), Size::new((r.x + r.width).min(size.width) - r.x.max(RULER), RULER), band);
+        frame.fill_rectangle(Point::new(0.0, r.y.max(RULER)), Size::new(RULER, (r.y + r.height).min(size.height) - r.y.max(RULER)), band);
+    }
+    let step = ruler_step(z);
+    let mantissa = (step / 10f64.powf(step.log10().floor())).round();
+    let minor = step / if mantissa == 2.0 { 4.0 } else if mantissa == 5.0 { 5.0 } else { 10.0 };
+    let label = |v: f64| if step < 1.0 { format!("{v:.1}") } else { format!("{v:.0}") };
+    let mut ticks = Vec::new();
+    // Along the top.
+    let mut k = (o.x / minor).floor();
+    loop {
+        let x = k * minor;
+        let sx = ((x - o.x) * z) as f32;
+        if sx > size.width {
+            break;
+        }
+        let major = (x / step - (x / step).round()).abs() < 1e-6;
+        if sx >= RULER {
+            ticks.push((Point::new(sx, if major { 0.0 } else { RULER - 5.0 }), Point::new(sx, RULER)));
+            if major {
+                frame.fill_text(Text { content: label(x), position: Point::new(sx + 3.0, 1.0), color: TEXT_SECONDARY, size: 9.0.into(), ..Text::default() });
+            }
+        }
+        k += 1.0;
+    }
+    // Down the left, numbers written one digit under another.
+    let mut k = (o.y / minor).floor();
+    loop {
+        let y = k * minor;
+        let sy = ((y - o.y) * z) as f32;
+        if sy > size.height {
+            break;
+        }
+        let major = (y / step - (y / step).round()).abs() < 1e-6;
+        if sy >= RULER {
+            ticks.push((Point::new(if major { 0.0 } else { RULER - 5.0 }, sy), Point::new(RULER, sy)));
+            if major {
+                for (i, ch) in label(y).chars().enumerate() {
+                    let at = Point::new(3.0, sy + 2.0 + i as f32 * 9.0);
+                    frame.fill_text(Text { content: ch.to_string(), position: at, color: TEXT_SECONDARY, size: 9.0.into(), ..Text::default() });
+                }
+            }
+        }
+        k += 1.0;
+    }
+    let lines = Path::new(|b| {
+        for (a, c) in &ticks {
+            b.move_to(*a);
+            b.line_to(*c);
+        }
+        // Their inner edges.
+        b.move_to(Point::new(RULER, RULER));
+        b.line_to(Point::new(size.width, RULER));
+        b.move_to(Point::new(RULER, RULER));
+        b.line_to(Point::new(RULER, size.height));
+    });
+    frame.stroke(&lines, Stroke::default().with_width(1.0).with_color(BORDER_DEFAULT));
+    frame.fill_rectangle(Point::ORIGIN, Size::new(RULER, RULER), BG_PANEL);
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn ruler_steps_are_round_numbers_far_enough_apart() {
+        for (zoom, step) in [(1.0, 100.0), (0.5, 200.0), (0.1, 1000.0), (2.0, 50.0), (8.0, 10.0), (64.0, 1.0)] {
+            assert_eq!(super::ruler_step(zoom), step, "zoom {zoom}");
+        }
     }
 }

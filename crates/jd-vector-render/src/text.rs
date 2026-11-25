@@ -163,12 +163,16 @@ fn shape_outline(content: &str, style: &TextStyle, width: f64, height: f64) -> B
         TextVAlign::Bottom => height - text_h,
     };
     let Engine { fonts, glyphs } = &mut *engine;
+    let mut lines = Vec::new();
     for run in buffer.layout_runs() {
         let ox = match style.align {
             TextAlign::Left | TextAlign::Justified => 0.0,
             TextAlign::Center => (width - run.line_w as f64) / 2.0,
             TextAlign::Right => width - run.line_w as f64,
         };
+        if style.underline && run.line_w > 0.0 {
+            lines.push((ox, oy + run.line_y as f64, run.line_w as f64));
+        }
         for g in run.glyphs {
             let key = g.physical((0.0, 0.0), 1.0).cache_key;
             let Some(cmds) = glyphs.get_outline_commands(fonts, key) else { continue };
@@ -187,7 +191,34 @@ fn shape_outline(content: &str, style: &TextStyle, width: f64, height: f64) -> B
             }
         }
     }
+    if !lines.is_empty() {
+        // Wound like the glyphs, so where it crosses a descender the nonzero fill keeps both.
+        use kurbo::Shape;
+        let ccw = path.area() >= 0.0;
+        let size = style.size.clamp(1.0, 4000.0) as f64;
+        let (gap, thick) = (size * 0.1, (size / 14.0).max(0.5));
+        for (x, baseline, w) in lines {
+            let (top, bottom) = (baseline + gap, baseline + gap + thick);
+            let corners = if ccw { [(x, top), (x, bottom), (x + w, bottom), (x + w, top)] } else { [(x, top), (x + w, top), (x + w, bottom), (x, bottom)] };
+            path.move_to(corners[0]);
+            for c in &corners[1..] {
+                path.line_to(*c);
+            }
+            path.close_path();
+        }
+    }
     path
+}
+
+/// Whether `family` has a face of this weight (within 100) and slant. A family that isn't
+/// installed counts as yes: there's nothing to check against.
+// shortcut: a variable font shows as one face, so its other weights read as missing; check its
+// weight axis if that comes up.
+pub fn has_face(family: &str, weight: u16, italic: bool) -> bool {
+    let Ok(engine) = ENGINE.lock() else { return true };
+    let faces: Vec<_> = engine.fonts.db().faces().filter(|f| f.families.iter().any(|(n, _)| n.eq_ignore_ascii_case(family))).collect();
+    faces.is_empty()
+        || faces.iter().any(|f| f.weight.0.abs_diff(weight) <= 100 && (f.style != cosmic_text::fontdb::Style::Normal) == italic)
 }
 
 #[cfg(test)]
@@ -198,6 +229,18 @@ mod tests {
 
     fn style(size: f32) -> TextStyle {
         TextStyle { family: String::new(), size, ..TextStyle::default() }
+    }
+
+    #[test]
+    fn underlines_add_a_bar_below_the_text() {
+        let s = style(20.0);
+        let (w, h) = CosmicMeasure.measure("Hi", &s, None);
+        let plain = text_outline("Hi", &s, w, h).bounding_box();
+        let under = text_outline("Hi", &TextStyle { underline: true, ..s }, w, h).bounding_box();
+        if plain.is_zero_area() {
+            return; // no fonts on this machine
+        }
+        assert!(under.y1 > plain.y1);
     }
 
     #[test]

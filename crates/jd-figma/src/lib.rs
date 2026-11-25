@@ -269,6 +269,7 @@ impl Ctx<'_> {
                         Some("JUSTIFIED") => TextAlign::Justified,
                         _ => TextAlign::Left,
                     },
+                    underline: str_of(&s, "textDecoration") == Some("UNDERLINE"),
                     ..TextStyle::default()
                 };
                 let mut spec = NodeSpec::text(&name, str_of(v, "characters").unwrap_or(""), ts).size(w, h);

@@ -228,11 +228,15 @@ CLI argument as a file to open. Names are provisional until Step 0.
 - [x] A render margin past the canvas edges, so panning and zooming out don't show gaps
 - [x] Flatpak packaging in `packaging/` (manifest, offline crate sources, desktop file,
       AppStream metainfo, `.jdb` MIME type, icon); `blobr-mcp` ships in it too
+- [x] Rulers (Shift+R) and a pixel grid from 400% (Shift+'); Text > Bold, Italic, Underline
+      on whole text layers and a Text Styles dialog; plugins: executables in the plugins folder
+      that drive Blobr through the live socket ([PLUGINS.md](PLUGINS.md)). Licensed
+      GPL-3.0-or-later.
 
 ## Later
 
-- Plugins or scripting inside the app, if Step 8's scripting spike says it's worth it
 - Photosplash and Cinematica MCP servers on `jd-mcp` (each app's actions are already
   messages, so tools can map onto them)
+- Bold/italic/underline on part of a text layer (needs styled runs in `TextData`)
 - Version history per file, and branching
 - Whiteboard pages (sticky notes, connectors)

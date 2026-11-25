@@ -221,6 +221,29 @@ fn autosave_ticks(secs: &u32) -> impl iced::futures::Stream<Item = Message> + us
     })
 }
 
+fn is_italic(style: &str) -> bool {
+    let s = style.to_ascii_lowercase();
+    s.contains("italic") || s.contains("oblique")
+}
+
+/// A face name with its weight and/or slant changed: ("Semi Bold", bold off) -> "Regular",
+/// ("Bold", italic on) -> "Bold Italic", ("Italic", italic off) -> "Regular".
+fn restyle(style: &str, bold: Option<bool>, italic: Option<bool>) -> String {
+    let italic = italic.unwrap_or_else(|| is_italic(style));
+    let base: Vec<&str> = style.split_whitespace().filter(|w| !matches!(w.to_ascii_lowercase().as_str(), "italic" | "oblique")).collect();
+    let base = match bold {
+        Some(true) => "Bold".to_owned(),
+        Some(false) => "Regular".to_owned(),
+        None => base.join(" "),
+    };
+    match (base.is_empty() || base.eq_ignore_ascii_case("regular"), italic) {
+        (true, true) => "Italic".into(),
+        (true, false) => "Regular".into(),
+        (false, true) => format!("{base} Italic"),
+        (false, false) => base,
+    }
+}
+
 /// A typed zoom level: "150", "150%" or "1.5x" (as a factor, 1.0 = 100%).
 fn parse_zoom(s: &str) -> Option<f64> {
     let s = s.trim();
@@ -380,6 +403,14 @@ pub enum Dropdown {
     Zoom,
     /// A side panel's menu (its header's menu icon): the Layers panel's, or the Design one's.
     Panel { layers: bool },
+}
+
+/// What Text > Bold, Italic and Underline switch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextFlag {
+    Bold,
+    Italic,
+    Underline,
 }
 
 /// Which side panel's edge is being dragged.
@@ -657,6 +688,15 @@ pub enum Message {
     /// The Keyboard Shortcuts dialog.
     ShowShortcuts(bool),
     ShowAbout(bool),
+    /// Text > Bold, Italic or Underline on the selected text layers (whole layers).
+    ToggleText(TextFlag),
+    ShowTextStyles(bool),
+    ToggleRulers,
+    TogglePixelGrid,
+    RunPlugin(PathBuf),
+    /// A plugin (by name) finished, or failed with this message.
+    PluginDone(String, Result<(), String>),
+    OpenPluginsFolder,
 }
 
 /// The status bar's message.
@@ -751,6 +791,9 @@ pub struct Blobr {
     pub prefs_open: bool,
     pub shortcuts_open: bool,
     pub about_open: bool,
+    pub text_styles_open: bool,
+    /// Plugins found in the plugins folder, with their menu names.
+    pub plugins: Vec<(PathBuf, String)>,
     pub dropdown: Option<Dropdown>,
     /// The mode button's left edge in the window (learnt from the pointer, as the title-bar
     /// menus do), and the pointer's x inside it since the last move.
@@ -857,6 +900,8 @@ impl Blobr {
             prefs_open: false,
             shortcuts_open: false,
             about_open: false,
+            text_styles_open: false,
+            plugins: Vec::new(),
             dropdown: None,
             mode_left: None,
             mode_pointer: None,
@@ -1091,6 +1136,40 @@ impl Blobr {
             Message::ShowPrefs(open) => self.prefs_open = open,
             Message::ShowShortcuts(open) => self.shortcuts_open = open,
             Message::ShowAbout(open) => self.about_open = open,
+            Message::ToggleText(flag) => self.toggle_text(flag),
+            Message::ShowTextStyles(open) => self.text_styles_open = open,
+            Message::ToggleRulers | Message::TogglePixelGrid => {
+                let mut p = self.prefs.clone();
+                if matches!(message, Message::ToggleRulers) {
+                    p.rulers = !p.rulers;
+                } else {
+                    p.pixel_grid = !p.pixel_grid;
+                }
+                return self.handle(Message::SetPrefs(p));
+            }
+            Message::RunPlugin(path) => {
+                let name = crate::plugins::name(&path);
+                let Some(socket) = blobr_mcp::live::socket_path().filter(|_| crate::agent::listening()) else {
+                    self.error(format!("Can't run {name}: another Blobr window has the plugin connection, so run it from there"));
+                    return Task::none();
+                };
+                self.info(format!("Running {name}..."));
+                let (tx, rx) = iced::futures::channel::oneshot::channel();
+                std::thread::spawn(move || {
+                    let _ = tx.send(crate::plugins::run(&path, &socket));
+                });
+                return Task::perform(async move { rx.await.unwrap_or_else(|_| Err("it was stopped".into())) }, move |r| Message::PluginDone(name.clone(), r));
+            }
+            Message::PluginDone(name, result) => match result {
+                Ok(()) => self.info(format!("{name} finished")),
+                Err(e) => self.error(format!("{name}: {e}")),
+            },
+            Message::OpenPluginsFolder => {
+                if let Some(dir) = crate::plugins::dir() {
+                    let _ = std::fs::create_dir_all(&dir);
+                    let _ = std::process::Command::new("xdg-open").arg(&dir).spawn();
+                }
+            }
             Message::SetPrefs(p) => {
                 self.prefs = p;
                 crate::prefs::save(&self.prefs);
@@ -1463,7 +1542,10 @@ impl Blobr {
                     self.run("Remove library", &[Op::SetLibraries { paths: list }]);
                 }
             }
-            Message::CheckLibraries => self.check_libraries(),
+            Message::CheckLibraries => {
+                self.check_libraries();
+                self.find_plugins();
+            }
             Message::InsertLibraryComponent(i, id) => self.insert_library_component(i, id),
             Message::UseFillStyle(style) => self.per_node("Fill style", |n| {
                 let mut refs = n.props.styles.clone();
@@ -1973,11 +2055,15 @@ impl Blobr {
             if self.dropdown.take().is_some() || self.search.take().is_some() {
                 return Task::none();
             }
-            if std::mem::take(&mut self.prefs_open) || std::mem::take(&mut self.shortcuts_open) || std::mem::take(&mut self.about_open) {
+            if std::mem::take(&mut self.prefs_open)
+                || std::mem::take(&mut self.shortcuts_open)
+                || std::mem::take(&mut self.about_open)
+                || std::mem::take(&mut self.text_styles_open)
+            {
                 return Task::none();
             }
         }
-        if self.confirm.is_some() || self.prefs_open || self.shortcuts_open || self.about_open {
+        if self.confirm.is_some() || self.prefs_open || self.shortcuts_open || self.about_open || self.text_styles_open {
             return Task::none();
         }
         let (cmd, shift, alt) = (modifiers.command(), modifiers.shift(), modifiers.alt());
@@ -2065,6 +2151,12 @@ impl Blobr {
                     ("l", false, false, true) => Some(Message::LeftTab(0)),
                     ("b", true, false, true) => Some(Message::Detach),
                     ("a", false, true, false) => Some(Message::ToggleAutoLayout),
+                    ("b", true, false, false) => Some(Message::ToggleText(TextFlag::Bold)),
+                    ("i", true, false, false) => Some(Message::ToggleText(TextFlag::Italic)),
+                    ("u", true, false, false) => Some(Message::ToggleText(TextFlag::Underline)),
+                    ("r", false, true, false) => Some(Message::ToggleRulers),
+                    // Shift+' is " on US keyboards.
+                    ("'" | "\"", false, true, false) => Some(Message::TogglePixelGrid),
                     ("=" | "+", true, _, false) => Some(Message::ZoomIn),
                     ("-", true, _, false) => Some(Message::ZoomOut),
                     ("0", false, true, false) | (")", false, true, false) => Some(Message::Zoom100),
@@ -3013,6 +3105,63 @@ impl Blobr {
 
     /// Reloads libraries whose files changed and brings the components copied from them up
     /// to date (one undo step per library).
+    /// Looks for plugins (on every library tick, so new ones show up without a restart).
+    fn find_plugins(&mut self) {
+        if cfg!(test) {
+            return;
+        }
+        let found = crate::plugins::dir().map_or_else(Vec::new, |d| crate::plugins::list(&d));
+        if found.len() != self.plugins.len() || found.iter().zip(&self.plugins).any(|(a, (b, _))| a != b) {
+            self.plugins = found.into_iter().map(|p| {
+                let name = crate::plugins::name(&p);
+                (p, name)
+            }).collect();
+        }
+    }
+
+    /// Bold, italic or underline on or off for every selected text layer, following the first.
+    /// Bold and italic pick another face of the same family, if it's installed.
+    fn toggle_text(&mut self, flag: TextFlag) {
+        let doc = self.doc();
+        let texts: Vec<(NodeId, jd_vector::TextStyle)> = self
+            .selection
+            .iter()
+            .filter_map(|&id| match &doc.node(id)?.kind {
+                NodeKind::Text { text } => Some((id, text.style.clone())),
+                _ => None,
+            })
+            .collect();
+        let Some((_, first)) = texts.first() else {
+            self.info("Select a text layer first".into());
+            return;
+        };
+        let on = match flag {
+            TextFlag::Bold => jd_vector_render::weight_of(&first.style) < 600,
+            TextFlag::Italic => !is_italic(&first.style),
+            TextFlag::Underline => !first.underline,
+        };
+        let mut ops = Vec::new();
+        for (id, mut st) in texts {
+            if flag == TextFlag::Underline {
+                st.underline = on;
+            } else {
+                let name = restyle(&st.style, (flag == TextFlag::Bold).then_some(on), (flag == TextFlag::Italic).then_some(on));
+                if !jd_vector_render::has_face(&st.family, jd_vector_render::weight_of(&name), is_italic(&name)) {
+                    self.error(format!("{} has no {name} style installed", st.family));
+                    return;
+                }
+                st.style = name;
+            }
+            ops.push(Op::set(id, Patch { text_style: Some(st), ..Patch::default() }));
+        }
+        let label = match flag {
+            TextFlag::Bold => "Bold",
+            TextFlag::Italic => "Italic",
+            TextFlag::Underline => "Underline",
+        };
+        self.run(label, &ops);
+    }
+
     fn check_libraries(&mut self) {
         for i in 0..self.libraries.len() {
             let path = self.libraries[i].path.clone();
@@ -4661,6 +4810,34 @@ mod tests {
         let _ = app.update(Message::Menu(Box::new(Message::SwapPanels)));
         assert!(app.prefs.swap_panels);
         assert_eq!(app.dropdown, None);
+    }
+
+    #[test]
+    fn bold_italic_and_underline_switch_the_whole_layer() {
+        assert_eq!(restyle("Regular", Some(true), None), "Bold");
+        assert_eq!(restyle("Bold", None, Some(true)), "Bold Italic");
+        assert_eq!(restyle("Semi Bold Italic", Some(false), None), "Italic");
+        assert_eq!(restyle("Italic", None, Some(false)), "Regular");
+        assert_eq!(restyle("Light", None, Some(true)), "Light Italic");
+        let mut app = app();
+        // A family that isn't installed: nothing to check faces against.
+        let style = jd_vector::TextStyle { family: "No Such Family".into(), ..jd_vector::TextStyle::default() };
+        let id = app.run("Add", &[Op::create(app.page, NodeSpec::text("T", "Hello", style))]).unwrap().created[0];
+        app.selection = vec![id];
+        let st = |app: &Blobr| match &app.doc().node(id).unwrap().kind {
+            NodeKind::Text { text } => text.style.clone(),
+            _ => unreachable!(),
+        };
+        let _ = app.update(Message::ToggleText(TextFlag::Bold));
+        assert_eq!(st(&app).style, "Bold");
+        let _ = app.update(Message::ToggleText(TextFlag::Italic));
+        let _ = app.update(Message::ToggleText(TextFlag::Underline));
+        assert_eq!(st(&app).style, "Bold Italic");
+        assert!(st(&app).underline);
+        let _ = app.update(Message::ToggleText(TextFlag::Bold));
+        assert_eq!(st(&app).style, "Italic");
+        let _ = app.update(Message::Undo);
+        assert_eq!(st(&app).style, "Bold Italic");
     }
 
     #[test]

@@ -58,8 +58,12 @@ batch. See [ROADMAP.md](ROADMAP.md) for how it was built and what each step cove
 - **Comments:** numbered pins on the canvas with replies, resolve and delete, kept in the file.
 - **Files:** tabs, recent files, unsaved-changes prompts per tab, optional auto-save; export
   PNG, SVG and PDF; import SVG; Copy as PNG; paste images and text from other apps.
-- **Workspace:** find layers across pages, a zoom box you can type in, panels you can resize,
-  swap and hide, and Preferences (Ctrl+,).
+- **Text:** fonts installed on the computer, sizes, line height, letter spacing, alignment;
+  bold, italic and underline (on whole text layers); text styles.
+- **Workspace:** find layers across pages, a zoom box you can type in, rulers, a pixel grid
+  when zoomed in, panels you can resize, swap and hide, and Preferences (Ctrl+,).
+- **Plugins:** programs in any language that edit the open document with the agents' tools.
+  See [PLUGINS.md](PLUGINS.md).
 
 ## Shortcuts (Figma's)
 
@@ -78,6 +82,8 @@ batch. See [ROADMAP.md](ROADMAP.md) for how it was built and what each step cove
 | Ctrl+N, Ctrl+O, Ctrl+S, Ctrl+W, Ctrl+Tab | New tab, open, save, close tab, next tab |
 | Ctrl+Alt+Enter, Ctrl+Alt+Shift+Enter | Present, present in a new window |
 | Ctrl+F, Ctrl+\\, Ctrl+, | Find layers, hide panels, preferences |
+| Ctrl+B, Ctrl+I, Ctrl+U | Bold, italic, underline |
+| Shift+R, Shift+' | Rulers, pixel grid |
 | Ctrl+Shift+? | All shortcuts |
 
 ## Agents (MCP)

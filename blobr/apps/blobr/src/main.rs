@@ -2,6 +2,7 @@ mod agent;
 mod app;
 mod clipboard;
 mod pen;
+mod plugins;
 mod prefs;
 mod recent;
 mod tool;
