@@ -27,6 +27,12 @@
   <url type="homepage">https://jamesisboredcoding.github.io/jamsdesign</url>
   <url type="bugtracker">https://github.com/jamesisboredcoding/jamsdesign/issues</url>
   <url type="vcs-browser">https://github.com/jamesisboredcoding/jamsdesign</url>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/jamesisboredcoding/jamsdesign/blobr-v0.1.0/docs/img/blobr_screenshot.jpg</image>
+      <caption>Designing a code editor with frames, auto layout and the Design panel</caption>
+    </screenshot>
+  </screenshots>
   <launchable type="desktop-id">io.github.jamesisboredcoding.jamsdesign.Blobr.desktop</launchable>
   <provides>
     <binary>blobr</binary>
